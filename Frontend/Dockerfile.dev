@@ -1,0 +1,14 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Vite needs all dependencies
+COPY package*.json ./
+RUN npm install --no-audit --no-fund --loglevel error
+
+# Copy source
+COPY . .
+
+EXPOSE 8000
+
+# Default command (overridden by docker-compose)
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "8000"]

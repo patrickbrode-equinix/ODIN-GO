@@ -1,0 +1,14 @@
+FROM node:20-alpine
+WORKDIR /app
+
+# Install ALL dependencies (including devDependencies for nodemon)
+COPY package*.json ./
+RUN npm install --no-audit --no-fund --loglevel error
+
+# Copy source
+COPY . .
+
+EXPOSE 8001
+
+# Default command (overridden by docker-compose)
+CMD ["npm", "run", "dev"]

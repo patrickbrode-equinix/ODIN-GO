@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- ------------------------------------------------ -->
+    <!-- THEME BOOTSTRAP – DEFAULT DARK MODE              -->
+    <!-- ------------------------------------------------ -->
+    <script>
+      (function () {
+        const storedTheme = localStorage.getItem("theme");
+
+        if (!storedTheme) {
+          document.documentElement.classList.add("dark");
+          localStorage.setItem("theme", "dark");
+        } else if (storedTheme === "dark") {
+          document.documentElement.classList.add("dark");
+        }
+      })();
+    </script>
+
+    <!-- App Title -->
+    <title>ODIN</title>
+
+    <!-- Favicons (robust für alle Browser) -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/app/ODIN_Logo.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/app/ODIN_Logo.png" />
+
+    <!-- Viewport -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+
+  <body class="antialiased">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

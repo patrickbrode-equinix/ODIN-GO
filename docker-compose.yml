@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-schichtplaner}
+      POSTGRES_USER: ${DB_USER:-shiftplanner_app}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-change-this-database-password}
+    volumes:
+      - shiftplanner_postgres_data:/var/lib/postgresql/data
+    networks:
+      - shiftplanner-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-shiftplanner_app} -d ${DB_NAME:-shiftplanner}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  backend:
+    build:
+      context: ./Backend
+      dockerfile: Dockerfile
+    image: odin-shiftplanner-backend:local
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-8001}:8001"
+    environment:
+      PORT: 8001
+      NODE_ENV: production
+      APP_MODE: shiftplanner
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-secret}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-schichtplaner}
+      DB_USER: ${DB_USER:-shiftplanner_app}
+      DB_PASSWORD: ${DB_PASSWORD:-change-this-database-password}
+      TEAMS_CHANNEL_WEBHOOK: ${TEAMS_CHANNEL_WEBHOOK:-}
+      TEAMS_PERSONAL_WEBHOOK: ${TEAMS_PERSONAL_WEBHOOK:-}
+      SHIFTPLANNER_API_KEY: ${SHIFTPLANNER_API_KEY:?SHIFTPLANNER_API_KEY is required}
+      SHIFTPLANNER_ADMIN_PASSWORD: ${SHIFTPLANNER_ADMIN_PASSWORD:-root}
+      WEATHER_FALLBACK_LAT: ${WEATHER_FALLBACK_LAT:-50.1109}
+      WEATHER_FALLBACK_LON: ${WEATHER_FALLBACK_LON:-8.6821}
+      WEATHER_FALLBACK_NAME: ${WEATHER_FALLBACK_NAME:-Frankfurt am Main}
+      COC_PUBLIC_URL: ${COC_PUBLIC_URL:-}
+      COC_REVIEW_TOKEN_TTL: ${COC_REVIEW_TOKEN_TTL:-14d}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    volumes:
+      - shiftplanner_uploads_data:/app/uploads
+    networks:
+      - shiftplanner-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8001/api/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ./Frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api
+        VITE_APP_MODE: shiftplanner
+    image: odin-shiftplanner-frontend:local
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:8000"
+    environment:
+      NODE_ENV: production
+      PORT: 8000
+      BACKEND_URL: http://backend:8001
+      VITE_API_BASE_URL: /api
+      VITE_APP_MODE: shiftplanner
+      SHIFTPLANNER_API_KEY: ${SHIFTPLANNER_API_KEY:?SHIFTPLANNER_API_KEY is required}
+    networks:
+      - shiftplanner-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/healthz || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  shiftplanner_postgres_data:
+  shiftplanner_uploads_data:
+
+networks:
+  shiftplanner-net:
+    driver: bridge

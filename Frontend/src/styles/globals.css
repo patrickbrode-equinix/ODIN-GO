@@ -1,0 +1,1802 @@
+@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap");
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------ */
+/* ODIN COMMAND CENTER – DESIGN TOKENS              */
+/* ------------------------------------------------ */
+:root {
+  --font-sans-brand: "Segoe UI", Arial, sans-serif;
+  --font-display-brand: "Segoe UI", Arial, sans-serif;
+  --odin-bg: #080e1c;
+  --odin-panel: rgba(5, 16, 32, 0.22);
+  --odin-panel-strong: rgba(8, 24, 45, 0.28);
+  --odin-border-cyan: rgba(0, 210, 255, 0.18);
+  --odin-glow-cyan: 0 0 22px rgba(0, 210, 255, 0.14);
+  --odin-glow-red: 0 0 22px rgba(255, 60, 70, 0.14);
+  --odin-glow-amber: 0 0 22px rgba(255, 170, 40, 0.14);
+  --odin-glow-violet: 0 0 22px rgba(168, 85, 247, 0.14);
+  --odin-glow-blue: 0 0 22px rgba(59, 130, 246, 0.14);
+  --odin-text-primary: #f4f8ff;
+  --odin-text-secondary: rgba(220, 235, 255, 0.76);
+  --odin-text-muted: rgba(160, 180, 205, 0.58);
+}
+
+/* ------------------------------------------------ */
+/* ODIN COMMAND CENTER – KEYFRAMES                  */
+/* ------------------------------------------------ */
+@keyframes odinPulseSubtle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.72; }
+}
+@keyframes odinBorderTrace {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+@keyframes odinCountUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes odinConnectionFlow {
+  0% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -200; }
+}
+@keyframes premiumSignalPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(56, 189, 248, 0), 0 18px 42px rgba(15, 23, 42, 0.12);
+    transform: translateY(0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.10), 0 0 34px rgba(56, 189, 248, 0.18), 0 24px 54px rgba(15, 23, 42, 0.16);
+    transform: translateY(-1px);
+  }
+}
+@keyframes odinStageDrift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.62; }
+  50% { transform: translate3d(18px, -12px, 0) scale(1.06); opacity: 0.92; }
+}
+@keyframes odinEdgeSweep {
+  0% { transform: translateX(-140%); opacity: 0; }
+  15% { opacity: 0.75; }
+  100% { transform: translateX(260%); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .odin-pulse-subtle,
+  .odin-border-trace,
+  .odin-connection-flow {
+    animation: none !important;
+  }
+  .odin-hover-lift {
+    transform: none !important;
+  }
+}
+
+/* ------------------------------------------------ */
+/* ROOT / LIGHT THEME  (Apple Design Language)      */
+/* ------------------------------------------------ */
+:root {
+  --font-size: 13px;
+
+  /* ── Semantic backgrounds ── */
+  --background: #F5F5F7;         /* Apple System Background */
+  --foreground: #1D1D1F;         /* Apple Primary Label */
+
+  --card: #FFFFFF;
+  --card-foreground: #1D1D1F;
+
+  --popover: #FFFFFF;
+  --popover-foreground: #1D1D1F;
+
+  /* ── Brand accent ── */
+  --primary: #0071E3;             /* Apple Blue */
+  --primary-foreground: #FFFFFF;
+
+  /* ── Secondary / grouped surfaces ── */
+  --secondary: #F2F2F7;           /* Apple Grouped Background */
+  --secondary-foreground: #1D1D1F;
+
+  --muted: #E5E5EA;               /* Apple Separator */
+  --muted-foreground: #6E6E73;    /* Apple Tertiary Label */
+
+  --accent: #F2F2F7;
+  --accent-foreground: #1D1D1F;
+
+  /* ── Semantic state ── */
+  --destructive: #FF3B30;         /* Apple Red */
+  --destructive-foreground: #FFFFFF;
+
+  /* ── Chrome ── */
+  --border: rgba(0, 0, 0, 0.09);
+  --input: #FFFFFF;
+  --input-background: #FFFFFF;
+  --switch-background: #AEAEB2;
+  --ring: #0071E3;
+
+  /* ── Charts ── */
+  --chart-1: #0071E3;
+  --chart-2: #34C759;             /* Apple Green */
+  --chart-3: #FF9500;             /* Apple Orange */
+  --chart-4: #5856D6;             /* Apple Purple */
+  --chart-5: #FF3B30;
+
+  --radius: 0.75rem;
+
+  /* ── Sidebar ── */
+  --sidebar: #FFFFFF;
+  --sidebar-foreground: #1D1D1F;
+  --sidebar-primary: #0071E3;
+  --sidebar-primary-foreground: #FFFFFF;
+  --sidebar-accent: #F2F2F7;
+  --sidebar-accent-foreground: #1D1D1F;
+  --sidebar-border: rgba(0, 0, 0, 0.08);
+  --sidebar-ring: #0071E3;
+
+  /* ── Surface system ── */
+  --surface-1: #FFFFFF;
+  --surface-2: #FFFFFF;
+  --surface-3: #F9F9FB;
+  --surface-accent: rgba(0, 113, 227, 0.06);
+  --surface-border: rgba(0, 0, 0, 0.08);
+  --surface-border-strong: rgba(0, 113, 227, 0.24);
+  --surface-divider: rgba(0, 0, 0, 0.07);
+
+  /* Clean Apple-style depth shadows — no colour glows */
+  --surface-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.05);
+  --surface-shadow-strong:
+    0 2px 4px rgba(0, 0, 0, 0.05),
+    0 8px 24px rgba(0, 0, 0, 0.09),
+    0 20px 48px rgba(0, 0, 0, 0.06),
+    0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  --surface-text: #1D1D1F;
+  --surface-text-muted: #3C3C43;
+  --surface-text-soft: #6E6E73;
+
+  /* ── Page hero ── */
+  --surface-hero: linear-gradient(160deg, #FFFFFF 0%, #F5F5F7 100%);
+  --surface-hero-strong:
+    radial-gradient(circle at 18% 0%, rgba(0, 113, 227, 0.06), transparent 38%),
+    radial-gradient(circle at 82% 8%, rgba(88, 86, 214, 0.05), transparent 32%),
+    linear-gradient(160deg, #FFFFFF 0%, #F5F5F7 100%);
+}
+
+/* ------------------------------------------------ */
+/* DARK THEME – SOLID (OPTION A)                    */
+/* ------------------------------------------------ */
+.dark {
+  --background: #0E1320;
+  --foreground: #F9FAFB;
+
+  /* 🔧 Cards etwas heller */
+  --card: #242F42;
+  --card-foreground: #F9FAFB;
+
+  /* 🔧 Popover identisch zu Card */
+  --popover: #242F42;
+  --popover-foreground: #F9FAFB;
+
+  --primary: #3B82F6;
+  --primary-foreground: #ffffff;
+
+  /* 🔧 Secondary klar unterscheidbar */
+  --secondary: #2B364A;
+  --secondary-foreground: #F9FAFB;
+
+  --muted: #2B364A;
+  --muted-foreground: #9CA3AF;
+
+  --accent: #2B364A;
+  --accent-foreground: #F9FAFB;
+
+  --destructive: #EF4444;
+  --destructive-foreground: #ffffff;
+
+  /* 🔧 Border etwas dunkler für Trennung */
+  --border: #374151;
+
+  /* 🔧 Inputs deutlich sichtbar */
+  --input: #202C40;
+  --input-background: #202C40;
+
+  --ring: #3B82F6;
+
+  --sidebar: #111827;
+  --sidebar-foreground: #F9FAFB;
+  --sidebar-primary: #3B82F6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1F2937;
+  --sidebar-accent-foreground: #F9FAFB;
+  --sidebar-border: #374151;
+  --sidebar-ring: #3B82F6;
+
+  --surface-1: rgba(8, 12, 28, 0.8);
+  --surface-2: rgba(15, 23, 42, 0.94);
+  --surface-3: rgba(17, 26, 48, 0.98);
+  --surface-accent: rgba(255, 255, 255, 0.06);
+  --surface-border: rgba(34, 211, 238, 0.18);
+  --surface-border-strong: rgba(59, 130, 246, 0.34);
+  --surface-divider: rgba(125, 211, 252, 0.12);
+  --surface-shadow: 0 14px 58px rgba(0, 0, 0, 0.65), 0 0 30px rgba(34, 211, 238, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --surface-shadow-strong: 0 28px 80px rgba(0, 0, 0, 0.65), 0 0 44px rgba(34, 211, 238, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  --surface-text: #F8FAFC;
+  --surface-text-muted: #CBD5E1;
+  --surface-text-soft: #94A3B8;
+  --surface-hero: radial-gradient(circle at top left, rgba(34, 211, 238, 0.18), transparent 42%), linear-gradient(135deg, rgba(8, 12, 28, 0.92) 0%, rgba(30, 42, 80, 0.64) 100%);
+  --surface-hero-strong: radial-gradient(circle at top left, rgba(14, 165, 233, 0.22), transparent 40%), radial-gradient(circle at 84% 14%, rgba(99, 102, 241, 0.16), transparent 26%), linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(2, 6, 23, 0.9));
+}
+
+.premium-signal-pulse {
+  animation: premiumSignalPulse 2.6s ease-in-out infinite;
+}
+
+/* ================================================================ */
+/* PERFORMANCE — GPU compositing hints                              */
+/* Animated elements that use transform/opacity are promoted to     */
+/* their own compositing layer, preventing main-thread repaints.    */
+/* ================================================================ */
+
+/* Ambient orbs: own GPU layer, reduced blur for better frame rate */
+.dark .odin-ambient-orb {
+  will-change: transform;
+  contain: strict;
+  /* Blur capped at 80px — blur(160px) was repaint-expensive on large elements */
+}
+
+/* Edge sweep on stage frames: own layer */
+.odin-stage-frame::after {
+  will-change: transform, opacity;
+}
+
+/* Hover-lift cards: promote only on hover to avoid wasting GPU memory */
+.stat-card:hover,
+.kpi-card:hover {
+  will-change: transform;
+}
+
+/* Animations respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .odin-stage-frame::after { display: none; }
+  .premium-signal-pulse { animation: none; }
+}
+
+/* ------------------------------------------------ */
+/* TAILWIND TOKEN MAPPING                           */
+/* ------------------------------------------------ */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-background: var(--input-background);
+  --color-switch-background: var(--switch-background);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* ------------------------------------------------ */
+/* BASE                                             */
+/* ------------------------------------------------ */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  *::selection {
+    background: rgba(34, 211, 238, 0.18);
+    color: var(--foreground);
+  }
+
+  html {
+    font-family: var(--font-sans-brand);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans-brand);
+    /* No background-attachment:fixed — it forces a repaint on every scroll frame */
+  }
+
+  /* Ambient page gradient via a dedicated GPU layer — no repaint on scroll */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    /* Dark mode subtle orb gradient */
+    background:
+      radial-gradient(circle at 10% -4%, rgba(56,189,248,0.09), transparent 26%),
+      radial-gradient(circle at 92% 8%, rgba(37,99,235,0.07), transparent 24%),
+      radial-gradient(circle at 50% 100%, rgba(245,158,11,0.04), transparent 30%);
+    will-change: transform; /* own compositing layer */
+  }
+
+  /* Light mode: replace dark orbs with clean Apple ambient */
+  .light body::before {
+    background:
+      radial-gradient(circle at 15% 0%, rgba(0,113,227,0.05), transparent 30%),
+      radial-gradient(circle at 85% 5%, rgba(88,86,214,0.04), transparent 24%);
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+html {
+  font-size: var(--font-size);
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+}
+
+body::-webkit-scrollbar {
+  width: 10px;
+}
+
+body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Light mode scrollbar */
+:root body::-webkit-scrollbar-thumb,
+.light body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid var(--background);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.light body::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+/* Dark mode scrollbar */
+.dark body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  border: 2px solid color-mix(in oklab, var(--background) 92%, black 8%);
+  background: linear-gradient(180deg, rgba(56,189,248,0.52), rgba(37,99,235,0.40));
+  box-shadow: 0 0 16px rgba(56,189,248,0.16);
+}
+
+h1,
+h2,
+h3,
+.font-display-brand {
+  font-family: var(--font-display-brand);
+}
+
+@layer components {
+  input,
+  textarea,
+  select {
+    background-color: var(--input-background);
+    border: 1px solid var(--border);
+    color: var(--foreground);
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  input:focus,
+  textarea:focus,
+  select:focus {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow:
+      0 0 0 1px var(--ring),
+      0 0 0 4px color-mix(in oklab, var(--ring) 30%, transparent);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--muted-foreground);
+  }
+
+  .theme-glass-panel {
+    background: var(--surface-1);
+    border: 1px solid var(--surface-border);
+    box-shadow: var(--surface-shadow);
+    color: var(--surface-text);
+  }
+
+  .theme-glass-panel-strong,
+  .theme-modal-surface,
+  .theme-popover-surface {
+    background:
+      radial-gradient(circle at top right, color-mix(in oklab, var(--ring) 16%, transparent), transparent 36%),
+      radial-gradient(circle at bottom left, color-mix(in oklab, var(--surface-accent) 88%, transparent), transparent 42%),
+      var(--surface-2);
+    border: 1px solid color-mix(in oklab, var(--surface-border) 92%, white 8%);
+    box-shadow:
+      var(--surface-shadow-strong),
+      0 0 34px color-mix(in oklab, var(--ring) 10%, transparent);
+    color: var(--surface-text);
+  }
+
+  .theme-glass-inset {
+    background:
+      radial-gradient(circle at top, color-mix(in oklab, var(--ring) 12%, transparent), transparent 62%),
+      var(--surface-accent);
+    border: 1px solid color-mix(in oklab, var(--surface-border) 94%, white 6%);
+  }
+
+  .liquid-hero,
+  .liquid-panel,
+  .liquid-kpi {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid color-mix(in oklab, var(--surface-border-strong) 76%, rgba(103,232,249,0.26));
+    background:
+      radial-gradient(circle at 12% 0%, rgba(34,211,238,0.14), transparent 34%),
+      radial-gradient(circle at 96% 12%, rgba(139,92,246,0.15), transparent 30%),
+      linear-gradient(145deg, color-mix(in oklab, var(--surface-2) 82%, transparent), color-mix(in oklab, var(--surface-1) 68%, transparent));
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,0.12),
+      inset 0 -1px 0 rgba(255,255,255,0.025),
+      0 24px 60px rgba(0,0,0,0.22),
+      0 0 44px rgba(34,211,238,0.055);
+    backdrop-filter: blur(26px) saturate(135%);
+  }
+
+  .liquid-hero::after,
+  .liquid-panel::after,
+  .liquid-kpi::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: linear-gradient(120deg, rgba(255,255,255,0.10), transparent 20%, transparent 75%, rgba(103,232,249,0.04));
+    opacity: 0.65;
+  }
+
+  .liquid-hero > *,
+  .liquid-panel > *,
+  .liquid-kpi > * {
+    position: relative;
+    z-index: 1;
+  }
+
+  .liquid-eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid rgba(103,232,249,0.18);
+    border-radius: 999px;
+    background: rgba(34,211,238,0.07);
+    padding: 0.4rem 0.7rem;
+    color: rgb(165 243 252);
+    font-size: 0.68rem;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+
+  .liquid-button {
+    border: 1px solid rgba(103,232,249,0.24) !important;
+    background: linear-gradient(135deg, rgba(8,145,178,0.72), rgba(79,70,229,0.64)) !important;
+    color: white !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 14px 32px rgba(14,116,144,0.22);
+  }
+
+  .liquid-button:hover {
+    transform: translateY(-1px);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 18px 38px rgba(14,116,144,0.30);
+  }
+
+  .liquid-list-item {
+    border: 1px solid rgba(255,255,255,0.065);
+    background: rgba(255,255,255,0.028);
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  }
+
+  .liquid-list-item:hover,
+  .liquid-list-item.active {
+    border-color: rgba(103,232,249,0.25);
+    background: linear-gradient(135deg, rgba(34,211,238,0.11), rgba(99,102,241,0.10));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 12px 30px rgba(6,182,212,0.08);
+    transform: translateY(-1px);
+  }
+
+  .liquid-control {
+    border-color: rgba(103,232,249,0.16);
+    background: color-mix(in oklab, var(--surface-2) 86%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+
+  .light .liquid-hero,
+  .light .liquid-panel,
+  .light .liquid-kpi {
+    border-color: rgba(14,116,144,0.14);
+    background:
+      radial-gradient(circle at 8% 0%, rgba(6,182,212,0.09), transparent 34%),
+      radial-gradient(circle at 96% 10%, rgba(99,102,241,0.08), transparent 30%),
+      linear-gradient(145deg, rgba(255,255,255,0.86), rgba(245,248,255,0.72));
+    box-shadow: inset 0 1px 0 white, 0 24px 60px rgba(15,23,42,0.09);
+  }
+
+  .light .liquid-eyebrow {
+    color: rgb(14 116 144);
+    border-color: rgba(14,116,144,0.14);
+    background: rgba(6,182,212,0.07);
+  }
+
+  .theme-admin-hero {
+    background: var(--surface-hero-strong);
+    border: 1px solid var(--surface-border);
+    box-shadow: var(--surface-shadow-strong);
+    color: var(--surface-text);
+  }
+
+  .theme-admin-tile {
+    background: var(--surface-1);
+    border: 1px solid var(--surface-border);
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+    color: var(--surface-text-muted);
+  }
+
+  .theme-admin-tile-active {
+    background: var(--surface-2);
+    border: 1px solid rgba(14, 165, 233, 0.28);
+    box-shadow: 0 18px 44px rgba(14, 165, 233, 0.12);
+    color: var(--surface-text);
+  }
+
+  .theme-toolbar-panel {
+    background:
+      radial-gradient(circle at top right, color-mix(in oklab, var(--ring) 14%, transparent), transparent 34%),
+      linear-gradient(180deg, color-mix(in oklab, var(--surface-1) 90%, white 10%), var(--surface-1));
+    border: 1px solid color-mix(in oklab, var(--surface-border-strong) 88%, white 12%);
+    box-shadow:
+      var(--surface-shadow),
+      0 0 30px color-mix(in oklab, var(--ring) 8%, transparent);
+    color: var(--surface-text);
+  }
+
+  .theme-toolbar-button {
+    background:
+      radial-gradient(circle at top, color-mix(in oklab, var(--ring) 10%, transparent), transparent 72%),
+      color-mix(in oklab, var(--surface-accent) 72%, transparent);
+    border: 1px solid color-mix(in oklab, var(--surface-border) 76%, transparent);
+    box-shadow: inset 0 1px 0 color-mix(in oklab, white 58%, transparent);
+    color: var(--surface-text-muted);
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  }
+
+  .theme-toolbar-button:hover,
+  .theme-toolbar-button:focus-visible {
+    background:
+      radial-gradient(circle at top, color-mix(in oklab, var(--ring) 18%, transparent), transparent 70%),
+      color-mix(in oklab, var(--surface-accent) 92%, transparent);
+    border-color: color-mix(in oklab, var(--surface-border-strong) 86%, transparent);
+    box-shadow:
+      inset 0 1px 0 color-mix(in oklab, white 68%, transparent),
+      0 16px 32px color-mix(in oklab, black 8%, transparent),
+      0 0 28px color-mix(in oklab, var(--ring) 12%, transparent);
+    color: var(--surface-text);
+    transform: translateY(-1px);
+  }
+
+  .theme-toolbar-pill {
+    background: color-mix(in oklab, var(--surface-accent) 92%, transparent);
+    border: 1px solid var(--surface-border);
+    color: var(--surface-text);
+  }
+
+  .odin-stage-frame {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+  }
+
+  .odin-stage-frame::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    border: 1px solid color-mix(in oklab, var(--surface-border-strong) 76%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 0 0 1px rgba(255,255,255,0.02);
+    pointer-events: none;
+  }
+
+  .odin-stage-frame::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(115deg, transparent 0%, rgba(255,255,255,0.07) 18%, transparent 36%);
+    opacity: 0.65;
+    transform: translateX(-140%);
+    animation: odinEdgeSweep 12s linear infinite;
+    pointer-events: none;
+  }
+
+  .odin-display-kicker {
+    font-family: var(--font-display-brand);
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+  }
+
+  .theme-divider {
+    background: var(--surface-divider);
+  }
+
+  .theme-text-strong {
+    color: var(--surface-text);
+  }
+
+  .theme-text-muted {
+    color: var(--surface-text-muted);
+  }
+
+  .theme-text-soft {
+    color: var(--surface-text-soft);
+  }
+
+  /* ================================================================ */
+  /* LIGHT MODE — Apple-quality premium overrides                     */
+  /* CSS variables handle the majority; these rules correct Tailwind  */
+  /* utility classes and inline styles that were authored dark-first.  */
+  /* ================================================================ */
+
+  /* --- Semi-transparent dark utility classes → clean light tints --- */
+  .light .bg-white\/3,
+  .light .bg-white\/5  { background-color: rgba(0,0,0,0.025) !important; }
+  .light .bg-white\/10 { background-color: rgba(0,0,0,0.04)  !important; }
+  .light .bg-white\/15 { background-color: rgba(0,0,0,0.05)  !important; }
+  .light .bg-black\/20,
+  .light .bg-black\/30 { background-color: rgba(0,0,0,0.04)  !important; }
+  .light .bg-black\/40,
+  .light .bg-black\/50 { background-color: rgba(0,0,0,0.06)  !important; }
+
+  /* --- Border utilities → clean subtle borders --- */
+  .light .border-white\/5,
+  .light .border-white\/8,
+  .light .border-white\/10 { border-color: rgba(0,0,0,0.07) !important; }
+  .light .border-white\/20 { border-color: rgba(0,0,0,0.10) !important; }
+  .light .border-white\/30 { border-color: rgba(0,0,0,0.12) !important; }
+
+  /* --- Dark text utilities → Apple label hierarchy on white --- */
+  .light .text-slate-100  { color: #1D1D1F !important; }
+  .light .text-slate-200  { color: #1D1D1F !important; }
+  .light .text-slate-300  { color: #3C3C43 !important; }
+  /* slate-400/500 boosted for WCAG AA at small sizes */
+  .light .text-slate-400  { color: #48484A !important; }
+  .light .text-slate-500  { color: #6E6E73 !important; }
+  .light .text-slate-600  { color: #48484A !important; }
+  .light .text-slate-700  { color: #3C3C43 !important; }
+  .light .text-slate-800  { color: #1D1D1F !important; }
+  .light .text-slate-900,
+  .light .text-slate-950  { color: #1D1D1F !important; }
+  /* gray equivalents */
+  .light .text-gray-100,
+  .light .text-gray-200   { color: #1D1D1F !important; }
+  .light .text-gray-300   { color: #3C3C43 !important; }
+  .light .text-gray-400   { color: #48484A !important; }
+  .light .text-gray-500   { color: #6E6E73 !important; }
+  .light .text-gray-600   { color: #48484A !important; }
+  .light .text-gray-700   { color: #3C3C43 !important; }
+  .light .text-gray-800,
+  .light .text-gray-900   { color: #1D1D1F !important; }
+  /* zinc equivalents */
+  .light .text-zinc-300   { color: #3C3C43 !important; }
+  .light .text-zinc-400   { color: #48484A !important; }
+  .light .text-zinc-500   { color: #6E6E73 !important; }
+
+  /* --- text-white (bare) and text-white/NN → dark text --- */
+  /* text-white without fraction — must come BEFORE the fraction rules */
+  .light .text-white       { color: #1D1D1F !important; }
+  /* text-white/NN → mapped to dark with same relative alpha but raised floor */
+  .light .text-white\/25  { color: rgba(29,29,31,0.38) !important; }
+  .light .text-white\/40  { color: rgba(29,29,31,0.50) !important; }
+  .light .text-white\/50  { color: rgba(29,29,31,0.62) !important; }
+  .light .text-white\/60  { color: rgba(29,29,31,0.72) !important; }
+  .light .text-white\/70  { color: rgba(29,29,31,0.80) !important; }
+  .light .text-white\/75  { color: rgba(29,29,31,0.84) !important; }
+  .light .text-white\/80  { color: rgba(29,29,31,0.88) !important; }
+  .light .text-white\/82  { color: rgba(29,29,31,0.90) !important; }
+  .light .text-white\/85  { color: rgba(29,29,31,0.92) !important; }
+  .light .text-white\/90  { color: rgba(29,29,31,0.94) !important; }
+  .light .text-white\/95,
+  .light .text-white\/100 { color: #1D1D1F !important; }
+  /* catch-all fraction variants not listed above */
+  .light [class*="text-white/"] { color: rgba(29,29,31,0.78) !important; }
+
+  /* --- Accent text → Apple-correct hues on white --- */
+  .light .text-blue-100,
+  .light .hover\:text-blue-100:hover { color: #0071E3 !important; }
+  .light .text-blue-300              { color: #0071E3 !important; }
+  .light .text-indigo-100            { color: #5856D6 !important; }
+  .light .text-indigo-300            { color: #5856D6 !important; }
+  .light .text-sky-100               { color: #0071E3 !important; }
+  .light .text-sky-200               { color: #005AC2 !important; }
+  .light .text-cyan-100              { color: #005AC2 !important; }
+  .light .text-cyan-200              { color: #0071E3 !important; }
+  .light .text-cyan-300,
+  .light .text-cyan-400              { color: #0071E3 !important; }
+  .light .text-amber-200             { color: #C45400 !important; }
+  .light .text-amber-300             { color: #BF5000 !important; }
+  .light .text-emerald-200           { color: #1A7F4B !important; }
+  .light .text-emerald-300           { color: #168F4F !important; }
+  .light .text-fuchsia-300           { color: #8A2BE2 !important; }
+  .light .text-rose-200              { color: #C0143C !important; }
+  .light .text-sky-100\/75,
+  .light .text-sky-100\/80           { color: #1D1D1F !important; }
+
+  /* --- Cyan / sky border tints → clean Apple borders --- */
+  .light .border-sky-400\/6,
+  .light .border-sky-400\/8,
+  .light .border-sky-400\/10,
+  .light .border-sky-400\/12,
+  .light .border-sky-400\/15,
+  .light .border-sky-400\/18 { border-color: rgba(0,0,0,0.08) !important; }
+  .light .border-cyan-400\/12,
+  .light .border-cyan-400\/14,
+  .light .border-cyan-400\/18,
+  .light .border-cyan-400\/20 { border-color: rgba(0,113,227,0.14) !important; }
+
+  /* --- Tinted backgrounds → white/near-white on light --- */
+  .light .bg-cyan-400\/8,
+  .light .bg-cyan-500\/8,
+  .light .bg-cyan-500\/5 { background-color: rgba(0,113,227,0.06) !important; }
+
+  /* --- Generic bg-white/ → translucent white card surface --- */
+  .light [class*="bg-white/"] { background-color: rgba(255,255,255,0.80) !important; }
+  .light [class*="border-white/"] { border-color: rgba(0,0,0,0.08) !important; }
+
+  /* --- Interactive hover/focus utilities --- */
+  .light .hover\:bg-white\/5:hover,
+  .light .focus\:bg-white\/5:focus  { background-color: rgba(0,0,0,0.04) !important; }
+  .light .hover\:bg-white\/10:hover,
+  .light .focus\:bg-white\/10:focus,
+  .light .focus\:bg-white\/10:focus-visible { background-color: rgba(0,0,0,0.06) !important; }
+  .light .hover\:text-white:hover,
+  .light .focus\:text-white:focus,
+  .light .focus\:text-white:focus-visible { color: #1D1D1F !important; }
+  .light .placeholder\:text-slate-500::placeholder { color: #6E6E73 !important; }
+
+  /* --- Override inline color styles for white/pastel text on light bg --- */
+  /* These catch components that set color via style attribute */
+  .light [style*="color: rgba(165,243,252"],
+  .light [style*="color: rgba(199,210,254"],
+  .light [style*="color: rgba(167,243,208"],
+  .light [style*="color: rgba(253,230,138"],
+  .light [style*="color: rgba(254,205,211"],
+  .light [style*="color: rgba(226,232,240"] { color: #48484A !important; }
+
+  /* Catch-all: any very-light/near-white inline color → dark text */
+  .light [style*="color: rgba(255,255,255,0.5"],
+  .light [style*="color: rgba(255,255,255,0.6"],
+  .light [style*="color: rgba(255,255,255,0.7"],
+  .light [style*="color: rgba(255,255,255,0.8"],
+  .light [style*="color: rgba(255,255,255,0.9"],
+  .light [style*="color: rgba(255,255,255,1"],
+  .light [style*="color: #ffffff"],
+  .light [style*="color: #FFFFFF"],
+  .light [style*="color: white"] { color: #1D1D1F !important; }
+
+  /* --- Dark hardcoded Tailwind bg classes → premium white surface --- */
+  .light [class*="bg-white/[0.02]"],
+  .light [class*="bg-white/[0.03]"],
+  .light [class*="bg-white/[0.04]"] { background-color: rgba(255,255,255,0.85) !important; }
+
+  .light [class*="bg-[#0f172a]"],
+  .light [class*="bg-[#080c1c]"],
+  .light [class*="bg-[#080e1e]"],
+  .light [class*="bg-[#0c1428]"],
+  .light [class*="bg-[#0a1628]"],
+  .light [class*="bg-[#0a0f1e]"],
+  .light [class*="bg-[#0f111a]"],
+  .light [class*="bg-[#070b19]"],
+  .light [class*="bg-[#150d12]"],
+  .light [class*="bg-[#0a1228]/80"],
+  .light [class*="bg-sky-950"],
+  .light [class*="bg-slate-900"],
+  .light [class*="bg-slate-950"] {
+    background: var(--surface-1) !important;
+    box-shadow: var(--surface-shadow) !important;
+    color: var(--surface-text) !important;
+  }
+
+  .light [class*="bg-slate-950/"],
+  .light [class*="bg-slate-900/"],
+  .light [class*="bg-[linear-gradient(180deg,rgba(15,23,42"],
+  .light [class*="bg-[linear-gradient(180deg,rgba(8,18,40"],
+  .light [class*="bg-[linear-gradient(180deg,rgba(10,24,50"],
+  .light [class*="bg-[radial-gradient(circle_at_top,#1e293b"],
+  .light [class*="bg-[radial-gradient(circle_at_top,#172554"] {
+    background: var(--surface-1) !important;
+    box-shadow: var(--surface-shadow) !important;
+    color: var(--surface-text) !important;
+  }
+
+  /* Descendent text-white inside overridden dark containers */
+  .light [class*="bg-slate-950/"] [class*="text-white"],
+  .light [class*="bg-slate-900/"] [class*="text-white"],
+  .light [class*="bg-sky-950"] [class*="text-white"],
+  .light [class*="bg-[linear-gradient(180deg,rgba(15,23,42"] [class*="text-white"],
+  .light [class*="bg-[linear-gradient(180deg,rgba(8,18,40"] [class*="text-white"],
+  .light [class*="bg-[radial-gradient(circle_at_top,#1e293b"] [class*="text-white"] {
+    color: var(--surface-text) !important;
+    text-shadow: none !important;
+  }
+
+  /* --- Inline style dark backgrounds → white surfaces --- */
+  .light [style*="background: #020b1e"],
+  .light [style*="background:#020b1e"],
+  .light [style*="background: rgb(2, 11, 30)"] {
+    background: var(--background) !important;
+  }
+
+  .light [style*="#010d28"],
+  .light [style*="rgb(1, 13, 40)"] {
+    background: linear-gradient(180deg, var(--card) 0%, var(--background) 100%) !important;
+  }
+
+  .light [style*="rgba(7,14,34"],  .light [style*="rgba(7, 14, 34"],
+  .light [style*="rgba(3,8,22"],   .light [style*="rgba(3, 8, 22"],
+  .light [style*="rgba(7,19,37"],  .light [style*="rgba(7, 19, 37"],
+  .light [style*="rgba(6,16,32"],  .light [style*="rgba(6, 16, 32"],
+  .light [style*="#061020"],       .light [style*="#071325"] {
+    background: var(--card) !important;
+  }
+
+  .light [style*="background"][style*="rgba(2,7,20"],
+  .light [style*="background"][style*="rgba(2, 7, 20"],
+  .light [style*="background"][style*="rgba(2,6,23"],
+  .light [style*="background"][style*="rgba(2, 6, 23"],
+  .light [style*="background"][style*="rgba(11,22,45"],
+  .light [style*="background"][style*="rgba(11, 22, 45"],
+  .light [style*="background"][style*="rgba(6,18,40"],
+  .light [style*="background"][style*="rgba(6, 18, 40"],
+  .light [style*="background"][style*="rgba(0,20,50"],
+  .light [style*="background"][style*="rgba(0, 20, 50"],
+  .light [style*="background"][style*="rgba(0,30,70"],
+  .light [style*="background"][style*="rgba(0, 30, 70"],
+  .light [style*="background"][style*="rgba(0,40,80"],
+  .light [style*="background"][style*="rgba(0, 40, 80"],
+  .light [style*="background"][style*="rgba(7,16,34"],
+  .light [style*="background"][style*="rgba(7, 16, 34"],
+  .light [style*="background"][style*="rgba(7,14,34"],
+  .light [style*="background"][style*="rgba(7, 14, 34"],
+  .light [style*="background"][style*="rgba(7,19,37"],
+  .light [style*="background"][style*="rgba(7, 19, 37"],
+  .light [style*="background"][style*="rgba(6,14,34"],
+  .light [style*="background"][style*="rgba(6, 14, 34"],
+  .light [style*="background"][style*="rgba(3,9,24"],
+  .light [style*="background"][style*="rgba(3, 9, 24"],
+  .light [style*="background"][style*="rgba(4,10,26"],
+  .light [style*="background"][style*="rgba(4, 10, 26"] {
+    background: var(--surface-1) !important;
+    background-image: none !important;
+    box-shadow: var(--surface-shadow) !important;
+    color: var(--surface-text) !important;
+  }
+
+  /* Text descendants inside inline dark containers */
+  .light [style*="background"][style*="rgba(2,7,20"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(2, 7, 20"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(2,6,23"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(2, 6, 23"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(11,22,45"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(11, 22, 45"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(6,18,40"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(6, 18, 40"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(0,20,50"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(0, 20, 50"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(7,16,34"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(7, 16, 34"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(7,14,34"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(7, 14, 34"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(6,14,34"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(6, 14, 34"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(3,9,24"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(3, 9, 24"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(4,10,26"] [class*="text-white"],
+  .light [style*="background"][style*="rgba(4, 10, 26"] [class*="text-white"] {
+    color: var(--surface-text) !important;
+    text-shadow: none !important;
+  }
+
+  /* --- Remove decorative effects that clash on white --- */
+  /* Text glows */
+  .light [style*="text-shadow: 0 0"],
+  .light [style*="text-shadow:0 0"] { text-shadow: none !important; }
+
+  /* Colour-tinted inline text */
+  .light [style*="color: #38bdf8"],
+  .light [style*="color: rgba(56,189,248"] { color: var(--primary) !important; }
+
+  /* Drop-shadow filters */
+  .light [class*="drop-shadow-[0_0"] { filter: none !important; }
+
+  /* Glow orbs / pointer-events-none decorative radial divs */
+  .light .pointer-events-none[style*="radial-gradient"][style*="rgba(56,189,248"] { opacity: 0 !important; }
+
+  /* Glow box-shadows → clean depth shadow */
+  .light [style*="box-shadow"][style*="rgba(56,189,248"],
+  .light [style*="box-shadow"][style*="rgba(0,229,255"],
+  .light [style*="box-shadow"][style*="rgba(0,180,255"],
+  .light [style*="box-shadow"][style*="rgba(59,130,246"],
+  .light [style*="box-shadow"][style*="rgba(2,6,23"] { box-shadow: var(--surface-shadow) !important; }
+
+  /* Border glow → clean */
+  .light [style*="border-bottom: 1px solid rgba(56,189,248"] { border-bottom-color: var(--border) !important; }
+
+  /* --- Brand banner: keep the banner image visible in light mode --- */
+  .light [style*="odin_brand_banner_reference.png"]:not(.keep-brand-banner) {
+    background-image: none !important;
+    filter: none !important;
+    opacity: 0 !important;
+  }
+
+  /* --- Coloured solid buttons must keep white text --- */
+  .light .bg-blue-600,
+  .light .bg-blue-700,
+  .light .bg-indigo-600,
+  .light .bg-indigo-700,
+  .light .bg-green-600,
+  .light .bg-green-700,
+  .light .bg-red-600,
+  .light .bg-red-700,
+  .light .bg-amber-600,
+  .light .bg-amber-700 { color: #ffffff !important; }
+
+  /* --- Premium light mode component overrides --- */
+
+  /* Cards: clean white + Apple-style shadow */
+  .light .theme-glass-panel,
+  .light .theme-glass-panel-strong,
+  .light .theme-modal-surface,
+  .light .theme-popover-surface {
+    background: #FFFFFF !important;
+    border: 1px solid rgba(0,0,0,0.08) !important;
+    box-shadow:
+      0 1px 3px rgba(0,0,0,0.05),
+      0 6px 20px rgba(0,0,0,0.07),
+      0 0 0 1px rgba(0,0,0,0.04) !important;
+    color: #1D1D1F !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Toolbar panel: white with very light border */
+  .light .theme-toolbar-panel {
+    background: #FFFFFF !important;
+    border: 1px solid rgba(0,0,0,0.09) !important;
+    box-shadow:
+      0 1px 3px rgba(0,0,0,0.05),
+      0 4px 12px rgba(0,0,0,0.06) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Toolbar buttons: light tint hover */
+  .light .theme-toolbar-button {
+    background: rgba(0,0,0,0.03) !important;
+    border: 1px solid rgba(0,0,0,0.09) !important;
+    box-shadow: none !important;
+    color: #3C3C43 !important;
+  }
+  .light .theme-toolbar-button:hover,
+  .light .theme-toolbar-button:focus-visible {
+    background: rgba(0,113,227,0.08) !important;
+    border-color: rgba(0,113,227,0.18) !important;
+    color: #0071E3 !important;
+    box-shadow: none !important;
+    transform: translateY(-1px);
+  }
+
+  /* Admin tiles */
+  .light .theme-admin-hero {
+    background: var(--surface-hero-strong) !important;
+    border: 1px solid rgba(0,0,0,0.08) !important;
+    box-shadow: var(--surface-shadow-strong) !important;
+    color: #1D1D1F !important;
+  }
+  .light .theme-admin-tile {
+    background: #FFFFFF !important;
+    border: 1px solid rgba(0,0,0,0.07) !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.05) !important;
+  }
+  .light .theme-admin-tile-active {
+    background: #FFFFFF !important;
+    border: 1px solid rgba(0,113,227,0.22) !important;
+    box-shadow: 0 2px 8px rgba(0,113,227,0.12), 0 0 0 1px rgba(0,113,227,0.08) !important;
+  }
+
+  /* Inset wells: grouped bg */
+  .light .theme-glass-inset {
+    background: #F2F2F7 !important;
+    border: 1px solid rgba(0,0,0,0.08) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  /* Stage frame decorators: clean neutral in light mode */
+  .light .odin-stage-frame::before {
+    border-color: rgba(0,0,0,0.07) !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 0 0 1px rgba(0,0,0,0.03) !important;
+  }
+  .light .odin-stage-frame::after { opacity: 0 !important; }
+
+  /* Stat card: clean neutral top accent line in light mode */
+  .light .stat-card::before {
+    background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.055), transparent) !important;
+  }
+
+  /* Stat/KPI card hover: Apple-quality lift — no neon glow */
+  .light .stat-card:hover,
+  .light .kpi-card:hover {
+    transform: translateY(-4px) scale(1.004) !important;
+    box-shadow:
+      0 4px 12px rgba(0,0,0,0.06),
+      0 12px 32px rgba(0,0,0,0.09),
+      0 0 0 1px rgba(0,0,0,0.07),
+      inset 0 1px 0 rgba(255,255,255,1.0) !important;
+    border-color: rgba(0,0,0,0.11) !important;
+  }
+
+  /* ENT cards (stat-card class): premium inset highlight in light mode */
+  .light .stat-card {
+    box-shadow:
+      var(--surface-shadow-strong),
+      inset 0 1px 0 rgba(255,255,255,1.0) !important;
+  }
+
+  /* Corner accents: match light palette */
+  .light .border-cyan-300\/30 { border-color: rgba(0,113,227,0.14) !important; }
+  .light .border-cyan-300\/18 { border-color: rgba(0,113,227,0.10) !important; }
+
+  /* Dividers */
+.light .theme-divider { background: rgba(0,0,0,0.08) !important; }
+
+/* ODIN GO workspace light mode: override the embedded shell's legacy dark
+   utility classes so every route (including tables, dialogs and navigation)
+   uses the same readable enterprise surfaces. */
+.light .odin-go-workspace-shell { background: #f4f6f8 !important; color: #172033 !important; }
+.light .odin-go-workspace-shell header,
+.light .odin-go-workspace-shell nav,
+.light .odin-go-workspace-shell main { background: #f4f6f8 !important; color: #172033 !important; border-color: #d7dee7 !important; }
+.light .odin-go-workspace-shell header { background: #ffffff !important; }
+.light .odin-go-workspace-shell nav { background: #ffffff !important; }
+.light .odin-go-workspace-shell main { background: #f4f6f8 !important; }
+.light .odin-go-workspace-shell [class*="bg-slate-950"],
+.light .odin-go-workspace-shell [class*="bg-slate-900"],
+.light .odin-go-workspace-shell [class*="bg-slate-800"] { background-color: #ffffff !important; }
+.light .odin-go-workspace-shell [class*="text-white"],
+.light .odin-go-workspace-shell [class*="text-slate-100"],
+.light .odin-go-workspace-shell [class*="text-slate-200"] { color: #172033 !important; }
+.light .odin-go-workspace-shell [class*="text-slate-300"],
+.light .odin-go-workspace-shell [class*="text-slate-400"],
+.light .odin-go-workspace-shell [class*="text-slate-500"] { color: #526173 !important; }
+.light .odin-go-workspace-shell [class*="border-slate-"] { border-color: #d7dee7 !important; }
+.light .odin-go-workspace-shell button[class*="bg-slate-"],
+.light .odin-go-workspace-shell button[class*="border-slate-"] { background-color: #ffffff !important; color: #26364a !important; }
+.light .odin-go-workspace-shell [role="dialog"] { background: #ffffff !important; color: #172033 !important; border-color: #cbd5e1 !important; box-shadow: 0 18px 46px rgba(15,23,42,.16) !important; }
+
+/* Complete light palette for the embedded workspace. The routes use a few
+   legacy dark utility classes and inline gradients; neutralise those here so
+   the light mode remains readable and visually consistent everywhere. */
+.light .odin-go-workspace-shell [class*="bg-gradient"],
+.light .odin-go-workspace-shell [class*="bg-[linear-gradient"],
+.light .odin-go-workspace-shell [class*="bg-[radial-gradient"] {
+  background-image: none !important;
+}
+.light .odin-go-workspace-shell nav,
+.light .odin-go-workspace-shell nav > div { background: #ffffff !important; }
+.light .odin-go-workspace-shell header,
+.light .odin-go-workspace-shell main { box-shadow: none !important; }
+.light .odin-go-workspace-shell .text-blue-50,
+.light .odin-go-workspace-shell .text-blue-100,
+.light .odin-go-workspace-shell .text-cyan-100,
+.light .odin-go-workspace-shell .text-cyan-200 { color: #1e3a5f !important; }
+.light .odin-go-workspace-shell .text-blue-200,
+.light .odin-go-workspace-shell .text-blue-300,
+.light .odin-go-workspace-shell .text-cyan-300,
+.light .odin-go-workspace-shell .text-cyan-400 { color: #1769aa !important; }
+.light .odin-go-workspace-shell .text-amber-300 { color: #a15c00 !important; }
+.light .odin-go-workspace-shell .text-emerald-300,
+.light .odin-go-workspace-shell .text-emerald-400 { color: #147a4b !important; }
+.light .odin-go-workspace-shell .text-red-300,
+.light .odin-go-workspace-shell .text-red-400 { color: #b42318 !important; }
+.light .odin-go-workspace-shell .text-violet-300 { color: #6941c6 !important; }
+.light .odin-go-workspace-shell [class*="hover:bg-slate-"]:hover { background-color: #f1f5f9 !important; }
+.light .odin-go-workspace-shell [class*="bg-slate-950/"],
+.light .odin-go-workspace-shell [class*="bg-slate-900/"],
+.light .odin-go-workspace-shell [class*="bg-slate-800/"] { background-color: #f8fafc !important; }
+.light .odin-go-workspace-shell .border-l-orange-500 { border-left-color: #d97706 !important; }
+.light .odin-go-workspace-shell .border-l-yellow-400 { border-left-color: #ca8a04 !important; }
+.light .odin-go-workspace-shell .border-l-blue-500 { border-left-color: #2563eb !important; }
+.light .odin-go-workspace-shell .bg-orange-500,
+.light .odin-go-workspace-shell .bg-yellow-400,
+.light .odin-go-workspace-shell .bg-blue-500 { color: #172033 !important; }
+
+/* Planning views: restrained surfaces and clear density in both themes. */
+.weekplan-enterprise,
+.daily-enterprise { background: #0b1220 !important; }
+.weekplan-enterprise > .pointer-events-none,
+.daily-enterprise > .pointer-events-none { opacity: 0.16 !important; }
+.weekplan-enterprise .weekplan-grid > section {
+  border-color: #26364d !important;
+  background: #111b2b !important;
+  box-shadow: 0 8px 20px rgba(2, 8, 23, 0.22);
+}
+.weekplan-enterprise .weekplan-grid > section:has(.border-blue-500) {
+  background: #172a43 !important;
+  border-color: #4b8ac2 !important;
+}
+.weekplan-enterprise .weekplan-grid [data-weekplan-employee] {
+  border-color: #30445d !important;
+  background: #172337 !important;
+}
+.daily-enterprise .daily-shift-band {
+  box-shadow: 0 8px 22px rgba(2, 8, 23, 0.28) !important;
+}
+.daily-enterprise .daily-shift-band > .pointer-events-none { opacity: 0.3 !important; }
+
+.light .weekplan-enterprise,
+.light .daily-enterprise { background: #f4f6f8 !important; }
+.light .weekplan-enterprise > .pointer-events-none,
+.light .daily-enterprise > .pointer-events-none { display: none !important; }
+.light .weekplan-enterprise .weekplan-grid > section {
+  border-color: #d5dee9 !important;
+  background: #ffffff !important;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06) !important;
+}
+.light .weekplan-enterprise .weekplan-grid > section:has(.border-blue-500) {
+  background: #eef6ff !important;
+  border-color: #76a9d4 !important;
+}
+.light .weekplan-enterprise .weekplan-grid [data-weekplan-employee] {
+  border-color: #d8e1eb !important;
+  background: #f8fafc !important;
+  color: #24364d !important;
+}
+.light .daily-enterprise .daily-shift-band {
+  background: #ffffff !important;
+  border-color: #d5dee9 !important;
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.07) !important;
+}
+.light .daily-enterprise .daily-shift-band [class*="text-slate-"] { color: #526173 !important; }
+.light .daily-enterprise .daily-shift-band [class*="text-white"] { color: #172033 !important; }
+
+  /* Input focus ring — Apple blue */
+  .light input:focus,
+  .light textarea:focus,
+  .light select:focus {
+    border-color: #0071E3 !important;
+    box-shadow:
+      0 0 0 3px rgba(0,113,227,0.20) !important;
+  }
+
+  /* Selection — Apple blue tint */
+  .light *::selection {
+    background: rgba(0,113,227,0.15);
+    color: #1D1D1F;
+  }
+}
+
+/* ================================================================ */
+/* LIGHT MODE — Sidebar & structural layout (outside @layer)        */
+/* These override Sidebar.tsx inline styles that are dark-first.    */
+/* ================================================================ */
+
+/* Main sidebar: white, clean depth shadow */
+.light aside.odin-stage-frame {
+  background: #FFFFFF !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: 2px 0 16px rgba(0,0,0,0.06), inset -1px 0 0 rgba(0,0,0,0.08) !important;
+  border-right: 1px solid rgba(0,0,0,0.08) !important;
+}
+
+/* Hide dark ambient orb blobs inside sidebar in light mode */
+.light aside.odin-stage-frame .pointer-events-none.absolute.inset-0 > [class*="rounded-full"] {
+  display: none !important;
+}
+
+/* Hide neon vertical edge lines in light mode */
+.light aside.odin-stage-frame [class*="bg-linear-to-b"] {
+  opacity: 0 !important;
+}
+
+/* Sidebar header section: white, subtle lower border */
+.light aside.odin-stage-frame > [class*="border-b"] {
+  background: #FFFFFF !important;
+  border-bottom-color: rgba(0,0,0,0.08) !important;
+}
+
+/* Kill cyan inline gradient on sidebar header and its edge line */
+.light [style*="rgba(0,229,255"],
+.light [style*="rgba(0, 229, 255"] {
+  background: transparent !important;
+  background-image: none !important;
+}
+
+/* Sidebar ODIN wordmark: standard bold brand blue in light mode */
+.light aside .text-transparent.bg-clip-text[class*="from-\[#00E5FF\]"] {
+  background-image: none !important;
+  -webkit-background-clip: unset !important;
+  background-clip: unset !important;
+  color: #0071E3 !important;
+}
+
+/* Remove logo cyan drop-shadow in light mode */
+.light aside [class*="drop-shadow-[0_0_22px_rgba(0,229,255"] {
+  filter: none !important;
+}
+
+/* Sidebar nav item active state: Apple-blue tint */
+.light nav a.text-primary,
+.light nav [aria-current="page"] {
+  background: rgba(0,113,227,0.08) !important;
+  color: #0071E3 !important;
+}
+
+/* ================================================================ */
+/* TV-MODE – Readable from 2–4 metres                               */
+/* Scoped exclusively to .tv-mode — no other pages affected.        */
+/* Central scale knob: change --tv-scale to adjust globally.        */
+/* ================================================================ */
+
+/* Central scale variable – increase to 1.6+ for very large screens */
+.tv-mode {
+  --tv-scale: 1.5;
+}
+
+/* ---- Text size overrides (arbitrary Tailwind classes) ----------- */
+/* Use attribute selector with literal value — no escaping inside quotes */
+.tv-mode [class~="text-[10px]"]  { font-size: 15px !important; line-height: 1.5 !important; }
+.tv-mode [class~="text-[11px]"]  { font-size: 17px !important; line-height: 1.5 !important; }
+.tv-mode [class~="text-[12px]"]  { font-size: 18px !important; line-height: 1.5 !important; }
+.tv-mode [class~="text-[13px]"]  { font-size: 20px !important; line-height: 1.5 !important; }
+.tv-mode [class~="text-[14px]"]  { font-size: 22px !important; line-height: 1.5 !important; }
+
+/* ---- Standard Tailwind text scale overrides -------------------- */
+.tv-mode .text-xs   { font-size: 16px !important; line-height: 1.5 !important; }
+.tv-mode .text-sm   { font-size: 18px !important; line-height: 1.6 !important; }
+.tv-mode .text-base { font-size: 21px !important; line-height: 1.6 !important; }
+.tv-mode .text-lg   { font-size: 26px !important; line-height: 1.5 !important; }
+.tv-mode .text-xl   { font-size: 30px !important; line-height: 1.4 !important; }
+.tv-mode .text-2xl  { font-size: 36px !important; line-height: 1.3 !important; }
+.tv-mode .text-3xl  { font-size: 44px !important; line-height: 1.2 !important; }
+.tv-mode .text-4xl  { font-size: 54px !important; line-height: 1.1 !important; }
+
+/* ---- Card / row padding scale ---------------------------------- */
+.tv-mode [class~="px-2.5"] { padding-left: 16px !important; padding-right: 16px !important; }
+.tv-mode [class~="py-0.5"] { padding-top: 5px !important; padding-bottom: 5px !important; }
+.tv-mode .px-3     { padding-left: 18px !important; padding-right: 18px !important; }
+.tv-mode .px-4     { padding-left: 24px !important; padding-right: 24px !important; }
+.tv-mode .py-1     { padding-top:  7px  !important; padding-bottom:  7px  !important; }
+.tv-mode .py-2     { padding-top: 12px  !important; padding-bottom: 12px  !important; }
+.tv-mode .py-3     { padding-top: 16px  !important; padding-bottom: 16px  !important; }
+.tv-mode .py-4     { padding-top: 20px  !important; padding-bottom: 20px  !important; }
+.tv-mode .gap-2    { gap: 14px !important; }
+.tv-mode .gap-3    { gap: 18px !important; }
+.tv-mode .gap-4    { gap: 24px !important; }
+
+/* ---- Icon sizes ------------------------------------------------- */
+.tv-mode [class~="w-3"]    { width:  18px !important; }
+.tv-mode [class~="h-3"]    { height: 18px !important; }
+.tv-mode [class~="w-3.5"]  { width:  20px !important; }
+.tv-mode [class~="h-3.5"]  { height: 20px !important; }
+.tv-mode [class~="w-5"]    { width:  28px !important; }
+.tv-mode [class~="h-5"]    { height: 28px !important; }
+
+/* Header branding scaling */
+.tv-mode img[alt="ODIN"] {
+  width:  80px !important;
+  height: 80px !important;
+}
+
+/* Ensure badges / pill shapes stay proportional */
+.tv-mode .rounded { border-radius: 8px !important; }
+.tv-mode .rounded-md { border-radius: 10px !important; }
+.tv-mode .rounded-xl { border-radius: 16px !important; }
+.tv-mode .rounded-2xl { border-radius: 20px !important; }
+
+/* Shift-plan slide gets its own density scaling so every shift remains visible. */
+.tv-mode .tv-shift-fit[data-density="balanced"] {
+  padding: 14px !important;
+}
+
+/* ODIN GO enterprise planning surfaces. Color is reserved for shift meaning. */
+@keyframes odin-go-logo-breathe {
+  0%, 100% {
+    transform: translateY(0) scale(1);
+    filter: drop-shadow(0 0 8px rgba(14, 165, 233, 0.36)) drop-shadow(0 0 20px rgba(14, 165, 233, 0.14));
+  }
+  50% {
+    transform: translateY(-2px) scale(1.018);
+    filter: drop-shadow(0 0 12px rgba(14, 165, 233, 0.48)) drop-shadow(0 0 26px rgba(14, 165, 233, 0.2));
+  }
+}
+
+.odin-go-logo-shell {
+  position: relative;
+  isolation: isolate;
+  background: radial-gradient(circle at 50% 55%, rgba(14, 165, 233, 0.14), transparent 68%);
+}
+
+.odin-go-logo-shell::before {
+  position: absolute;
+  z-index: -1;
+  width: 74%;
+  height: 54%;
+  content: "";
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.1);
+  filter: blur(18px);
+}
+
+.odin-go-logo-motion {
+  animation: odin-go-logo-breathe 5.5s ease-in-out infinite;
+  filter: drop-shadow(0 0 8px rgba(14, 165, 233, 0.36)) drop-shadow(0 0 20px rgba(14, 165, 233, 0.14));
+  transform-origin: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .odin-go-logo-motion { animation: none; }
+}
+
+@keyframes odin-weather-sun {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes odin-weather-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes odin-weather-rain {
+  0%, 100% { transform: translateY(-1px); opacity: 0.8; }
+  50% { transform: translateY(2px); opacity: 1; }
+}
+
+@keyframes odin-weather-panel-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes odin-weather-panel-glow {
+  0%, 100% { opacity: 0.45; transform: translate3d(0, 0, 0) scale(1); }
+  50% { opacity: 0.8; transform: translate3d(-8px, 6px, 0) scale(1.08); }
+}
+
+.odin-weather-panel-glow {
+  animation: odin-weather-panel-glow 8s ease-in-out infinite;
+}
+
+@keyframes odin-market-pulse {
+  0%, 100% { opacity: 0.78; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [class*="odin-weather-"],
+  .odin-weather-panel-glow,
+  [class*="odin-market-pulse"] {
+    animation: none !important;
+  }
+}
+
+.shiftplan-enterprise,
+.drafts-enterprise,
+.weekplan-enterprise,
+.daily-enterprise {
+  --planning-surface: #0b1220;
+  --planning-panel: #111827;
+  --planning-panel-raised: #172033;
+  --planning-border: #334155;
+}
+
+.shiftplan-enterprise [class*="bg-violet"],
+.shiftplan-enterprise [class*="bg-purple"],
+.shiftplan-enterprise [class*="bg-amber"],
+.drafts-enterprise [class*="bg-violet"],
+.drafts-enterprise [class*="bg-purple"],
+.drafts-enterprise [class*="bg-amber"] {
+  background-color: var(--planning-panel-raised) !important;
+  background-image: none !important;
+}
+
+.shiftplan-enterprise [class*="border-violet"],
+.shiftplan-enterprise [class*="border-purple"],
+.shiftplan-enterprise [class*="border-amber"],
+.drafts-enterprise [class*="border-violet"],
+.drafts-enterprise [class*="border-purple"],
+.drafts-enterprise [class*="border-amber"] {
+  border-color: var(--planning-border) !important;
+}
+
+.shiftplan-enterprise [class*="text-violet"],
+.shiftplan-enterprise [class*="text-purple"],
+.shiftplan-enterprise [class*="text-amber"],
+.drafts-enterprise [class*="text-violet"],
+.drafts-enterprise [class*="text-purple"],
+.drafts-enterprise [class*="text-amber"] {
+  color: #cbd5e1 !important;
+}
+
+.weekplan-enterprise > .pointer-events-none,
+.daily-enterprise > .pointer-events-none,
+.daily-enterprise > .relative.shrink-0 > svg,
+.daily-enterprise > .relative.shrink-0 > .pointer-events-none {
+  display: none !important;
+}
+
+.weekplan-enterprise *,
+.daily-enterprise * {
+  text-shadow: none !important;
+}
+
+.weekplan-enterprise > .relative.shrink-0,
+.daily-enterprise > .relative.shrink-0 {
+  background: var(--planning-panel) !important;
+  border-color: var(--planning-border) !important;
+  box-shadow: none !important;
+}
+
+.daily-enterprise [style*="radial-gradient"],
+.daily-enterprise [style*="linear-gradient"] {
+  background: var(--planning-panel) !important;
+  box-shadow: none !important;
+}
+
+.daily-enterprise section,
+.daily-enterprise article,
+.daily-enterprise [class*="rounded-"] {
+  box-shadow: none !important;
+}
+
+.weekplan-grid section { min-width: 0; }
+
+.tv-mode .tv-shift-fit[data-density="compact"],
+.tv-mode .tv-shift-fit[data-density="dense"] {
+  padding: 10px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[9px]"],
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[10px]"],
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[11px]"] {
+  font-size: 11px !important;
+  line-height: 1.2 !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[12px]"],
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[13px]"] {
+  font-size: 12px !important;
+  line-height: 1.2 !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[15px]"],
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[17px]"],
+.tv-mode .tv-shift-fit[data-density="compact"] [class~="text-[18px]"] {
+  font-size: 14px !important;
+  line-height: 1.15 !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[9px]"],
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[10px]"],
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[11px]"] {
+  font-size: 9px !important;
+  line-height: 1.1 !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[12px]"],
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[13px]"] {
+  font-size: 10px !important;
+  line-height: 1.12 !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[15px]"],
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[17px]"],
+.tv-mode .tv-shift-fit[data-density="dense"] [class~="text-[18px]"] {
+  font-size: 12px !important;
+  line-height: 1.12 !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="px-2"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="px-2.5"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="px-3"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="px-3.5"] {
+  padding-left: 8px !important;
+  padding-right: 8px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="px-1.5"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="px-2"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="px-2.5"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="px-3"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="px-3.5"] {
+  padding-left: 6px !important;
+  padding-right: 6px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="py-0.5"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="py-1"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="py-2"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="py-2.5"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="py-3"] {
+  padding-top: 5px !important;
+  padding-bottom: 5px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="py-0.5"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="py-1"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="py-2"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="py-2.5"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="py-3"] {
+  padding-top: 3px !important;
+  padding-bottom: 3px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="gap-2.5"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="gap-2"] {
+  gap: 7px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="gap-2.5"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="gap-2"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="gap-1.5"] {
+  gap: 5px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="h-9"],
+.tv-mode .tv-shift-fit[data-density="compact"] .tv-employee-card [class~="w-9"] {
+  width: 27px !important;
+  height: 27px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="h-9"],
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card [class~="w-9"] {
+  width: 20px !important;
+  height: 20px !important;
+}
+
+.tv-mode .tv-shift-fit[data-density="dense"] .tv-employee-card {
+  border-radius: 12px !important;
+}
+
+/* ---------------------------------------------------------------- */
+/* TV-MODE: red/critical ticket glow pulse (2.5 s, subtle)          */
+/* ---------------------------------------------------------------- */
+@keyframes tv-red-glow-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 20px 3px rgba(239, 68, 68, 0.28),
+      0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  50% {
+    box-shadow:
+      0 0 36px 10px rgba(239, 68, 68, 0.55),
+      0 2px 12px rgba(0, 0, 0, 0.5);
+  }
+}
+
+.tv-red-pulse {
+  animation: tv-red-glow-pulse 2.5s ease-in-out infinite;
+}
+
+/* ================================================================ */
+/* SHIFTPLANNER – restrained enterprise visual system               */
+/* ================================================================ */
+.shiftplan-enterprise {
+  background: #0b1220 !important;
+  color: #e5e7eb;
+}
+
+.shiftplan-enterprise *,
+.shiftplan-enterprise *::before,
+.shiftplan-enterprise *::after {
+  text-shadow: none !important;
+}
+
+.shiftplan-enterprise .theme-glass-panel,
+.shiftplan-enterprise .theme-glass-inset,
+.shiftplan-enterprise [class*="bg-[radial-gradient"],
+.shiftplan-enterprise [class*="bg-[linear-gradient"] {
+  background-image: none !important;
+  background-color: #111827 !important;
+  box-shadow: none !important;
+  border-color: #334155 !important;
+}
+
+.shiftplan-enterprise [class*="bg-violet"],
+.shiftplan-enterprise [class*="bg-purple"],
+.shiftplan-enterprise [class*="bg-fuchsia"],
+.shiftplan-enterprise [class*="bg-amber"],
+.shiftplan-enterprise [class*="bg-orange"],
+.shiftplan-enterprise [class*="bg-yellow"],
+.shiftplan-enterprise [class*="bg-cyan"],
+.shiftplan-enterprise [class*="bg-teal"],
+.shiftplan-enterprise [class*="bg-emerald"],
+.shiftplan-enterprise [class*="bg-indigo"] {
+  background-color: #1e293b !important;
+  background-image: none !important;
+}
+
+.shiftplan-enterprise [class*="text-violet"],
+.shiftplan-enterprise [class*="text-purple"],
+.shiftplan-enterprise [class*="text-fuchsia"],
+.shiftplan-enterprise [class*="text-amber"],
+.shiftplan-enterprise [class*="text-orange"],
+.shiftplan-enterprise [class*="text-yellow"],
+.shiftplan-enterprise [class*="text-cyan"],
+.shiftplan-enterprise [class*="text-teal"],
+.shiftplan-enterprise [class*="text-emerald"],
+.shiftplan-enterprise [class*="text-indigo"] {
+  color: #cbd5e1 !important;
+}
+
+.shiftplan-enterprise [class*="border-violet"],
+.shiftplan-enterprise [class*="border-purple"],
+.shiftplan-enterprise [class*="border-fuchsia"],
+.shiftplan-enterprise [class*="border-amber"],
+.shiftplan-enterprise [class*="border-orange"],
+.shiftplan-enterprise [class*="border-yellow"],
+.shiftplan-enterprise [class*="border-cyan"],
+.shiftplan-enterprise [class*="border-teal"],
+.shiftplan-enterprise [class*="border-emerald"],
+.shiftplan-enterprise [class*="border-indigo"] {
+  border-color: #475569 !important;
+}
+
+.shiftplan-enterprise button {
+  box-shadow: none !important;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease !important;
+}
+
+.shiftplan-enterprise button:hover {
+  transform: none !important;
+}
+
+.shiftplan-enterprise table thead,
+.shiftplan-enterprise table th {
+  background: #172033 !important;
+  color: #cbd5e1 !important;
+  border-color: #334155 !important;
+}
+
+/* Semantic shift colors must win over the neutral enterprise reset above. */
+.shiftplan-enterprise .shift-badge.shift-badge-early,
+.drafts-enterprise .shift-badge.shift-badge-early {
+  background: #c2410c !important;
+  border-color: #fb923c !important;
+  color: #fff7ed !important;
+}
+
+.shiftplan-enterprise .shift-badge.shift-badge-late,
+.drafts-enterprise .shift-badge.shift-badge-late {
+  background: #a16207 !important;
+  border-color: #facc15 !important;
+  color: #fefce8 !important;
+}
+
+.shiftplan-enterprise .shift-badge.shift-badge-night,
+.drafts-enterprise .shift-badge.shift-badge-night {
+  background: #1d4ed8 !important;
+  border-color: #60a5fa !important;
+  color: #eff6ff !important;
+}
+
+.shiftplan-enterprise .shift-badge.shift-badge-absent,
+.drafts-enterprise .shift-badge.shift-badge-absent {
+  background: #374151 !important;
+  border-color: #6b7280 !important;
+  color: #f3f4f6 !important;
+}
+
+.shiftplan-enterprise .shift-badge.shift-badge-neutral,
+.drafts-enterprise .shift-badge.shift-badge-neutral {
+  background: #111827 !important;
+  border-color: #475569 !important;
+  color: #cbd5e1 !important;
+}
+
+/* Calm enterprise treatment for administration screens. Status colours remain available,
+   while decorative saturated panels are reduced to neutral slate surfaces. */
+.admin-enterprise-surface [class*="bg-fuchsia-500"],
+.admin-enterprise-surface [class*="bg-amber-500"],
+.admin-enterprise-surface [class*="bg-cyan-500"],
+.admin-enterprise-surface [class*="bg-indigo-500"],
+.admin-enterprise-surface [class*="bg-purple-500"] {
+  background-color: color-mix(in srgb, var(--surface-1) 92%, var(--surface-2)) !important;
+}
+.admin-enterprise-surface [class*="border-fuchsia"],
+.admin-enterprise-surface [class*="border-amber"],
+.admin-enterprise-surface [class*="border-cyan"],
+.admin-enterprise-surface [class*="border-indigo"],
+.admin-enterprise-surface [class*="border-purple"] {
+  border-color: var(--surface-border) !important;
+}
+.admin-enterprise-surface [class*="text-fuchsia"],
+.admin-enterprise-surface [class*="text-amber"],
+.admin-enterprise-surface [class*="text-cyan"],
+.admin-enterprise-surface [class*="text-indigo"],
+.admin-enterprise-surface [class*="text-purple"] {
+  color: var(--surface-text-muted) !important;
+}
+
+/* Admin surfaces: neutral hierarchy and readable controls. */
+.admin-enterprise-surface {
+  background: #0f1724 !important;
+  color: #e5e7eb;
+}
+.admin-enterprise-surface .theme-admin-hero,
+.admin-enterprise-surface .theme-admin-tile,
+.admin-enterprise-surface .theme-admin-tile-active,
+.admin-enterprise-surface .theme-glass-panel {
+  background: #162131 !important;
+  border-color: #334155 !important;
+  box-shadow: 0 8px 24px rgba(2, 6, 23, 0.22) !important;
+}
+.admin-enterprise-surface input:not([type="checkbox"]):not([type="color"]),
+.admin-enterprise-surface select,
+.admin-enterprise-surface textarea {
+  background-color: #1b2838 !important;
+  border-color: #475569 !important;
+  color: #f1f5f9 !important;
+}
+.admin-enterprise-surface input::placeholder,
+.admin-enterprise-surface textarea::placeholder {
+  color: #94a3b8 !important;
+}
+.admin-enterprise-surface button.bg-sky-500,
+.admin-enterprise-surface button.bg-cyan-500,
+.admin-enterprise-surface button.bg-fuchsia-400,
+.admin-enterprise-surface button.bg-emerald-500,
+.admin-enterprise-surface button.bg-primary {
+  background: #2563eb !important;
+  color: #fff !important;
+}

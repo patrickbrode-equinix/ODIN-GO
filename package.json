@@ -1,0 +1,10 @@
+{
+  "name": "odin-shiftplanner",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup-local-db.mjs",
+    "dev": "node scripts/dev.mjs"
+  }
+}

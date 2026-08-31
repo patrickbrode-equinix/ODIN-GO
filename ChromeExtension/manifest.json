@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ODIN GO",
+  "version": "0.9.5",
+  "description": "Stabile Jarvis-Bruecke fuer die zentral auf der VM aktualisierte ODIN-GO-Oberflaeche.",
+  "icons": {
+    "16": "icons/odin-go.png",
+    "32": "icons/odin-go.png",
+    "48": "icons/odin-go.png",
+    "128": "icons/odin-go.png"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://jarvis-emea.equinix.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/odin-go.png", "icons/odin-go-hero.png", "icons/odin-unavailable.png"],
+      "matches": ["https://jarvis-emea.equinix.com/*"]
+    }
+  ],
+  "options_page": "options.html"
+}

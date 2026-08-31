@@ -1,0 +1,10 @@
+node_modules
+.env
+.env.*
+.git
+*.md
+uploads/
+tests/
+Dockerfile*
+.dockerignore
+nodemon.json
