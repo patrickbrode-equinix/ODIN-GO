@@ -1,0 +1,7 @@
+{$ODIN_HOSTNAME} {
+    # Caddy obtains a trusted certificate automatically for public DNS names.
+    # For internal-only names/IPs, use `tls internal` and trust Caddy's local CA
+    # on managed client devices.
+    encode gzip zstd
+    reverse_proxy frontend:8000
+}

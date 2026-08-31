@@ -56,9 +56,13 @@ liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
    lange Zufallswerte verwenden.
 3. Den Stack deployen. Portainer baut die Images und wartet über die
    Healthchecks automatisch auf PostgreSQL, Backend und Frontend.
-4. Die Oberfläche ist anschließend über `http://<VM-IP>:8080` erreichbar.
-   Für einen vorgeschalteten HTTPS-Reverse-Proxy kann ausschließlich Port 8080
-   veröffentlicht werden; Backend-Port 8001 muss nicht öffentlich erreichbar sein.
+4. Die Oberfläche ist anschließend über `https://<ODIN_HOSTNAME>` erreichbar.
+   `ODIN_HOSTNAME` muss auf die VM zeigen. Der mitgelieferte Caddy-Proxy
+   übernimmt TLS und leitet intern an das Frontend weiter. Diese HTTPS-Adresse
+   muss auch in den Optionen der Chrome-Erweiterung hinterlegt werden.
+5. Für interne DNS-Namen oder IP-Adressen kann in `Caddyfile` innerhalb des
+   Site-Blocks `tls internal` ergänzt werden. Die Caddy-Root-CA muss dann auf
+   den verwalteten Arbeitsplätzen als vertrauenswürdig installiert werden.
 
 Die persistenten Volumes `shiftplanner_postgres_data` und
 `shiftplanner_uploads_data` dürfen bei Updates nicht gelöscht werden. Ein Update
