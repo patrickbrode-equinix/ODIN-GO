@@ -26,8 +26,9 @@ docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T postgres \
 
 docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T \
   postgres \
-  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres \
   -v repair_password="$DB_PASSWORD" \
+  -c "SELECT format('CREATE DATABASE %I OWNER %I', 'shiftplanner', 'shiftplanner_app') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'shiftplanner')\\gexec" \
   -c "ALTER ROLE \"shiftplanner_app\" WITH LOGIN PASSWORD :'repair_password';" \
   -c "ALTER DATABASE \"shiftplanner\" OWNER TO \"shiftplanner_app\";" \
   -c "GRANT ALL PRIVILEGES ON DATABASE \"shiftplanner\" TO \"shiftplanner_app\";" \
