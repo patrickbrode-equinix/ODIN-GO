@@ -106,10 +106,15 @@ services:
       - "${HTTP_PORT:-8081}:80"
     environment:
       ODIN_HOSTNAME: ${ODIN_HOSTNAME:-odin-go.local}
+      CADDY_CONFIG: |
+        {$ODIN_HOSTNAME} {
+            encode gzip zstd
+            reverse_proxy frontend:8000
+        }
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - odin_caddy_data:/data
       - odin_caddy_config:/config
+    command: ["/bin/sh", "-c", "printf '%s' \"$$CADDY_CONFIG\" > /tmp/Caddyfile && caddy run --config /tmp/Caddyfile --adapter caddyfile"]
     networks:
       - shiftplanner-net
     depends_on:
