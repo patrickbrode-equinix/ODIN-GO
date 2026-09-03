@@ -56,10 +56,11 @@ liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
    lange Zufallswerte verwenden.
 3. Den Stack deployen. Portainer baut die Images und wartet über die
    Healthchecks automatisch auf PostgreSQL, Backend und Frontend.
-4. Die Oberfläche ist anschließend über `https://<ODIN_HOSTNAME>` erreichbar.
+4. Die Oberfläche ist anschließend über `https://<ODIN_HOSTNAME>:8443` erreichbar.
    `ODIN_HOSTNAME` muss auf die VM zeigen. Der mitgelieferte Caddy-Proxy
    übernimmt TLS und leitet intern an das Frontend weiter. Diese HTTPS-Adresse
-   muss auch in den Optionen der Chrome-Erweiterung hinterlegt werden.
+   muss auch in den Optionen der Chrome-Erweiterung hinterlegt werden. Wenn
+   Port 443 auf der VM frei ist, kann `HTTPS_PORT=443` verwendet werden.
 5. Für interne DNS-Namen oder IP-Adressen kann in `Caddyfile` innerhalb des
    Site-Blocks `tls internal` ergänzt werden. Die Caddy-Root-CA muss dann auf
    den verwalteten Arbeitsplätzen als vertrauenswürdig installiert werden.
