@@ -1,7 +1,9 @@
 (() => {
   if (document.getElementById("shiftplanner-jarvis-host")) return;
 
-  const DEFAULTS = { plannerUrl: "http://127.0.0.1:5173", apiKey: "", employeeName: "" };
+  const DEFAULTS = { plannerUrl: "", apiKey: "", employeeName: "" };
+  const log = (...args) => console.info("[ODIN GO]", ...args);
+  log("Content-Script gestartet", { page: location.href });
   const host = document.createElement("div");
   host.id = "shiftplanner-jarvis-host";
   document.documentElement.appendChild(host);
@@ -464,6 +466,7 @@
 
   async function loadSettings() {
     settings = await chrome.storage.sync.get(DEFAULTS);
+    log("Einstellungen geladen", { plannerUrl: settings.plannerUrl, hasApiKey: Boolean(settings.apiKey) });
     employeeNode.textContent = verifiedUser
       ? `${verifiedUser.displayName} · SSO verifiziert`
       : "Jarvis-SSO wird geprüft";
@@ -576,6 +579,7 @@
     if (identityVerificationPending) return false;
     const identity = readJarvisIdentity();
     if (!identity) {
+      log("Kein Jarvis-Profil erkannt; Backend-Aufruf wird noch nicht gestartet.");
       verifiedUser = null;
       identityToken = "";
       employeeNode.textContent = "Jarvis-Profil nicht erkannt";
@@ -591,6 +595,7 @@
     identityVerificationPending = true;
     const response = await chrome.runtime.sendMessage({ type: "VERIFY_JARVIS_IDENTITY", identity })
       .finally(() => { identityVerificationPending = false; });
+    log("Identitätsprüfung beendet", { ok: Boolean(response?.ok), message: response?.message || "" });
     if (!response?.ok) {
       verifiedUser = null;
       identityToken = "";

@@ -107,14 +107,15 @@ services:
     environment:
       ODIN_HOSTNAME: ${ODIN_HOSTNAME:-odin-go.local}
       CADDY_CONFIG: |
-        {$ODIN_HOSTNAME} {
+        __ODIN_HOSTNAME__ {
+            tls internal
             encode gzip zstd
             reverse_proxy frontend:8000
         }
     volumes:
       - odin_caddy_data:/data
       - odin_caddy_config:/config
-    command: ["/bin/sh", "-c", "printf '%s' \"$$CADDY_CONFIG\" > /tmp/Caddyfile && caddy run --config /tmp/Caddyfile --adapter caddyfile"]
+    command: ["/bin/sh", "-c", "printf '%s' \"$$CADDY_CONFIG\" | sed \"s|__ODIN_HOSTNAME__|$$ODIN_HOSTNAME|g\" > /tmp/Caddyfile && caddy run --config /tmp/Caddyfile --adapter caddyfile"]
     networks:
       - shiftplanner-net
     depends_on:

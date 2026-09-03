@@ -11,6 +11,8 @@
       label { display: block; margin: 18px 0 6px; font-weight: 700; }
       input { width: 100%; box-sizing: border-box; padding: 11px; border: 1px solid #355b75; border-radius: 8px; background: #06111c; color: white; }
       button { margin-top: 22px; padding: 11px 18px; border: 0; border-radius: 8px; background: #008dca; color: white; font-weight: 800; cursor: pointer; }
+      button.secondary { margin-left: 8px; background: #334155; }
+      button:disabled { opacity: .6; cursor: wait; }
       #status { margin-left: 12px; color: #7ce6ad; }
       p { color: #9db5c6; }
     </style>
@@ -24,7 +26,9 @@
       <label for="apiKey">Lokaler App-Schlüssel</label>
       <input id="apiKey" type="password" placeholder="SHIFTPLANNER_API_KEY der VM" autocomplete="off" />
       <p>Dieser Schlüssel verbindet die Erweiterung sicher mit dem Schichtplaner-Backend auf der VM.</p>
-      <button id="save" type="button">Speichern</button><span id="status"></span>
+      <button id="save" type="button">Speichern</button>
+      <button id="test" type="button" class="secondary">Verbindung testen</button>
+      <span id="status" role="status" aria-live="polite"></span>
     </main>
     <script src="options.js"></script>
   </body>

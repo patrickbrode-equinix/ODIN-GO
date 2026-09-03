@@ -6,11 +6,35 @@ const ADMIN_SESSION_KEY = "odinGoAdminSession";
 const NOTIFICATION_CLAIM_TTL_MS = 90_000;
 const notificationClaims = new Map();
 
+function logConnection(event, details = {}) { console.info("[ODIN GO]", event, details); }
+
+async function testConnection(plannerUrl, apiKey) {
+  const baseUrl = normalizeBaseUrl(plannerUrl);
+  if (!/^https?:\/\//i.test(baseUrl)) return { ok: false, status: 0, message: "Ungültige Planner-Adresse." };
+  const url = `${baseUrl}/api/health/ready`;
+  logConnection("Verbindungsversuch", { url });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, { headers: { "x-shiftplanner-key": apiKey || "" }, signal: controller.signal });
+    logConnection("Verbindungsantwort", { url, status: response.status, ok: response.ok });
+    return { ok: response.ok, status: response.status, message: response.ok ? "" : `Backend antwortet mit HTTP ${response.status}.` };
+  } catch (error) {
+    const message = error.name === "AbortError" ? "Zeitüberschreitung beim Backend-Aufruf." : error.message;
+    logConnection("Verbindungsfehler", { url, message });
+    return { ok: false, status: 0, message: `Backend nicht erreichbar: ${message}` };
+  } finally { clearTimeout(timeout); }
+}
+
 function normalizeBaseUrl(value) {
   return String(value || DEFAULTS.plannerUrl).trim().replace(/\/+$/, "");
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "TEST_CONNECTION") {
+    testConnection(message.plannerUrl, message.apiKey).then(sendResponse);
+    return true;
+  }
   if (message?.type === "OPEN_OPTIONS") {
     chrome.runtime.openOptionsPage();
     sendResponse({ ok: true });
@@ -49,6 +73,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
     try {
+      logConnection("Admin-Entsperrung", { url: `${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-admin/unlock` });
       const response = await fetch(`${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-admin/unlock`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-shiftplanner-key": settings.apiKey || "" },
@@ -69,6 +94,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         message: data.message || (response.ok ? "Freigeschaltet" : "Admin-Freigabe fehlgeschlagen"),
       });
     } catch (error) {
+      logConnection("Admin-Aufruf fehlgeschlagen", { message: error.message });
       sendResponse({ ok: false, message: `Schichtplaner nicht erreichbar: ${error.message}` });
     }
   });
@@ -81,6 +107,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
     try {
+      logConnection(message.type, { url: `${normalizeBaseUrl(settings.plannerUrl)}/api/odin-go/preferences` });
       const isSave = message.type === "SAVE_ODIN_GO_PREFERENCES";
       const response = await fetch(`${normalizeBaseUrl(settings.plannerUrl)}/api/odin-go/preferences`, {
         method: isSave ? "PUT" : "GET",
@@ -100,6 +127,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         message: data.message || data.error || "",
       });
     } catch (error) {
+      logConnection("Präferenz-Aufruf fehlgeschlagen", { message: error.message });
       sendResponse({ ok: false, status: 0, launcherPosition: null, message: error.message });
     }
   });
@@ -117,6 +145,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
     try {
+      logConnection("Jarvis-Identität", { url: `${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-identity/verify` });
       const response = await fetch(`${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-identity/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-shiftplanner-key": settings.apiKey || "" },
@@ -134,6 +163,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         message: data.message || (response.ok ? "Jarvis-Benutzer verifiziert" : "Verifizierung fehlgeschlagen"),
       });
     } catch (error) {
+      logConnection("Identitäts-Aufruf fehlgeschlagen", { message: error.message });
       sendResponse({ ok: false, message: `Schichtplaner nicht erreichbar: ${error.message}` });
     }
   });
@@ -159,6 +189,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           },
         },
       );
+      logConnection("Notifications", { status: response.status, ok: response.ok });
       const data = await response.json().catch(() => ({}));
       let notifications = Array.isArray(data.notifications) ? data.notifications : [];
       if (isDismiss) {
@@ -190,6 +221,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         message: data.message || data.error || (response.ok ? "" : `Notifications konnten nicht geladen werden (${response.status}).`),
       });
     } catch (error) {
+      logConnection("Notifications-Aufruf fehlgeschlagen", { message: error.message });
       sendResponse({ ok: false, message: error.message });
     }
   });
@@ -208,9 +240,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           "x-shiftplanner-identity": message.identityToken || "",
         },
       });
+      logConnection("Staffing", { status: response.status, ok: response.ok });
       const data = await response.json().catch(() => ({}));
       sendResponse({ ok: response.ok, staffing: data, message: data.message || data.error || "" });
     } catch (error) {
+      logConnection("Staffing-Aufruf fehlgeschlagen", { message: error.message });
       sendResponse({ ok: false, message: error.message });
     }
   });
