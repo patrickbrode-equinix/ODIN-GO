@@ -21,7 +21,9 @@ const isShiftplannerMode = APP_MODE === "shiftplanner";
 /*  Fail-fast: required vars in production                                      */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-const REQUIRED_IN_PROD = isShiftplannerMode ? ["JWT_SECRET"] : ["JWT_SECRET", "QUEUE_INGEST_KEY"];
+const REQUIRED_IN_PROD = isShiftplannerMode
+    ? ["JWT_SECRET", "SHIFTPLANNER_API_KEY", "DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"]
+    : ["JWT_SECRET", "QUEUE_INGEST_KEY"];
 
 if (isProd) {
     const missing = REQUIRED_IN_PROD.filter((k) => !process.env[k]);
@@ -47,8 +49,8 @@ if (!DATABASE_URL && !process.env.DB_HOST && isProd) {
 const db = {
     host: process.env.DB_HOST || "localhost",
     port: parseInt(process.env.DB_PORT || "5432", 10),
-    database: process.env.DB_NAME || "odin",
-    user: process.env.DB_USER || "postgres",
+    database: process.env.DB_NAME || "shiftplanner",
+    user: process.env.DB_USER || "shiftplanner_app",
     password: process.env.DB_PASSWORD || undefined, // No default — must be in .env
 };
 
