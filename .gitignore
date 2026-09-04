@@ -1,4 +1,5 @@
 .env
+PORTAINER_ENV.txt
 node_modules/
 dist/
 coverage/

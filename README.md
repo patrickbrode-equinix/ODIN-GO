@@ -47,27 +47,31 @@ Frontend automatisch installiert. Danach ist die Anwendung unter
 Der Backend-Status ist unter `http://localhost:8001/api/health` erreichbar und
 liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
 
-### Installation auf Ubuntu mit Portainer
+### Clean installation on Ubuntu with Portainer
 
-1. Das Repository in Portainer unter **Stacks → Add stack → Git repository**
-   hinterlegen und als Compose-Datei `docker-compose.yml` verwenden.
-2. Die Variablen aus `.env.example` als Stack-Umgebungsvariablen setzen. Für
-   `DB_PASSWORD`, `JWT_SECRET` und `SHIFTPLANNER_API_KEY` unbedingt eigene,
-   lange Zufallswerte verwenden.
-3. Den Stack deployen. Portainer baut die Images und wartet über die
-   Healthchecks automatisch auf PostgreSQL, Backend und Frontend.
-4. Die Oberfläche ist anschließend über `https://<ODIN_HOSTNAME>:8443` erreichbar.
-   `ODIN_HOSTNAME` muss auf die VM zeigen. Der mitgelieferte Caddy-Proxy
-   übernimmt TLS und leitet intern an das Frontend weiter. Diese HTTPS-Adresse
-   muss auch in den Optionen der Chrome-Erweiterung hinterlegt werden. Wenn
-   Port 443 auf der VM frei ist, kann `HTTPS_PORT=443` verwendet werden.
-5. Für interne DNS-Namen oder IP-Adressen kann in `Caddyfile` innerhalb des
-   Site-Blocks `tls internal` ergänzt werden. Die Caddy-Root-CA muss dann auf
-   den verwalteten Arbeitsplätzen als vertrauenswürdig installiert werden.
+This stack is designed to start with an empty, independent `shiftplanner`
+database. It never reads an existing ODIN database. Import employees and plans
+afterwards through the application Excel upload.
 
-Die persistenten Volumes `shiftplanner_postgres_data` und
-`shiftplanner_uploads_data` dürfen bei Updates nicht gelöscht werden. Ein Update
-erfolgt durch erneutes Deployen des Stacks mit **Pull latest image/build**.
+1. In Portainer remove the old `odin_go` stack and select **Remove volumes**.
+   This is required for a clean start; it deletes only the old ODIN GO database
+   and upload volumes.
+2. Create the stack from this Git repository with `docker-compose.yml`.
+3. Copy the values from your local `.env` or `PORTAINER_ENV.txt` into the stack
+   environment variables. `POSTGRES_PASSWORD` and `DB_PASSWORD` must be the
+   same value. Do not add a custom `CADDY_CONFIG` variable.
+4. Deploy the stack. PostgreSQL creates `shiftplanner` and `shiftplanner_app`
+   automatically, then backend, frontend, and Caddy start in that order.
+5. Open `https://<ODIN_HOSTNAME>:8443/api/health`. The normal app URL is
+   `https://<ODIN_HOSTNAME>:8443`.
+
+The default standalone admin password is `root`. Change it after the first
+login in the application admin settings. Internal hostnames use Caddy's
+internal CA; managed clients must trust that CA before Chrome can embed ODIN GO
+inside HTTPS Jarvis.
+
+For later upgrades, keep the volumes. The `scripts/reset-clean-install.sh`
+script intentionally removes them only when started with `RESET_ODIN_GO=YES`.
 
 ## Wichtiger Hinweis
 
