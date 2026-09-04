@@ -53,6 +53,12 @@ This stack is designed to start with an empty, independent `shiftplanner`
 database. It never reads an existing ODIN database. Import employees and plans
 afterwards through the application Excel upload.
 
+The Git repository contains application code, database schema, migrations, and
+planning rules only. It does not contain employee records, shift plans, drafts,
+Excel uploads, database dumps, or production secrets. A fresh installation
+creates only the technical schema and the local administrator with password
+`root`.
+
 1. In Portainer remove the old `odin_go` stack and select **Remove volumes**.
    This is required for a clean start; it deletes only the old ODIN GO database
    and upload volumes.
