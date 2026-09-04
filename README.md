@@ -63,9 +63,11 @@ creates only the technical schema and the local administrator with password
    This is required for a clean start; it deletes only the old ODIN GO database
    and upload volumes.
 2. Create the stack from this Git repository with `docker-compose.yml`.
-3. Copy the values from your local `.env` or `PORTAINER_ENV.txt` into the stack
-   environment variables. `POSTGRES_PASSWORD` and `DB_PASSWORD` must be the
-   same value. Do not add a custom `CADDY_CONFIG` variable.
+3. In Portainer provide only `DB_PASSWORD`, `JWT_SECRET`,
+   `SHIFTPLANNER_API_KEY`, and `ODIN_HOSTNAME`. Do not add
+   `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DB_HOST`, `DB_PORT`,
+   `DB_NAME`, or `DB_USER`: these values are fixed consistently by the stack.
+   Do not add a custom `CADDY_CONFIG` variable.
 4. Deploy the stack. PostgreSQL creates `shiftplanner` and `shiftplanner_app`
    automatically, then backend, frontend, and Caddy start in that order.
 5. Open `https://<ODIN_HOSTNAME>:8443/api/health`. The normal app URL is
