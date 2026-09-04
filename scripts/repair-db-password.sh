@@ -14,6 +14,7 @@ fi
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
 : "${DB_PASSWORD:?DB_PASSWORD is required}"
+POSTGRES_SUPERUSER="${POSTGRES_SUPERUSER:-postgres}"
 
 if [[ "$POSTGRES_USER" != "shiftplanner_app" || "$POSTGRES_DB" != "shiftplanner" ]]; then
   echo "Refusing repair: expected shiftplanner_app / shiftplanner." >&2
@@ -22,11 +23,11 @@ fi
 
 echo "Checking PostgreSQL container..."
 docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T postgres \
-  pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null
+  pg_isready -U "$POSTGRES_SUPERUSER" -d postgres >/dev/null
 
 docker compose -f "$PROJECT_DIR/docker-compose.yml" exec -T \
   postgres \
-  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d postgres \
+  psql -v ON_ERROR_STOP=1 -U "$POSTGRES_SUPERUSER" -d postgres \
   -v repair_password="$DB_PASSWORD" \
   -c "SELECT format('CREATE DATABASE %I OWNER %I', 'shiftplanner', 'shiftplanner_app') WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'shiftplanner')\\gexec" \
   -c "ALTER ROLE \"shiftplanner_app\" WITH LOGIN PASSWORD :'repair_password';" \
