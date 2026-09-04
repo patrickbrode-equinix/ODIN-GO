@@ -9,7 +9,9 @@ services:
       POSTGRES_USER: shiftplanner_app
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
     volumes:
-      - shiftplanner_postgres_data:/var/lib/postgresql/data
+      # Versioned volume forces a clean database after the standalone reset.
+      # It avoids reusing an earlier installation with different credentials.
+      - shiftplanner_postgres_data_v2:/var/lib/postgresql/data
     networks:
       - shiftplanner-net
     healthcheck:
@@ -65,8 +67,9 @@ services:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8001/api/health/ready || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 5
-      start_period: 60s
+      retries: 10
+      # A fresh database applies all migrations before the backend can be ready.
+      start_period: 180s
 
   frontend:
     build:
@@ -125,7 +128,7 @@ services:
         condition: service_healthy
 
 volumes:
-  shiftplanner_postgres_data:
+  shiftplanner_postgres_data_v2:
   shiftplanner_uploads_data:
   odin_caddy_data:
   odin_caddy_config:

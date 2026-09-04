@@ -70,6 +70,8 @@ creates only the technical schema and the local administrator with password
    Do not add a custom `CADDY_CONFIG` variable.
 4. Deploy the stack. PostgreSQL creates `shiftplanner` and `shiftplanner_app`
    automatically, then backend, frontend, and Caddy start in that order.
+   The current stack uses a versioned empty database volume, so an earlier
+   failed installation with different database credentials is not reused.
 5. Open `https://<ODIN_HOSTNAME>:8443/api/health`. The normal app URL is
    `https://<ODIN_HOSTNAME>:8443`.
 
