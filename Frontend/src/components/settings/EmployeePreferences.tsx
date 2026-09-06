@@ -203,6 +203,27 @@ const DEFAULTS: Preferences = {
   max_weekends_per_month: null, workload_preference: 'normal', notes: '',
 };
 
+function applyEmployeeSelectableShiftDefinitions(
+  definitions: any[],
+  setOptions: (codes: string[]) => void,
+  setNames: (names: Record<string, string>) => void,
+) {
+  const selectableDefinitions = definitions.filter((definition: any) => {
+    const code = String(definition?.code || '').trim().toUpperCase();
+    return Boolean(code) && definition?.is_active !== false && !EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code);
+  });
+  const configuredCodes = selectableDefinitions.map((definition: any) => String(definition.code).trim().toUpperCase());
+  setOptions(Array.from(new Set([...SHIFT_CODES, ...configuredCodes])).filter((code) => !EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code)));
+
+  const configuredNames: Record<string, string> = {};
+  selectableDefinitions.forEach((definition: any) => {
+    const code = String(definition.code || '').trim().toUpperCase();
+    const name = String(definition.name || '').trim();
+    if (code && name) configuredNames[code] = name;
+  });
+  setNames(configuredNames);
+}
+
 function normalizeNameList(values: unknown): string[] {
   if (!Array.isArray(values)) return [];
   return dedupeEmployeeNames(values);
@@ -247,6 +268,15 @@ export default function EmployeePreferences() {
   const [shiftOptions, setShiftOptions] = useState<string[]>(SHIFT_CODES);
   const [shiftNameMap, setShiftNameMap] = useState<Record<string, string>>({});
 
+  const refreshShiftOptions = useCallback(async () => {
+    try {
+      const response = await api.get('/shift-config/definitions');
+      applyEmployeeSelectableShiftDefinitions(response.data?.definitions || [], setShiftOptions, setShiftNameMap);
+    } catch {
+      // Keep the existing options available if the configuration cannot be refreshed.
+    }
+  }, []);
+
   const showToast = (msg: string, type: 'ok' | 'err' = 'ok') => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
@@ -261,19 +291,7 @@ export default function EmployeePreferences() {
         api.get('/user/preferred-colleagues').catch(() => ({ data: [] })),
         api.get('/shift-config/definitions').catch(() => ({ data: { definitions: [] } })),
       ]);
-      const configuredCodes = (definitionsRes.data?.definitions || [])
-        .filter((definition: any) => definition?.is_active !== false && !String(definition?.code || '').startsWith('H') && !EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(String(definition?.code || '').trim().toUpperCase()))
-        .map((definition: any) => String(definition.code || '').trim().toUpperCase())
-        .filter(Boolean);
-      setShiftOptions(Array.from(new Set([...SHIFT_CODES, ...configuredCodes])).filter((code) => !EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code)));
-      const configuredNames: Record<string, string> = {};
-      (definitionsRes.data?.definitions || []).forEach((definition: any) => {
-        const code = String(definition?.code || '').trim().toUpperCase();
-        if (EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code)) return;
-        const name = String(definition?.name || '').trim();
-        if (code && name) configuredNames[code] = name;
-      });
-      setShiftNameMap(configuredNames);
+      applyEmployeeSelectableShiftDefinitions(definitionsRes.data?.definitions || [], setShiftOptions, setShiftNameMap);
       if (prefRes.data.preferences) {
         const stored = prefRes.data.preferences;
         const allowed = (value: unknown) => (Array.isArray(value) ? value.filter((code) => {
@@ -299,6 +317,18 @@ export default function EmployeePreferences() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const refreshWhenReturning = () => {
+      if (document.visibilityState === 'visible') void refreshShiftOptions();
+    };
+    window.addEventListener('focus', refreshWhenReturning);
+    document.addEventListener('visibilitychange', refreshWhenReturning);
+    return () => {
+      window.removeEventListener('focus', refreshWhenReturning);
+      document.removeEventListener('visibilitychange', refreshWhenReturning);
+    };
+  }, [refreshShiftOptions]);
 
   const filteredColleagues = useMemo(() => {
     const query = colleagueSearch.trim().toLowerCase();
