@@ -18,6 +18,7 @@ import {
   Clock,
   HelpCircle,
   Plus,
+  Route,
   RotateCcw,
   Save,
   Scale,
