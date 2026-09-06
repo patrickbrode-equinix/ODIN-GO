@@ -142,11 +142,23 @@ export default function Weekplan() {
   const [dirtyMonths, setDirtyMonths] = useState<Set<string>>(new Set());
   const [schedulesByMonth, setSchedulesByMonth] = useState<Record<string, Schedule>>({});
   const [coloPool, setColoPool] = useState<string[]>([]);
+  const [dispatcherConfig, setDispatcherConfig] = useState<{ enabled: boolean; priorities: string[] }>({ enabled: true, priorities: [] });
 
   const [showActiveOnly, setShowActiveOnly] = useState(false);
 
   useEffect(() => {
-    api.get("/app-settings").then(({ data }) => setColoPool(parseColoPool(data?.["shiftplan.colo_pool"]))).catch(() => setColoPool([]));
+    api.get("/app-settings")
+      .then(({ data }) => {
+        setColoPool(parseColoPool(data?.["shiftplan.colo_pool"]));
+        setDispatcherConfig({
+          enabled: data?.["shiftplan.dispatcher_enabled"] !== "false",
+          priorities: parseColoPool(data?.["shiftplan.dispatcher_pool"]),
+        });
+      })
+      .catch(() => {
+        setColoPool([]);
+        setDispatcherConfig({ enabled: true, priorities: [] });
+      });
   }, []);
 
   // Employee highlight (click name to highlight row, click again or ESC to clear)
