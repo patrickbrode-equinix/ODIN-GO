@@ -52,7 +52,7 @@ import feedbackRoutes from "./routes/feedback.js";
 import shiftplanControlRoutes from "./routes/shiftplanControl.js";
 import shiftConfigRoutes from "./routes/shiftConfig.js";
 import verificationRoutes from "./routes/verification.js";
-import standaloneAdminRoutes from "./routes/standaloneAdmin.js";
+import standaloneAdminRoutes, { resetStandaloneAdminPasswordIfRequested } from "./routes/standaloneAdmin.js";
 import standaloneIdentityRoutes from "./routes/standaloneIdentity.js";
 import cocRoutes from "./routes/coc.js";
 import jarvisNotificationsRoutes from "./routes/jarvisNotifications.js";
@@ -359,6 +359,8 @@ async function start() {
     await runMigrations();
     // 3. Ensure master account exists with recovery-safe credentials.
     await seedDefaultAdmin();
+    // 3a. Explicitly requested deployment recovery for the embedded admin lock.
+    await resetStandaloneAdminPasswordIfRequested();
     // 4. Ensure shiftplan employees exist as SSO-only identities.
     try {
       const provisioningSummary = await provisionUsersFromShiftplan({ logger: console });

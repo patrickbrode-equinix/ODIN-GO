@@ -25,6 +25,20 @@ async function verifyAdminPassword(password) {
   return keysMatch(password, config.SHIFTPLANNER_ADMIN_PASSWORD);
 }
 
+export async function resetStandaloneAdminPasswordIfRequested() {
+  if (!config.SHIFTPLANNER_RESET_ADMIN_PASSWORD) return false;
+
+  const hash = await bcrypt.hash(String(config.SHIFTPLANNER_ADMIN_PASSWORD), 12);
+  await db.query(
+    `INSERT INTO app_settings (key, value, updated_by, updated_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+    ["shiftplanner.admin_password_hash", hash, "deployment-reset"],
+  );
+  console.warn("[ADMIN] Standalone admin password reset from deployment configuration.");
+  return true;
+}
+
 router.post("/unlock", async (req, res) => {
   if (!config.isShiftplannerMode) return res.status(404).json({ message: "Not found" });
 

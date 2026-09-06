@@ -91,6 +91,9 @@ export const config = {
     QUEUE_INGEST_KEY: process.env.QUEUE_INGEST_KEY || "",
     SHIFTPLANNER_API_KEY: process.env.SHIFTPLANNER_API_KEY || "",
     SHIFTPLANNER_ADMIN_PASSWORD: process.env.SHIFTPLANNER_ADMIN_PASSWORD || "root",
+    // One-time operational recovery switch. It is deliberately opt-in so a
+    // password selected by an administrator is not overwritten on restart.
+    SHIFTPLANNER_RESET_ADMIN_PASSWORD: String(process.env.SHIFTPLANNER_RESET_ADMIN_PASSWORD || "false").toLowerCase() === "true",
 
     // CoC external review links + email notifications
     COC_PUBLIC_URL: String(process.env.COC_PUBLIC_URL || "").replace(/\/+$/, ""),
