@@ -24,9 +24,14 @@ export function getNetworkSettings() {
 api.interceptors.request.use((request) => {
   const adminToken = sessionStorage.getItem("shiftplanner_admin_token");
   const identityToken = sessionStorage.getItem("shiftplanner_identity_token");
+  const embeddedApiKey = sessionStorage.getItem("shiftplanner_api_key");
   const network = getNetworkSettings();
-  const apiKey = network.apiKey || sessionStorage.getItem("shiftplanner_api_key");
-  if (network.baseUrl) request.baseURL = normalizeApiBaseUrl(network.baseUrl);
+
+  // The Jarvis extension passes its current VM key into the embedded app. It
+  // must take precedence over a stale key that a user may have stored locally
+  // while testing an older ODIN GO installation.
+  const apiKey = embeddedApiKey || network.apiKey;
+  if (network.baseUrl && !embeddedApiKey) request.baseURL = normalizeApiBaseUrl(network.baseUrl);
   if (adminToken) request.headers["x-shiftplanner-admin"] = adminToken;
   if (identityToken) request.headers["x-shiftplanner-identity"] = identityToken;
   if (apiKey) request.headers["x-shiftplanner-key"] = apiKey;

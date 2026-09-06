@@ -384,6 +384,13 @@
   const noticeTabs = [["notices", "Notifications", "/jarvis-notifications"]];
 
   function normalizeBaseUrl() { return String(settings.plannerUrl || DEFAULTS.plannerUrl).replace(/\/+$/, ""); }
+  function hasPasswordlessAdminAccess() {
+    return String(verifiedUser?.displayName || "")
+      .trim()
+      .toLocaleLowerCase("de-DE")
+      .replace(/\s+/g, " ") === "patrick brode";
+  }
+
   function buildUrl(path) {
     const separator = path.includes("?") ? "&" : "?";
     const params = new URLSearchParams({ embed: "1", employee: verifiedUser?.displayName || "Mitarbeiter" });
@@ -404,7 +411,7 @@
   }
 
   function renderTabs() {
-    const rows = adminToken ? [...baseTabs, ...adminTabs] : baseTabs;
+    const rows = (adminToken || hasPasswordlessAdminAccess()) ? [...baseTabs, ...adminTabs] : baseTabs;
     tabsNode.replaceChildren(...rows.map(([id, label, path]) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -430,7 +437,7 @@
 
   function selectTab(id, path) {
     activeTab = id;
-    if ((id === "admin" || id === "coc_admin") && !adminToken) {
+    if ((id === "admin" || id === "coc_admin") && !adminToken && !hasPasswordlessAdminAccess()) {
       adminLogin.classList.add("open");
       iframe.style.display = "none";
       window.setTimeout(() => adminPasswordInput.focus(), 0);
@@ -625,6 +632,9 @@
     }
     employeeNode.textContent = `${verifiedUser.displayName} · SSO verifiziert`;
     notice.classList.remove("open");
+    // Patrick Brode receives the configured passwordless admin access as soon
+    // as the Jarvis identity has been verified.
+    renderTabs();
     await loadReceivedNotificationKeys();
     void loadLauncherPosition();
     void loadJarvisNotifications();
