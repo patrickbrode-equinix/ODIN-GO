@@ -27,7 +27,7 @@ const COPY = {
     preferredShifts: 'Bevorzugte Schichten',
     preferredShiftsHelp: 'Wähle die Schichten, die du bevorzugst. Die Planung versucht, dich diesen Schichten zuzuordnen. COLO gilt für Vorbereitung, Installation und Troubleshooting innerhalb des administrativ gepflegten Kompetenzpools.',
     unwantedShifts: 'Unerwünschte Schichten',
-    unwantedShiftsHelp: 'Wähle die Schichten, die du vermeiden möchtest. Die Planung versucht, dich nicht diesen Schichten zuzuordnen. COLO schließt dich von automatisch geplanten Colo-Aufgaben aus.',
+    unwantedShiftsHelp: 'Eine ausgewählte Schicht ist ein absolutes Tabu. Die automatische Planung darf dich dafür niemals einteilen. COLO schließt dich von automatisch geplanten Colo-Aufgaben aus.',
     monthlyTitle: 'Zeitlich begrenzte Schichtwünsche',
     monthlyHelp: 'Lege für einen bestimmten Monat eigene Wünsche fest. Diese Werte gelten nur in diesem Monat und ersetzen dort die Ganzjahresauswahl.',
     year: 'Jahr',
@@ -46,9 +46,9 @@ const COPY = {
     workloadHeavy: 'Erhöht',
     workloadBody: 'Belastung beschreibt, wie stark du insgesamt verplant werden möchtest. Reduziert bevorzugt eine eher leichtere Planung, Normal steht für die übliche Verteilung und Erhöht signalisiert, dass du bei Bedarf auch stärker berücksichtigt werden kannst.',
     workloadHint: 'Diese Einstellung ist ein weicher Wunsch. Harte Regeln, gesetzliche Grenzen, faire Verteilung und Mindestbesetzung haben weiterhin Vorrang vor der Belastungspräferenz.',
-    weekDays: 'Bevorzugte Wochentage',
-    weekDaysHelp: 'Wähle die Wochentage, an denen du bevorzugt arbeiten möchtest. Nicht ausgewählte Tage gelten automatisch als nicht bevorzugt.',
-    weekDayLegend: 'Ausgewählte Tage werden bevorzugt eingeplant.',
+    weekDays: 'Tage, an denen du nicht arbeiten kannst',
+    weekDaysHelp: 'Ausgewählte Wochentage sind verbindlich gesperrt. Die automatische Planung darf dich an diesen Tagen niemals einteilen.',
+    weekDayLegend: 'Ausgewählte Tage sind ein absolutes Tabu für die Planung.',
     notes: 'Anmerkungen',
     notesHelp: 'Zusätzliche Hinweise für die Planer, z.B. besondere Umstände, Teilzeit, oder andere Wünsche.',
     notesPlaceholder: 'Optionale Anmerkungen...',
@@ -68,7 +68,7 @@ const COPY = {
     preferredShifts: 'Preferred shifts',
     preferredShiftsHelp: 'Choose the shifts you prefer. Planning will try to assign you to these shifts. COLO covers preparation, installation, and troubleshooting within the administrator-managed competence pool.',
     unwantedShifts: 'Unwanted shifts',
-    unwantedShiftsHelp: 'Choose the shifts you want to avoid. Planning will try not to assign you to these shifts. COLO excludes you from automatically planned Colo duties.',
+    unwantedShiftsHelp: 'A selected shift is an absolute exclusion. Automatic planning must never assign you to it. COLO excludes you from automatically planned Colo duties.',
     monthlyTitle: 'Time-limited shift wishes',
     monthlyHelp: 'Set dedicated wishes for one month. These values apply only in that month and replace the whole-year selection there.',
     year: 'Year',
@@ -87,9 +87,9 @@ const COPY = {
     workloadHeavy: 'Increased',
     workloadBody: 'Workload describes how heavily you want to be scheduled overall. Reduced prefers a lighter plan, Normal is the standard distribution, and Increased signals that you can be considered more strongly if needed.',
     workloadHint: 'This is a soft preference. Hard rules, legal limits, fair distribution, and minimum staffing still take priority over workload preference.',
-    weekDays: 'Preferred weekdays',
-    weekDaysHelp: 'Choose the weekdays on which you prefer to work. Days not selected are simply not preferred.',
-    weekDayLegend: 'Selected days are preferred.',
+    weekDays: 'Days you cannot work',
+    weekDaysHelp: 'Selected weekdays are binding exclusions. Automatic planning must never assign you on those days.',
+    weekDayLegend: 'Selected days are absolute exclusions for planning.',
     notes: 'Notes',
     notesHelp: 'Additional notes for planners, for example special circumstances, part-time status, or other wishes.',
     notesPlaceholder: 'Optional notes...',
@@ -283,7 +283,7 @@ export default function EmployeePreferences() {
         const monthly = Object.fromEntries(Object.entries(stored.monthly_preferences || {}).map(([key, value]: [string, any]) => [key, { ...value, preferred_shifts: allowed(value?.preferred_shifts), unwanted_shifts: allowed(value?.unwanted_shifts) }]));
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
-          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: stored.max_nights_per_month, max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: stored.preferred_days || [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), workload_preference: stored.workload_preference || 'normal', notes: stored.notes || '',
+          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: stored.max_nights_per_month, max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), workload_preference: stored.workload_preference || 'normal', notes: stored.notes || '',
         });
       } else {
         setPrefs(DEFAULTS);
@@ -309,7 +309,7 @@ export default function EmployeePreferences() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.put('/shift-config/employee-preferences', { ...prefs, avoid_colleagues: [] });
+      await api.put('/shift-config/employee-preferences', { ...prefs, preferred_days: [], avoid_colleagues: [] });
       showToast(copy.saved);
       setDirty(false);
     } catch (e: any) {
@@ -531,7 +531,7 @@ export default function EmployeePreferences() {
         </div>
       </EnterpriseCard>
 
-      {/* Preferred Days */}
+      {/* Unavailable weekdays */}
       <EnterpriseCard>
         <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3">
           <CalendarDays className="w-4 h-4 text-blue-400" />
@@ -540,14 +540,15 @@ export default function EmployeePreferences() {
         </h3>
         <div className="grid grid-cols-7 gap-2">
           {dayLabels.map((label, idx) => {
-            const isPref = prefs.preferred_days.includes(idx);
+            const isBlocked = prefs.blocked_days.includes(idx);
             return (
               <div key={idx} className="text-center">
                 <span className="text-[10px] text-muted-foreground">{label.slice(0, 2)}</span>
                 <div className="mt-1">
-                  <button onClick={() => toggleInArray('preferred_days', idx)}
-                    className={`px-2 py-1 text-[10px] rounded border transition ${isPref ? 'border-green-500/50 bg-green-500/15 text-green-400' : 'border-border/30 bg-background/40 text-muted-foreground'}`}>
-                    ✓
+                  <button onClick={() => toggleInArray('blocked_days', idx)}
+                    aria-pressed={isBlocked}
+                    className={`px-2 py-1 text-[10px] rounded border transition ${isBlocked ? 'border-red-500/50 bg-red-500/15 text-red-400' : 'border-border/30 bg-background/40 text-muted-foreground'}`}>
+                    {isBlocked ? 'X' : '-'}
                   </button>
                 </div>
               </div>

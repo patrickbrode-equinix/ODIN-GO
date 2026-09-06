@@ -31,6 +31,7 @@ import {
   getDeterministicRotationRank,
   getExclusivePreferredShiftType,
   getPreferenceShiftCode,
+  isShiftUnwantedByEmployeePreference,
   getTargetHoursScore,
   getShiftSeriesDays,
   getShiftDurationHours,
@@ -945,7 +946,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return {
       ...base,
       preferred_shifts: Array.isArray(monthly.preferred_shifts) ? monthly.preferred_shifts : base.preferred_shifts,
-      unwanted_shifts: Array.isArray(monthly.unwanted_shifts) ? monthly.unwanted_shifts : base.unwanted_shifts,
+      unwanted_shifts: [...new Set([
+        ...(Array.isArray(base.unwanted_shifts) ? base.unwanted_shifts : []),
+        ...(Array.isArray(monthly.unwanted_shifts) ? monthly.unwanted_shifts : []),
+      ])],
     };
   };
 
@@ -1053,7 +1057,6 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const isEmployeeBlockedByPreferenceOnDay = (employeeName, dow) => {
-    if (!planConfig.respect_employee_wishes) return false;
     return isDayBlockedByEmployeePreference(empPrefsMap.get(employeeName), dow);
   };
 
@@ -1211,7 +1214,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const availableShiftCodes = new Set(shiftSlots.map((slot) => slot.code));
     for (const employee of activeEmployees) {
       if (empSeriesRemaining[employee] <= 0) continue;
-      if (!availableEmployeeSet.has(employee) || !availableShiftCodes.has(empSeriesCode[employee])) {
+      if (!availableEmployeeSet.has(employee)
+        || !availableShiftCodes.has(empSeriesCode[employee])
+        || isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), empSeriesCode[employee])) {
         empSeriesCode[employee] = null;
         empSeriesRemaining[employee] = 0;
       }
@@ -1223,7 +1228,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
     for (const shiftDef of shiftSlots) {
       const continuingEmployees = availableForDay
-        .filter((employee) => !assignedToday.has(employee) && empSeriesRemaining[employee] > 0 && empSeriesCode[employee] === shiftDef.code)
+        .filter((employee) => !assignedToday.has(employee)
+          && empSeriesRemaining[employee] > 0
+          && empSeriesCode[employee] === shiftDef.code
+          && !isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), shiftDef.code))
         .sort((left, right) => left.localeCompare(right, 'de'));
       const baseNeededStaff = Math.max(shiftDef.planned_slots || shiftDef.min_staff || 1, continuingEmployees.length);
       const holidayShiftTypeLimit = getHolidayShiftStaffingLimit(holidayStaffingConfig, holidayName, shiftDef.shift_type);
@@ -1310,6 +1318,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
           const seriesDays = getAnchoredSeriesDays(shiftDef, dow);
           let hardBlocked = false;
+
+          if (isDayBlockedByEmployeePreference(prefs, dow)) {
+            hardBlocked = true;
+            reasons.push(`Harter Mitarbeiterwunsch: Wochentag ${dow} gesperrt`);
+          }
+          if (isShiftUnwantedByEmployeePreference(prefs, shiftDef.code)) {
+            hardBlocked = true;
+            reasons.push(`Harter Mitarbeiterwunsch: ${shiftDef.code} ist unerwünscht`);
+          }
 
           if (empForcedNextShiftCode[employee] && empForcedNextShiftCode[employee] !== shiftDef.code) {
             hardBlocked = true;
@@ -1513,19 +1530,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
           if (planConfig.respect_employee_wishes && prefs) {
             const preferredShifts = prefs.preferred_shifts || [];
-            const unwantedShifts = prefs.unwanted_shifts || [];
             const preferenceShiftCode = getPreferenceShiftCode(shiftDef.code);
             const preferredHolidays = prefs.preferred_holidays || [];
-            const blockedDays = prefs.blocked_days || [];
-            const preferredDays = prefs.preferred_days || [];
-            const normalizedBlockedDays = normalizePreferenceDayValues(blockedDays);
-            const normalizedPreferredDays = normalizePreferenceDayValues(preferredDays);
             const maxNights = prefs.max_nights_per_month;
 
-            if (unwantedShifts.includes(preferenceShiftCode)) {
-              score -= planConfig.soft_wishes_priority * 10;
-              reasons.push(`Mitarbeiterwunsch: ${shiftDef.code} unerwünscht`);
-            }
             if (preferredShifts.includes(preferenceShiftCode)) {
               score += planConfig.soft_wishes_priority * 5;
               reasons.push(`Mitarbeiterwunsch: ${shiftDef.code} bevorzugt`);
@@ -1540,14 +1548,6 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             } else if (exclusivePreferredShiftType) {
               score -= Math.max(planConfig.soft_wishes_priority, 1) * 400;
               reasons.push(`Exklusiver Schichtwunsch bevorzugt ${exclusivePreferredShiftType} statt ${shiftDef.shift_type}`);
-            }
-            if (normalizedBlockedDays.includes(dow)) {
-              score -= planConfig.soft_wishes_priority * 15;
-              reasons.push(`Mitarbeiterwunsch: Tag ${dow} gesperrt`);
-            }
-            if (normalizedPreferredDays.includes(dow)) {
-              score += planConfig.soft_wishes_priority * 3;
-              reasons.push(`Mitarbeiterwunsch: Tag ${dow} bevorzugt`);
             }
             if (holidayName && preferredHolidays.includes(holidayName)) {
               score -= Math.max(Number(planConfig.soft_wishes_priority) || 0, 1) * 15;
@@ -1796,6 +1796,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const preferredCodes = new Set((prefs?.preferred_shifts || []).map((code) => String(code).trim().toUpperCase()));
     const candidateDefinitions = regularCatchupDefinitions
       .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
+      .filter((definition) => !isShiftUnwantedByEmployeePreference(prefs, definition.code))
       .sort((left, right) => {
         const leftPreferred = preferredCodes.has(getPreferenceShiftCode(left.code)) ? 1 : 0;
         const rightPreferred = preferredCodes.has(getPreferenceShiftCode(right.code)) ? 1 : 0;
@@ -1816,6 +1817,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const dow = dayOfWeek(year, mon, day);
         if (isEmployeeAbsentOnDate(employee, dateStr)) continue;
         if (isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
+        if (isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), catchupDefinition.code)) continue;
         if (isRecoveryProtectedDay(employee, day)) continue;
         if (wouldViolateAdjacentTransition(employee, day, catchupDefinition)) continue;
         if (!normalizeWeekdaySetting(catchupDefinition.applicable_days, [1, 2, 3, 4, 5]).includes(dow)) continue;
@@ -1857,7 +1859,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
     if (empHours[employee] < employeeTargetHours[employee]) {
       const earlyWeekendDefinition = shiftDefs.find((definition) => String(definition.code).toUpperCase() === 'E1WE');
-      if (earlyWeekendDefinition) {
+      if (earlyWeekendDefinition && !isShiftUnwantedByEmployeePreference(prefs, earlyWeekendDefinition.code)) {
         for (let monday = planningStartDay; monday <= planningEndDay - 6 && empHours[employee] < employeeTargetHours[employee]; monday++) {
           if (dayOfWeek(year, mon, monday) !== 1) continue;
           const saturday = monday + 5;
@@ -1911,6 +1913,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const blockType = normalizePlanningShiftTypeKey(blockDefinition.shift_type);
         const seriesDays = getShiftSeriesDays(blockDefinition);
         if (fixedShiftType && fixedShiftType !== blockType) continue;
+        if (isShiftUnwantedByEmployeePreference(prefs, blockDefinition.code)) continue;
 
         const applicableDays = new Set(normalizeWeekdaySetting(blockDefinition.applicable_days, [1, 2, 3, 4, 5, 6, 0]));
         for (let monday = planningStartDay; monday <= planningEndDay - seriesDays + 1; monday++) {
@@ -1995,6 +1998,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const dow = dayOfWeek(year, mon, day);
           if (isEmployeeAbsentOnDate(employee, dateStr)) continue;
           if (isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
+          if (isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), definition.code)) continue;
           if (isRecoveryProtectedDay(employee, day)) continue;
           if (!applicableDays.has(dow)) continue;
           if (wouldViolateAdjacentTransition(employee, day, definition)) continue;

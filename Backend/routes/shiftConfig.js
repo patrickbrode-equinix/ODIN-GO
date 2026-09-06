@@ -368,7 +368,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, preferred_days, blocked_days, workload_preference, notes } = req.body;
+    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, workload_preference, notes } = req.body;
     const monthly_preferences = req.body.monthly_preferences && typeof req.body.monthly_preferences === 'object' && !Array.isArray(req.body.monthly_preferences)
       ? Object.fromEntries(Object.entries(req.body.monthly_preferences).filter(([key, value]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key) && value && typeof value === 'object').map(([key, value]) => [key, {
           preferred_shifts: Array.isArray(value.preferred_shifts) ? value.preferred_shifts.map(String).slice(0, 20) : [],
@@ -400,7 +400,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         JSON.stringify(validateArray(unwanted_shifts)),
         JSON.stringify(validateArray(preferred_holidays)),
         max_nights_per_month || null,
-        JSON.stringify(validateArray(preferred_days)),
+        JSON.stringify([]),
         JSON.stringify(validateArray(blocked_days)),
         JSON.stringify([]),
         workload_preference || 'normal',

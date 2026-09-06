@@ -226,6 +226,16 @@ export function getPreferenceShiftCode(code) {
   return normalized;
 }
 
+export function isShiftUnwantedByEmployeePreference(preferences, shiftCode) {
+  if (!preferences) return false;
+  const unwanted = new Set(
+    (Array.isArray(preferences.unwanted_shifts) ? preferences.unwanted_shifts : [])
+      .map(getPreferenceShiftCode)
+      .filter(Boolean)
+  );
+  return unwanted.has(getPreferenceShiftCode(shiftCode));
+}
+
 function getPreferenceShiftType(code) {
   const normalized = getPreferenceShiftCode(code);
   if (normalized === 'E1' || normalized === 'E2' || normalized === 'EARLY' || normalized === 'FRUEH') return 'early';
@@ -295,6 +305,7 @@ export function rankSafeSubstituteCandidates({
       if ([...requiredDays].some((day) => absences.has(day))) return null;
       if ([...requiredDays].some((day) => recoveryDays.has(day))) return null;
       if (fixedShiftType && fixedShiftType !== normalizedType) return null;
+      if (isShiftUnwantedByEmployeePreference(preferences, shiftCode)) return null;
       if (normalizedType === 'night' && isNightShiftRefused(preferences)) return null;
 
       const maxNights = Number.parseInt(String(preferences.max_nights_per_month ?? ''), 10);
@@ -304,7 +315,8 @@ export function rankSafeSubstituteCandidates({
       }
 
       const blockedDays = new Set(normalizePreferenceDayValues(preferences.blocked_days));
-      const weekendException = [...requiredWeekendDays].some((day) => blockedDays.has(Number(candidate.dayOfWeekByDay?.[day])));
+      if ([...requiredDays].some((day) => blockedDays.has(Number(candidate.dayOfWeekByDay?.[day])))) return null;
+      const weekendException = false;
       const wellbeingScore = Number(candidate.wellbeingScore || 0);
       const preferred = new Set((Array.isArray(preferences.preferred_shifts) ? preferences.preferred_shifts : []).map(getPreferenceShiftCode));
       const preferredMatch = preferred.has(getPreferenceShiftCode(shiftCode)) || preferred.has(normalizedType);
@@ -321,7 +333,6 @@ export function rankSafeSubstituteCandidates({
           `Wellbeing-Belastung: ${wellbeingScore}`,
           ...(preferredMatch ? ['Entspricht dem hinterlegten Schichtwunsch'] : []),
           hoursDelta < 0 ? `${Math.abs(hoursDelta).toFixed(1)} Stunden unter Soll` : `${hoursDelta.toFixed(1)} Stunden über Soll`,
-          ...(weekendException ? ['Ausnahme: widerspricht dem Wochenendwunsch'] : []),
         ],
       };
     })

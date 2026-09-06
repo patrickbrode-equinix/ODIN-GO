@@ -14,6 +14,7 @@ import {
   getPreferenceShiftCode,
   getTargetHoursScore,
   isDayBlockedByEmployeePreference,
+  isShiftUnwantedByEmployeePreference,
   isNightShiftRefused,
   normalizePreferenceDayValues,
   normalizePlanningShiftTypeKey,
@@ -175,6 +176,12 @@ describe('shiftplanGeneration helpers', () => {
     assert.equal(isNightShiftRefused({ unwanted_shifts: ['E1'] }), false);
   });
 
+  it('treats every selected unwanted shift as a hard exclusion, including weekend variants', () => {
+    assert.equal(isShiftUnwantedByEmployeePreference({ unwanted_shifts: ['E1'] }, 'E1'), true);
+    assert.equal(isShiftUnwantedByEmployeePreference({ unwanted_shifts: ['E1'] }, 'E1WE'), true);
+    assert.equal(isShiftUnwantedByEmployeePreference({ unwanted_shifts: ['E1'] }, 'L1'), false);
+  });
+
   it('never suggests an employee who is already assigned during the replacement block', () => {
     const suggestions = rankSafeSubstituteCandidates({
       shiftType: 'night',
@@ -189,7 +196,7 @@ describe('shiftplanGeneration helpers', () => {
     assert.deepEqual(suggestions.map((entry) => entry.employee), ['Available']);
   });
 
-  it('excludes night refusals and labels an allowed weekend exception', () => {
+  it('excludes night refusals and blocked weekend days from substitute suggestions', () => {
     const suggestions = rankSafeSubstituteCandidates({
       shiftType: 'night',
       coverageDays: [6, 7],
@@ -200,8 +207,6 @@ describe('shiftplanGeneration helpers', () => {
       ],
     });
 
-    assert.equal(suggestions.length, 1);
-    assert.equal(suggestions[0].employee, 'Weekend Wish');
-    assert.equal(suggestions[0].weekendException, true);
+    assert.equal(suggestions.length, 0);
   });
 });

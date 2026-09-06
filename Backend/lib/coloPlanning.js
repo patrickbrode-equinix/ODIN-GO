@@ -181,15 +181,13 @@ export function buildColoRolePlan({
           .map(({ employee, shiftCode }) => {
             const preferences = preferenceFor(preferencesByEmployee, employee);
             const blockedDays = normalizePreferenceDays(preferences?.blocked_days);
-            const preferredDays = normalizePreferenceDays(preferences?.preferred_days);
             const unwantedShifts = normalizeCodes(preferences?.unwanted_shifts);
             const preferredShifts = normalizeCodes(preferences?.preferred_shifts);
-            if (respectEmployeeWishes && (blockedDays.includes(weekday) || unwantedShifts.has('COLO'))) return null;
+            if (blockedDays.includes(weekday) || unwantedShifts.has('COLO')) return null;
 
             const total = totalByEmployee.get(employee) || 0;
             const taskCounts = taskByEmployee.get(employee) || {};
             let score = -(total * 1000) - ((taskCounts[task.key] || 0) * 250);
-            if (respectEmployeeWishes && preferredDays.includes(weekday)) score += 200;
             if (respectEmployeeWishes && preferredShifts.has('COLO')) score += 500;
             return {
               employee,
@@ -243,4 +241,3 @@ export function buildColoRolePlan({
 
   return { assignments, conflicts, summary, config };
 }
-
