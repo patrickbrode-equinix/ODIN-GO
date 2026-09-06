@@ -54,6 +54,8 @@
       .offline-fallback { position:absolute; z-index:4; inset:0; display:none; align-items:center; justify-content:center; overflow:auto; padding:24px; background:#07101c; }
       .offline-fallback.open { display:flex; }
       .offline-fallback img { display:block; width:min(100%,1100px); max-height:100%; object-fit:contain; border-radius:14px; box-shadow:0 20px 60px rgba(0,0,0,.55); }
+      .offline-fallback-close { position:absolute; z-index:1; top:18px; right:18px; display:grid; place-items:center; width:42px; height:42px; border:1px solid rgba(186,230,253,.55); border-radius:10px; background:rgba(7,19,35,.92); color:#e0f2fe; font:700 22px/1 Segoe UI,Arial,sans-serif; cursor:pointer; box-shadow:0 10px 28px rgba(0,0,0,.38); }
+      .offline-fallback-close:hover { background:#123450; border-color:#67e8f9; color:#fff; }
       .admin-login { position: absolute; z-index: 20; inset: 0; display: none; place-items: center; padding: 24px; pointer-events: auto; background: radial-gradient(circle at 50% 15%,#123450,#07101c 55%); }
       .admin-login.open { display: grid; }
       .card { position: relative; z-index: 21; width: min(420px,100%); padding: 28px; pointer-events: auto; border: 1px solid rgba(74,201,255,.3); border-radius: 16px; background: rgba(8,25,40,.98); box-shadow: 0 20px 60px rgba(0,0,0,.5); }
@@ -97,7 +99,10 @@
         <nav class="tabs"></nav>
         <div class="body">
           <iframe title="Schichtplaner Inhalt"></iframe>
-          <div class="offline-fallback" aria-live="polite"><img alt="ODIN GO ist vorübergehend nicht erreichbar" /></div>
+          <div class="offline-fallback" aria-live="polite">
+            <button class="offline-fallback-close" type="button" aria-label="ODIN GO schließen" title="ODIN GO schließen">×</button>
+            <img alt="ODIN GO ist vorübergehend nicht erreichbar" />
+          </div>
           <div class="admin-login">
             <form class="card">
               <h2>Settings Admin</h2>
@@ -128,6 +133,7 @@
   const tabsNode = root.querySelector(".tabs");
   const iframe = root.querySelector("iframe");
   const offlineFallback = root.querySelector(".offline-fallback");
+  const offlineFallbackClose = root.querySelector(".offline-fallback-close");
   offlineFallback.querySelector("img").src = chrome.runtime.getURL("icons/odin-unavailable.png");
   let iframeLoadTimeout = 0;
   const employeeNode = root.querySelector(".employee");
@@ -856,6 +862,7 @@
     selectTab("shiftplan", remoteWorkspacePath);
   });
   closeButton.addEventListener("click", () => setWorkspaceOpen(false));
+  offlineFallbackClose.addEventListener("click", () => setWorkspaceOpen(false));
   backdrop.addEventListener("click", (event) => { if (event.target === backdrop) setWorkspaceOpen(false); });
   optionsButton.addEventListener("click", () => chrome.runtime.sendMessage({ type: "OPEN_OPTIONS" }));
   expandButton.addEventListener("click", () => {
