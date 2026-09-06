@@ -11,6 +11,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { toast } from "sonner"; // [NEW]
 import { ShiftplanTable } from "../shiftplan/ShiftplanTable";
+import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { getShiftKindStyle, SHIFT_COLOR_LEGEND } from "../shiftplan/shiftColors";
 import { ShiftContextMenu } from "../shiftplan/ShiftContextMenu";
 import { useShiftSelection } from "../../hooks/useShiftSelection";
@@ -176,6 +177,7 @@ export default function Shiftplan() {
   const [loading, setLoading] = useState(false);
   const [coloPool, setColoPool] = useState<string[]>([]);
   const [dispatcherConfig, setDispatcherConfig] = useState<{ enabled: boolean; priorities: string[] }>({ enabled: true, priorities: [] });
+  const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
 
   // [NEW] Shift Violations
   const [violations, setViolations] = useState<ShiftViolation[]>([]);
@@ -316,6 +318,12 @@ export default function Shiftplan() {
         setIssuePriorityMode("balanced");
         setSkillsEnabled(false);
       });
+  }, []);
+
+  useEffect(() => {
+    api.get("/shift-config/definitions")
+      .then(({ data }) => setShiftTimes(buildShiftTimeMap(data?.definitions)))
+      .catch(() => setShiftTimes({}));
   }, []);
 
   // Load Hessen Holidays per year
@@ -1662,6 +1670,7 @@ export default function Shiftplan() {
                 constraintsMap={constraintsMap}
                 constraintViolations={constraintViolations}
                 attendanceMap={attendanceMap}
+                shiftTimes={shiftTimes}
               />
               {contextMenu && (
                 <ShiftContextMenu

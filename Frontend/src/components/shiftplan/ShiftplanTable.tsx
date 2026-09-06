@@ -27,6 +27,7 @@ import { useLanguage } from "../../context/LanguageContext";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { AttendanceRecord } from "../../api/attendance";
 import { getShiftColorKind, getShiftColorStyle } from "./shiftColors";
+import type { ShiftTimeMap } from "../../utils/shiftTimes";
 
 interface ShiftplanTableProps {
   schedule: Record<string, Record<number, string>>;
@@ -68,6 +69,7 @@ interface ShiftplanTableProps {
   constraintViolations?: ConstraintViolation[];
 
   attendanceMap?: Record<string, AttendanceRecord>;
+  shiftTimes?: ShiftTimeMap;
 }
 
 
@@ -143,6 +145,7 @@ export function ShiftplanTable({
   constraintViolations = [],
 
   attendanceMap = {},
+  shiftTimes = {},
 }: ShiftplanTableProps) {
   const tableRef = useRef<HTMLTableElement | null>(null);
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
@@ -543,6 +546,9 @@ export function ShiftplanTable({
                         const empSched = (schedule && typeof schedule === 'object') ? (schedule as any)[name] : null;
                         const shift = empSched ? empSched[day] : null;
                         const info = shift ? shiftTypes[shift] : null;
+                        const shiftTime = shift
+                          ? shiftTimes[String(shift).trim().toUpperCase()] || info?.time || "--:--"
+                          : null;
                         const key = dateKey(year, monthIndex1, day);
                         const hasWarning = (warningByDateKey.get(key) ?? []).length > 0;
                         const isToday = isCurrentMonth && day === currentDay;
@@ -729,8 +735,9 @@ export function ShiftplanTable({
                             )}
 
                             {info || shift ? (
-                              <div className="flex flex-col items-center w-full gap-0.5">
+                              <div className="flex min-w-[70px] flex-col items-center gap-0.5" title={`${shift}${shiftTime ? ` (${shiftTime})` : ""}`}>
                                 <ShiftBadge code={shift} hasWarning={hasWarning} />
+                                <span className="whitespace-nowrap text-[9px] font-medium leading-none text-muted-foreground">{shiftTime}</span>
                               </div>
                             ) : (
                               <div className="text-[12px] font-bold text-white/10 group-hover:text-white/20 transition-colors select-none flex items-center justify-center w-full h-[22px]">—</div>
