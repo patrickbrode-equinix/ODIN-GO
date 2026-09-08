@@ -40,7 +40,7 @@ router.post("/verify", async (req, res) => {
   }
 
   let { rows } = await db.query(
-    `SELECT id, first_name, last_name, login_name, email, upn, approved
+    `SELECT id, first_name, last_name, login_name, email, upn, approved, is_admin, is_root
      FROM users
      WHERE LOWER(email) = $1
         OR LOWER(COALESCE(upn, '')) = $1
@@ -96,7 +96,7 @@ router.post("/verify", async (req, res) => {
   return res.json({
     token,
     expiresIn: "4h",
-    user: { id: user.id, displayName, email: verifiedEmail },
+    user: { id: user.id, displayName, email: verifiedEmail, isAdmin: user.is_admin === true || user.is_root === true },
     verificationMethod: "jarvis_sso_session",
   });
 });

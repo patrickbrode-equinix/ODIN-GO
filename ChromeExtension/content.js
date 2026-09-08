@@ -37,7 +37,7 @@
       .panel.remote-shell > .head, .panel.remote-shell > .odin-brand, .panel.remote-shell > .notice, .panel.remote-shell > .tabs, .panel.remote-shell .admin-login { display:none !important; }
       .head { height:58px; flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:0 16px; background:#172033; border-bottom:1px solid #334155; }
       .title { font-size: 16px; font-weight: 850; margin-right: auto; letter-spacing: -.02em; }
-      .employee { color:#cbd5e1; font-size:12px; }
+      .employee { color:#cbd5e1; font-size:12px; white-space:pre-line; text-align:right; }
       .staffing { display:flex; align-items:center; gap:5px; }
       .staffing span { border:1px solid #475569; border-radius:5px; background:#111827; padding:5px 7px; color:#cbd5e1; font-size:10px; font-weight:700; white-space:nowrap; }
       .staffing .early { border-left:3px solid #f97316; }
@@ -156,6 +156,7 @@
   let lastRejectedEmail = "";
   let lastRejectedAt = 0;
   let jarvisSessionIdentity = null;
+  let preferLiveProfileIdentity = false;
   let profileProbeAttempted = false;
   let profileButtonUsedForProbe = null;
   const sessionIdentityChannel = `shiftplanner-session-${crypto.randomUUID()}`;
@@ -397,6 +398,15 @@
       .replace(/\s+/g, " ") === "patrick brode";
   }
 
+  function renderVerifiedEmployee() {
+    if (!verifiedUser) {
+      employeeNode.textContent = "Jarvis-SSO wird geprüft";
+      return;
+    }
+    const adminLabel = hasPasswordlessAdminAccess() ? "\nAdmin" : "";
+    employeeNode.textContent = `${verifiedUser.displayName} · SSO verifiziert${adminLabel}`;
+  }
+
   function buildUrl(path) {
     const separator = path.includes("?") ? "&" : "?";
     const params = new URLSearchParams({ embed: "1", employee: verifiedUser?.displayName || "Mitarbeiter" });
@@ -480,9 +490,7 @@
   async function loadSettings() {
     settings = await chrome.storage.sync.get(DEFAULTS);
     log("Einstellungen geladen", { plannerUrl: settings.plannerUrl, hasApiKey: Boolean(settings.apiKey) });
-    employeeNode.textContent = verifiedUser
-      ? `${verifiedUser.displayName} · SSO verifiziert`
-      : "Jarvis-SSO wird geprüft";
+    renderVerifiedEmployee();
     const localPlanner = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/i.test(settings.plannerUrl || "");
     const missingSettings = !settings.plannerUrl || (!settings.apiKey && !localPlanner);
     notice.textContent = !settings.plannerUrl
@@ -546,11 +554,11 @@
     profileProbeAttempted = true;
     profileButtonUsedForProbe = profileButton;
     profileButton.click();
-    window.setTimeout(() => void verifyJarvisIdentity({ showPrompt: false }), 350);
+    window.setTimeout(() => void verifyJarvisIdentity({ showPrompt: false, preferLive: true }), 550);
   }
 
-  function readJarvisIdentity() {
-    if (jarvisSessionIdentity) return jarvisSessionIdentity;
+  function readJarvisIdentity({ preferLive = false } = {}) {
+    if (!preferLive && jarvisSessionIdentity) return jarvisSessionIdentity;
     const emailPattern = /[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[a-z0-9-]+\.)*equinix\.com/i;
     const candidates = [];
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -588,9 +596,12 @@
     return { email: match.email, displayName: possibleNames.at(-1) || "", jarvisUserName: "" };
   }
 
-  async function verifyJarvisIdentity({ showPrompt = true } = {}) {
+  async function verifyJarvisIdentity({ showPrompt = true, preferLive = false } = {}) {
     if (identityVerificationPending) return false;
-    const identity = readJarvisIdentity();
+    // Jarvis renders the account popover asynchronously. Keep a previously
+    // verified device identity when the live popover is not available yet.
+    const identity = readJarvisIdentity({ preferLive })
+      || (preferLive ? jarvisSessionIdentity : null);
     if (!identity) {
       log("Kein Jarvis-Profil erkannt; Backend-Aufruf wird noch nicht gestartet.");
       verifiedUser = null;
@@ -636,7 +647,7 @@
       profileButtonUsedForProbe.click();
       profileButtonUsedForProbe = null;
     }
-    employeeNode.textContent = `${verifiedUser.displayName} · SSO verifiziert`;
+    renderVerifiedEmployee();
     notice.classList.remove("open");
     // Patrick Brode receives the configured passwordless admin access as soon
     // as the Jarvis identity has been verified.
@@ -907,7 +918,18 @@
   }
   const identityObserver = new MutationObserver(() => scheduleIdentityVerification());
   identityObserver.observe(document.body, { childList: true, subtree: true });
-  document.addEventListener("click", () => {
+  document.addEventListener("click", (event) => {
+    const profileButton = findJarvisProfileButton();
+    const target = event.target;
+    if (profileButton && target instanceof Node && (target === profileButton || profileButton.contains(target))) {
+      preferLiveProfileIdentity = true;
+      window.setTimeout(() => {
+        if (!preferLiveProfileIdentity) return;
+        preferLiveProfileIdentity = false;
+        void verifyJarvisIdentity({ showPrompt: false, preferLive: true });
+      }, 550);
+      return;
+    }
     scheduleIdentityVerification(150);
   }, { passive: true });
   window.setInterval(() => {
