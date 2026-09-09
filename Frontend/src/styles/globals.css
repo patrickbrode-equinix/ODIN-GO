@@ -1036,6 +1036,28 @@ h3,
     transform: translateY(-1px);
   }
 
+  /* Shiftplan: small operational numbers need a higher contrast floor. */
+  .light .shiftplan-command-center {
+    box-shadow: var(--surface-shadow-strong) !important;
+  }
+
+  .light .shiftplan-schedule-table .text-slate-300,
+  .light .shiftplan-schedule-table .text-cyan-100,
+  .light .shiftplan-schedule-table .text-emerald-100,
+  .light .shiftplan-schedule-table .text-amber-100,
+  .light .shiftplan-schedule-table .text-muted-foreground\/50,
+  .light .shiftplan-schedule-table .text-muted-foreground\/60 {
+    color: #334155 !important;
+  }
+
+  .light .shiftplan-schedule-table .text-cyan-100 { color: #075985 !important; }
+  .light .shiftplan-schedule-table .text-emerald-100 { color: #166534 !important; }
+  .light .shiftplan-schedule-table .text-amber-100 { color: #92400e !important; }
+
+  .light .shiftplan-schedule-table .text-white\/10 {
+    color: rgba(51,65,85,0.40) !important;
+  }
+
   /* Admin tiles */
   .light .theme-admin-hero {
     background: var(--surface-hero-strong) !important;

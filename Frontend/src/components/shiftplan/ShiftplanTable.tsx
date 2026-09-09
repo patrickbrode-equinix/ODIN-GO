@@ -307,7 +307,7 @@ export function ShiftplanTable({
       )}
 
       <CardContent className="p-0 h-full overflow-visible flex-1 min-h-0">
-        <div className="overflow-x-auto h-full rounded-xl border border-white/10 bg-[#0f111a]">
+        <div className="shiftplan-schedule-table overflow-x-auto h-full rounded-xl border border-white/10 bg-[#0f111a]">
           <table ref={tableRef} className="w-full border-collapse text-left">
             <thead className="sticky top-0 bg-[#0f111a]/95 backdrop-blur-md z-40 border-b border-white/10 shadow-sm">
               {/* KW GROUPS */}

@@ -1387,40 +1387,40 @@ export default function Shiftplan() {
         }
       />
 
-      <div className="overflow-hidden rounded-xl border border-slate-700 bg-slate-950 p-5 shadow-sm">
-        <div className="relative overflow-hidden rounded-lg border border-slate-700 bg-slate-900 px-5 py-5">
+      <div className="shiftplan-command-center overflow-hidden rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="relative overflow-hidden rounded-lg border border-border bg-card px-5 py-5">
           <div className="relative grid gap-5 lg:grid-cols-[1.35fr_0.95fr] lg:items-end">
             <div>
-              <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-400">
+              <div className="text-[10px] font-bold uppercase tracking-[0.24em] theme-text-soft">
                 {isGerman ? "Planungszentrale" : "Planning Deck"}
               </div>
-              <h2 className="mt-3 text-[32px] font-bold tracking-tight text-white">
+              <h2 className="mt-3 text-[32px] font-bold tracking-tight theme-text-strong">
                 {activeMonthLabel}
               </h2>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-300/88">
+              <p className="mt-3 max-w-2xl text-sm leading-7 theme-text-muted">
                 {isGerman
                   ? "Monatsplanung, Warnlagen und operative Eingriffe liegen in einer kompakten Steuerbuehne vor dir."
                   : "Monthly planning, warning pressure and operational interventions are unified in one control stage."}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <div className="rounded-lg border border-slate-700 bg-slate-800/70 px-4 py-3">
-                <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-indigo-200/48">{isGerman ? "Mitarbeiter" : "Crew"}</div>
-                <div className="mt-2 text-sm font-black text-white">{Object.keys(visibleSchedule).length}</div>
+              <div className="rounded-lg border border-border bg-muted/45 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.24em] theme-text-soft">{isGerman ? "Mitarbeiter" : "Crew"}</div>
+                <div className="mt-2 text-sm font-black theme-text-strong">{Object.keys(visibleSchedule).length}</div>
               </div>
-              <div className="rounded-lg border border-slate-700 bg-slate-800/70 px-4 py-3">
-                <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-indigo-200/48">{isGerman ? "Risiken" : "Risks"}</div>
-                <div className="mt-2 text-sm font-black text-white">{issueCounts.total}</div>
+              <div className="rounded-lg border border-border bg-muted/45 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.24em] theme-text-soft">{isGerman ? "Risiken" : "Risks"}</div>
+                <div className="mt-2 text-sm font-black theme-text-strong">{issueCounts.total}</div>
               </div>
-              <div className="rounded-lg border border-slate-700 bg-slate-800/70 px-4 py-3">
-                <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-indigo-200/48">{isGerman ? "Manuell" : "Manual"}</div>
-                <div className="mt-2 text-sm font-black text-white">{manualEmployees.length}</div>
+              <div className="rounded-lg border border-border bg-muted/45 px-4 py-3">
+                <div className="text-[10px] font-bold uppercase tracking-[0.24em] theme-text-soft">{isGerman ? "Manuell" : "Manual"}</div>
+                <div className="mt-2 text-sm font-black theme-text-strong">{manualEmployees.length}</div>
               </div>
             </div>
           </div>
           <div className="mt-5 grid gap-3">
-            <div className="rounded-lg border border-slate-700 bg-slate-950/60 px-4 py-4">
-              <div className="text-[10px] font-bold uppercase tracking-[0.24em] text-slate-400">{isGerman ? "Signalstatus" : "Signal state"}</div>
+            <div className="rounded-lg border border-border bg-background/75 px-4 py-4">
+              <div className="text-[10px] font-bold uppercase tracking-[0.24em] theme-text-soft">{isGerman ? "Signalstatus" : "Signal state"}</div>
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className="inline-flex items-center rounded-full border border-amber-400/22 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-100">{warningsComputed.length} {isGerman ? "Warnungen" : "warnings"}</span>
                 <span className="inline-flex items-center rounded-full border border-rose-400/22 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold text-rose-100">{issueCounts.high} {isGerman ? "kritisch" : "critical"}</span>
