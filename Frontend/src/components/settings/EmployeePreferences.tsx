@@ -12,7 +12,7 @@ import { formatAbsoluteDateTime, formatRelativeTime } from '../../utils/loginSta
 import { dedupeEmployeeNames } from '../../utils/employeeNames';
 import { getHessenHolidayMap } from '../../utils/deHolidays';
 import {
-  Heart, Moon, Sun, CalendarDays, Users, Briefcase,
+  Heart, Moon, Sun, CalendarDays, Users,
   HelpCircle, Save, CheckCircle2, AlertTriangle,
 } from 'lucide-react';
 
@@ -43,9 +43,6 @@ const COPY = {
     weekDays: 'Tage, an denen du nicht arbeiten kannst',
     weekDaysHelp: 'Ausgewählte Wochentage sind verbindlich gesperrt. Die automatische Planung darf dich an diesen Tagen niemals einteilen.',
     weekDayLegend: 'Ausgewählte Tage sind ein absolutes Tabu für die Planung.',
-    notes: 'Anmerkungen',
-    notesHelp: 'Zusätzliche Hinweise für die Planer, z.B. besondere Umstände, Teilzeit, oder andere Wünsche.',
-    notesPlaceholder: 'Optionale Anmerkungen...',
     monthsWithPreferences: 'Monate mit Auswahl',
     noMonthSelections: 'Noch keine Monatsauswahl gespeichert.',
     saving: 'Wird gespeichert...',
@@ -78,9 +75,6 @@ const COPY = {
     weekDays: 'Days you cannot work',
     weekDaysHelp: 'Selected weekdays are binding exclusions. Automatic planning must never assign you on those days.',
     weekDayLegend: 'Selected days are absolute exclusions for planning.',
-    notes: 'Notes',
-    notesHelp: 'Additional notes for planners, for example special circumstances, part-time status, or other wishes.',
-    notesPlaceholder: 'Optional notes...',
     monthsWithPreferences: 'Months with selections',
     noMonthSelections: 'No monthly selections saved yet.',
     saving: 'Saving...',
@@ -118,7 +112,6 @@ interface Preferences {
   preferred_days: number[];
   blocked_days: number[];
   avoid_colleagues: string[];
-  notes: string;
 }
 
 const SHIFT_CODES = ['E1', 'E2', 'L1', 'L2', 'N'];
@@ -189,7 +182,7 @@ const DEFAULTS: Preferences = {
   preferred_shifts: [], unwanted_shifts: [], preferred_holidays: [], max_nights_per_month: null,
   monthly_preferences: {},
   preferred_days: [], blocked_days: [], avoid_colleagues: [],
-  max_weekends_per_month: null, notes: '',
+  max_weekends_per_month: null,
 };
 
 function applyEmployeeSelectableShiftDefinitions(
@@ -301,7 +294,7 @@ export default function EmployeePreferences() {
         const monthly = Object.fromEntries(Object.entries(stored.monthly_preferences || {}).map(([key, value]: [string, any]) => [key, { ...value, preferred_shifts: allowed(value?.preferred_shifts), unwanted_shifts: allowed(value?.unwanted_shifts) }]));
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
-          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), notes: stored.notes || '',
+          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []),
         });
       } else {
         setPrefs(DEFAULTS);
@@ -578,18 +571,6 @@ export default function EmployeePreferences() {
         </div>
         <p className="text-[10px] text-muted-foreground mt-2">{copy.weekDayLegend}</p>
       </EnterpriseCard>}
-
-      {/* Notes */}
-      <EnterpriseCard>
-        <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3">
-          <Briefcase className="w-4 h-4 text-gray-400" />
-          {copy.notes}
-          <HelpTip text={copy.notesHelp} />
-        </h3>
-        <textarea value={prefs.notes} onChange={e => update('notes', e.target.value)}
-          className="w-full min-h-20 rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-sm text-foreground"
-          placeholder={copy.notesPlaceholder} />
-      </EnterpriseCard>
 
       {/* Save */}
       <div className="flex justify-end">

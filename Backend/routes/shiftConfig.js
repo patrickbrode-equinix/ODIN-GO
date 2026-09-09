@@ -425,7 +425,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, notes } = req.body;
+    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days } = req.body;
     const canSelectBlockedDays = await canUseBlockedWeekdayPreferences(req.user);
     // Half shifts are operational planning details, not employee-selectable preferences.
     // Filter them server-side as well so stale browser bundles cannot reintroduce them.
@@ -460,7 +460,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
          blocked_days = $7::jsonb,
          avoid_colleagues = $8::jsonb,
           workload_preference = $9,
-          notes = $10,
+          notes = employee_preferences.notes,
           monthly_preferences = $11::jsonb,
           updated_at = NOW()
        RETURNING *`,
@@ -474,7 +474,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         JSON.stringify(sanitizedBlockedDays),
         JSON.stringify([]),
         'normal',
-         notes || null,
+         null,
          JSON.stringify(monthly_preferences),
       ]
     );

@@ -264,6 +264,7 @@ export default function Users() {
   const [editError, setEditError] = useState("");
   const [expandedUserId, setExpandedUserId] = useState<number | null>(null);
   const [preferenceDetails, setPreferenceDetails] = useState<Record<number, UserPreferences | null>>({});
+  const [savingNotesForUser, setSavingNotesForUser] = useState<number | null>(null);
   const [userMessage, setUserMessage] = useState("");
 
   /* ------------------------------------------------ */
@@ -319,10 +320,30 @@ export default function Users() {
 
     try {
       const res = await api.get(`/admin/users/${userId}/preferences`);
-      setPreferenceDetails((prev) => ({ ...prev, [userId]: res.data?.preferences || null }));
+      setPreferenceDetails((prev) => ({ ...prev, [userId]: res.data?.preferences || { notes: null } }));
     } catch (err) {
       console.error("LOAD USER PREFERENCES ERROR:", err);
       setPreferenceDetails((prev) => ({ ...prev, [userId]: null }));
+    }
+  }
+
+  async function saveUserNotes(userId: number) {
+    const notes = preferenceDetails[userId]?.notes || "";
+    setSavingNotesForUser(userId);
+    try {
+      const response = await api.put(`/admin/users/${userId}/preferences/notes`, { notes });
+      setPreferenceDetails((current) => ({
+        ...current,
+        [userId]: {
+          ...(current[userId] || {}),
+          notes: response.data?.preferences?.notes || null,
+          updatedAt: response.data?.preferences?.updatedAt || current[userId]?.updatedAt,
+        },
+      }));
+    } catch (error) {
+      console.error("SAVE USER NOTES ERROR:", error);
+    } finally {
+      setSavingNotesForUser(null);
     }
   }
 
@@ -756,9 +777,20 @@ export default function Users() {
                                     "border-purple-500/20"
                                   )}
                                   {renderPreferenceCard(
-                                    language === "de" ? "Notizen" : "Notes",
-                                    language === "de" ? "Freitext aus den Mitarbeiterwuenschen." : "Free text from the employee preferences.",
-                                    <p className="text-xs leading-relaxed text-foreground">{renderPreferenceValue(prefs.notes)}</p>,
+                                    language === "de" ? "Anmerkungen" : "Notes",
+                                    language === "de" ? "Wird im Benutzermenü durch die Administration gepflegt." : "Maintained by administration in User Management.",
+                                    <div className="space-y-2">
+                                      <textarea
+                                        value={prefs.notes || ""}
+                                        onChange={(event) => setPreferenceDetails((current) => ({ ...current, [user.id]: { ...(current[user.id] || {}), notes: event.target.value } }))}
+                                        disabled={!canManageUsers || savingNotesForUser === user.id}
+                                        placeholder={language === "de" ? "Anmerkung für diesen Mitarbeiter…" : "Note for this employee…"}
+                                        className="min-h-20 w-full rounded-lg border border-border/40 bg-background/70 px-2 py-1.5 text-xs text-foreground outline-none focus:border-sky-500/60 disabled:opacity-60"
+                                      />
+                                      {canManageUsers && <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => void saveUserNotes(user.id)} disabled={savingNotesForUser === user.id}>
+                                        <Save className="mr-1.5 h-3 w-3" />{savingNotesForUser === user.id ? (language === "de" ? "Speichert…" : "Saving…") : (language === "de" ? "Anmerkung speichern" : "Save note")}
+                                      </Button>}
+                                    </div>,
                                     "border-slate-500/20"
                                   )}
                                 </div>

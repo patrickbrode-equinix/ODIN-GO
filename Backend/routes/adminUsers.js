@@ -335,6 +335,49 @@ router.get(
 );
 
 router.put(
+  "/:id/preferences/notes",
+  requireAuth,
+  requirePageAccess("user_management", "write"),
+  async (req, res) => {
+    const targetUserId = Number(req.params.id);
+    const notes = String(req.body?.notes || "").trim().slice(0, 5000) || null;
+
+    try {
+      const { rows: users } = await db.query(
+        'SELECT id, login_name, email, is_root FROM users WHERE id = $1',
+        [targetUserId]
+      );
+      if (users.length === 0) return res.status(404).json({ message: "User not found" });
+      if (users[0].is_root) return res.status(403).json({ message: "Root user cannot be modified" });
+
+      const { rows } = await db.query(
+        `INSERT INTO employee_preferences (user_id, notes, updated_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (user_id) DO UPDATE SET notes = EXCLUDED.notes, updated_at = NOW()
+         RETURNING notes, updated_at AS "updatedAt"`,
+        [targetUserId, notes]
+      );
+
+      await logActivity(
+        req.user.id,
+        req.user.email,
+        "EMPLOYEE_NOTES_UPDATED",
+        "user_management",
+        "employee_preferences",
+        String(targetUserId),
+        null,
+        { targetLoginName: users[0].login_name, targetEmail: users[0].email, hasNotes: Boolean(notes) }
+      );
+
+      return res.json({ success: true, preferences: rows[0] });
+    } catch (err) {
+      console.error("USER NOTES UPDATE ERROR:", err);
+      return res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+router.put(
   "/:id/access-override",
   requireAuth,
   requirePageAccess("user_management", "write"),
