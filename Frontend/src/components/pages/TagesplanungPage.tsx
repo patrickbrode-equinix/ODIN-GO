@@ -356,12 +356,12 @@ function TicketChip({ ticket, index }: { ticket: EnrichedCommitTicket; index: nu
       />
       <div className="pl-3 flex items-center gap-2 min-w-0 flex-1">
         <span
-          className="font-mono text-[10.5px] font-black shrink-0 tracking-wider"
+          className="font-mono text-[12px] font-black shrink-0 tracking-wider"
           style={{ color: (isOverdue || isCritical) ? dot : "#e2e8f0", textShadow: (isOverdue || isCritical) ? `0 0 10px ${dot}70` : "none" }}
         >
           {ticket.activityNumber || "—"}
         </span>
-        <div className="min-w-0 flex flex-1 items-center gap-1.5 text-[8px]">
+        <div className="min-w-0 flex flex-1 items-center gap-1.5 text-[10px]">
           {ticket.systemName && (
             <span className="shrink-0 font-semibold text-slate-300">{ticket.systemName}</span>
           )}
@@ -370,7 +370,7 @@ function TicketChip({ ticket, index }: { ticket: EnrichedCommitTicket; index: nu
       </div>
       {timeStr && (
         <span
-          className="shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[9px] font-black"
+          className="shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-black"
           style={{
             color: dot,
             background: `${dot}14`,
@@ -379,7 +379,7 @@ function TicketChip({ ticket, index }: { ticket: EnrichedCommitTicket; index: nu
         >{timeStr}</span>
       )}
       {isScheduled && (
-        <span className="shrink-0 rounded-md px-1.5 py-0.5 text-[7px] font-black uppercase tracking-[0.18em]" style={{ color: "rgba(100,116,139,0.7)", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>SCHED</span>
+        <span className="shrink-0 rounded-md px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.18em]" style={{ color: "rgba(100,116,139,0.7)", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>SCHED</span>
       )}
     </motion.div>
   );
@@ -404,7 +404,7 @@ function EmployeeCard({
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ scale: 1.022, y: -1 }}
       transition={{ duration: 0.3, delay, ease: [0.22, 1, 0.36, 1] }}
-      className="cursor-default overflow-hidden rounded-xl"
+      className="daily-employee-card cursor-default overflow-hidden rounded-xl"
       style={{
         background: "rgba(255,255,255,0.025)",
         border:     `1px solid ${isOwnShift ? `${hex}cc` : "rgba(255,255,255,0.08)"}`,
@@ -438,20 +438,20 @@ function EmployeeCard({
               {employee.name.trim().charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <div className="truncate text-[11.5px] font-bold leading-tight text-slate-100">
+              <div className="truncate text-[14px] font-bold leading-tight text-slate-100">
                 {employee.name}
-                {employee.isColo ? <span className="ml-1.5 inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1 py-px text-[8px] font-black text-cyan-200">COLO</span> : null}
-                {employee.isDispatcher ? <span className="ml-1.5 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1 py-px text-[8px] font-black text-pink-200">DP</span> : null}
+                {employee.isColo ? <span className="ml-1.5 inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1 py-px text-[9px] font-black text-cyan-200">COLO</span> : null}
+                {employee.isDispatcher ? <span className="ml-1.5 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1 py-px text-[9px] font-black text-pink-200">DP</span> : null}
               </div>
-              <div className="mt-0.5 text-[7.5px] font-black uppercase tracking-[0.22em]" style={{ color: `${hex}70` }}>
+              <div className="mt-1 text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: `${hex}70` }}>
                 {employee.shiftCode}
               </div>
               {employee.roleKey && getRoleDef(employee.roleKey) && (
-                <div className="mt-1 text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>
+                <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>
                   Rolle: {getRoleDef(employee.roleKey)?.label}
                 </div>
               )}
-              {isOwnShift && <div className="mt-1 text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>Deine Schicht</div>}
+              {isOwnShift && <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>Deine Schicht</div>}
             </div>
           </div>
         </div>
@@ -502,16 +502,16 @@ function SubGroupSection({
             </span>
           )}
           <span
-            className="text-[8.5px] font-black uppercase tracking-[0.22em]"
+            className="text-[10px] font-black uppercase tracking-[0.22em]"
             style={{ color: hex, textShadow: status === "active" ? `0 0 10px ${hex}90` : "none" }}
           >
             {getSubGroupLabel(subGroup.label, isGerman)}
           </span>
-          <span className="text-[7.5px] text-slate-700">·</span>
-          <span className="text-[7.5px] text-slate-500">{subGroup.time}</span>
+          <span className="text-[9px] text-slate-700">·</span>
+          <span className="text-[9px] text-slate-500">{subGroup.time}</span>
           {statusStr && (
             <span
-              className="ml-0.5 rounded-full px-1.5 py-0.5 text-[7px] font-black uppercase tracking-[0.16em]"
+              className="ml-0.5 rounded-full px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.16em]"
               style={{
                 color: status === "active" ? hex : "rgba(148,163,184,0.45)",
                 background: status === "active" ? `${hex}14` : "transparent",
@@ -666,7 +666,7 @@ function ShiftBand({
             <span className="h-2 w-2 rounded-full" style={{ background: "rgba(71,85,105,0.5)" }} />
           )}
           <span
-            className="text-[12px] font-black uppercase tracking-[0.32em]"
+            className="text-[14px] font-black uppercase tracking-[0.28em]"
             style={{
               color: isActive ? meta.hex : "rgba(148,163,184,0.6)",
               textShadow: isActive
@@ -681,7 +681,7 @@ function ShiftBand({
             className="ml-auto flex flex-col items-end"
           >
             <span
-              className="font-mono text-[20px] font-black leading-none"
+              className="font-mono text-[24px] font-black leading-none"
               style={{
                 color: isActive ? meta.hex : "rgba(148,163,184,0.5)",
                 textShadow: isActive ? `0 0 20px ${meta.hex}80, 0 0 6px ${meta.hex}50` : "none",
@@ -690,7 +690,7 @@ function ShiftBand({
               {employees.length}
             </span>
             <span
-              className="mt-0.5 text-[7px] font-black uppercase tracking-[0.3em]"
+              className="mt-0.5 text-[9px] font-black uppercase tracking-[0.25em]"
               style={{ color: isActive ? `${meta.hex}70` : "rgba(71,85,105,0.6)" }}
             >
               {isGerman ? "Besetzt" : "Staffed"}
@@ -700,10 +700,10 @@ function ShiftBand({
 
         {/* time range + status badge */}
         <div className="flex items-center gap-2">
-          <span className="text-[9px] font-medium" style={{ color: isActive ? `${meta.hex}99` : "rgba(100,116,139,0.7)" }}>{meta.timeLabel}</span>
+          <span className="text-[11px] font-medium" style={{ color: isActive ? `${meta.hex}99` : "rgba(100,116,139,0.7)" }}>{meta.timeLabel}</span>
           {status !== "unknown" && (
             <motion.span
-              className="ml-auto rounded-full px-3 py-1 text-[8.5px] font-black uppercase tracking-[0.18em]"
+              className="ml-auto rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em]"
               animate={isActive ? { opacity: [1, 0.75, 1] } : {}}
               transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
               style={{
@@ -724,13 +724,13 @@ function ShiftBand({
           <div className="mt-3.5">
             <div className="mb-1.5 flex items-center justify-between">
               <span
-                className="text-[7px] font-black uppercase tracking-[0.28em]"
+                className="text-[9px] font-black uppercase tracking-[0.24em]"
                 style={{ color: `${meta.hex}60` }}
               >
                 {isGerman ? "Schichtfortschritt" : "Shift progress"}
               </span>
               <span
-                className="font-mono text-[11px] font-black"
+                className="font-mono text-[13px] font-black"
                 style={{ color: meta.hex, textShadow: `0 0 14px ${meta.hex}90` }}
               >
                 {Math.round(progress)}<span className="text-[8px]" style={{ color: `${meta.hex}80` }}>%</span>
@@ -776,18 +776,18 @@ function ShiftBand({
         className="flex shrink-0 items-center gap-3 px-4 py-1.5"
         style={{ borderBottom: `1px solid rgba(255,255,255,0.04)`, background: "rgba(0,0,0,0.15)" }}
       >
-        <span className="text-[7px] font-black uppercase tracking-[0.3em]" style={{ color: `${meta.hex}55` }}>
+        <span className="text-[9px] font-black uppercase tracking-[0.25em]" style={{ color: `${meta.hex}55` }}>
           {getBandStateLabel(status, isGerman)}
         </span>
         <div className="h-3 w-px" style={{ background: "rgba(255,255,255,0.08)" }} />
-        <span className="text-[7px] text-slate-700">{meta.timeLabel}</span>
+        <span className="text-[9px] text-slate-700">{meta.timeLabel}</span>
         <div className="ml-auto flex items-center gap-1.5">
           {isSubGrouped && activeSubGroups.length > 0 && (
             <>
               {activeSubGroups.map(({ subGroup: sg }) => (
                 <span
                   key={sg.code}
-                  className="rounded px-1.5 py-0.5 text-[6.5px] font-black uppercase tracking-[0.2em]"
+                  className="rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.2em]"
                   style={{ color: `${meta.hex}90`, background: `${meta.hex}0f`, border: `1px solid ${meta.hex}22` }}
                 >
                   {getSubGroupBadgeLabel(sg.label)}
@@ -967,7 +967,7 @@ export default function TagesplanungPage() {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-        className="relative shrink-0 overflow-hidden"
+        className="daily-plan-header relative shrink-0 overflow-hidden"
         style={{
           background: "linear-gradient(180deg, #010d28 0%, #020b1e 100%)",
           borderBottom: "1px solid rgba(56,189,248,0.18)",
@@ -1026,21 +1026,21 @@ export default function TagesplanungPage() {
                 <Calendar className="h-5 w-5" style={{ color: "#38bdf8", filter: "drop-shadow(0 0 6px #38bdf8)" }} />
               </div>
               <div>
-                <div className="text-[7px] font-black uppercase tracking-[0.55em]" style={{ color: "rgba(56,189,248,0.38)" }}>
+                <div className="text-[9px] font-black uppercase tracking-[0.45em]" style={{ color: "rgba(56,189,248,0.38)" }}>
                   {isGerman ? "Schichtplanung · ODIN" : "Shift planning · ODIN"}
                 </div>
                 <h1
-                  className="text-[17px] font-black uppercase tracking-[0.28em] text-white"
+                  className="text-[21px] font-black uppercase tracking-[0.22em] text-white"
                   style={{ textShadow: "0 0 40px rgba(56,189,248,0.7), 0 0 14px rgba(56,189,248,0.5), 0 0 4px rgba(56,189,248,0.4)" }}
                 >
                   {isGerman ? "Tagesplanung" : "Day planning"}
                 </h1>
                 <div className="mt-1 flex items-center gap-1.5">
                   {nowDate.toLocaleDateString(locale, { weekday: "long" }).toUpperCase().split("").map((char, i) => (
-                    <span key={i} className="text-[7.5px] font-black tracking-[0.24em]" style={{ color: "rgba(148,163,184,0.45)" }}>{char}</span>
+                    <span key={i} className="text-[9px] font-black tracking-[0.2em]" style={{ color: "rgba(148,163,184,0.45)" }}>{char}</span>
                   ))}
                   <span className="h-3 w-px" style={{ background: "rgba(56,189,248,0.3)" }} />
-                  <span className="font-mono text-[8px] font-bold" style={{ color: "rgba(56,189,248,0.55)" }}>
+                  <span className="font-mono text-[10px] font-bold" style={{ color: "rgba(56,189,248,0.55)" }}>
                     {nowDate.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" })}
                   </span>
                 </div>
@@ -1063,7 +1063,7 @@ export default function TagesplanungPage() {
                   }}
                 >
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: "#f43f5e", boxShadow: "0 0 5px #f43f5e" }} />
-                  <span className="text-[8px] font-black uppercase tracking-[0.28em]" style={{ color: "#f87171" }}>Live</span>
+                  <span className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: "#f87171" }}>Live</span>
                 </motion.div>
               )}
               {/* band status pills */}
@@ -1091,11 +1091,11 @@ export default function TagesplanungPage() {
                         <span className="h-1.5 w-1.5 rounded-full" style={{ background: `${meta.hex}40` }} />
                       )}
                       <span
-                        className="text-[8.5px] font-black uppercase tracking-[0.2em]"
+                        className="text-[10px] font-black uppercase tracking-[0.18em]"
                         style={{ color: active ? meta.hex : `${meta.hex}80`, textShadow: active ? `0 0 8px ${meta.hex}70` : "none" }}
                       >{getCategoryLabel(cat, isGerman)}</span>
                       <span
-                        className="rounded-full px-1.5 text-[9px] font-black"
+                        className="rounded-full px-1.5 text-[10px] font-black"
                         style={{ color: active ? meta.hex : "rgba(100,116,139,0.7)", background: `${meta.hex}15` }}
                       >{catEmps.length}</span>
                     </div>
@@ -1107,7 +1107,7 @@ export default function TagesplanungPage() {
               <button
                 type="button"
                 onClick={handleRefresh}
-                className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[8.5px] font-black uppercase tracking-[0.18em] transition-all hover:bg-cyan-400/10 active:scale-95"
+                className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] transition-all hover:bg-cyan-400/10 active:scale-95"
                 style={{ color: "#38bdf8", border: "1px solid rgba(56,189,248,0.22)" }}
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />

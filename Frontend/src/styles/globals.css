@@ -1058,6 +1058,44 @@ h3,
     color: rgba(51,65,85,0.40) !important;
   }
 
+  /* Daily plan: readable paper-like surfaces instead of dark glass in light mode. */
+  .light .daily-enterprise {
+    background: var(--background) !important;
+    color: var(--foreground) !important;
+  }
+
+  .light .daily-plan-header {
+    background: linear-gradient(180deg, #ffffff 0%, #f3f7fc 100%) !important;
+    border-bottom-color: rgba(0,113,227,0.20) !important;
+    box-shadow: 0 2px 14px rgba(15,23,42,0.08) !important;
+  }
+
+  .light .daily-shift-band {
+    background: #ffffff !important;
+    border-color: rgba(15,23,42,0.12) !important;
+    box-shadow: 0 2px 10px rgba(15,23,42,0.07), 0 12px 28px rgba(15,23,42,0.05) !important;
+  }
+
+  .light .daily-employee-card {
+    background: #f8fafc !important;
+    border-color: rgba(15,23,42,0.12) !important;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.07) !important;
+    backdrop-filter: none !important;
+  }
+
+  .light .daily-enterprise [style*="color: rgba(148,163,184"],
+  .light .daily-enterprise [style*="color: rgba(100,116,139"],
+  .light .daily-enterprise [style*="color: rgba(71,85,105"],
+  .light .daily-enterprise [style*="color: #e2e8f0"],
+  .light .daily-enterprise [style*="color: rgb(226, 232, 240)"] {
+    color: #475569 !important;
+  }
+
+  .light .daily-enterprise [style*="background: rgba(255,255,255,0.04)"],
+  .light .daily-enterprise [style*="background: rgba(255,255,255,0.025)"] {
+    background: rgba(15,23,42,0.04) !important;
+  }
+
   /* Admin tiles */
   .light .theme-admin-hero {
     background: var(--surface-hero-strong) !important;
