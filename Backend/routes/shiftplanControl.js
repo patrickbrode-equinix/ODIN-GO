@@ -1276,7 +1276,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       }
 
       for (let slot = continuingEmployees.length; slot < neededStaff; slot++) {
-        let candidates = availableForDay.filter((employee) => !assignedToday.has(employee) && !(continuationLockedEmployees.has(employee) && empSeriesCode[employee] !== shiftDef.code));
+        let candidates = availableForDay.filter((employee) => (
+          !assignedToday.has(employee)
+          && !(continuationLockedEmployees.has(employee) && empSeriesCode[employee] !== shiftDef.code)
+          && !isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), shiftDef.code)
+        ));
         // At 100% preference weight, an explicitly preferred shift becomes a hard rule.
         if (planConfig.respect_employee_wishes && Number(planConfig.soft_wishes_priority) >= 100) {
           const preferredCandidates = candidates.filter((employee) => {
@@ -1572,7 +1576,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             }
           }
 
-          return { emp: employee, score, reasons, hardBlocked: false };
+          return {
+            emp: employee,
+            score: hardBlocked ? Number.NEGATIVE_INFINITY : score,
+            reasons,
+            hardBlocked,
+          };
         });
 
         const eligibleScored = scored.filter((entry) => Number.isFinite(entry.score));
