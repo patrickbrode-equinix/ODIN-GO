@@ -369,14 +369,19 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
     const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, workload_preference, notes } = req.body;
+    // Half shifts are operational planning details, not employee-selectable preferences.
+    // Filter them server-side as well so stale browser bundles cannot reintroduce them.
+    const employeePreferenceExcludedShiftCodes = new Set(['HE1', 'HE2', 'HL1', 'HL2']);
+    const sanitizeShiftCodes = (value) => Array.isArray(value)
+      ? [...new Set(value.map((code) => String(code || '').trim().toUpperCase())
+        .filter((code) => code && !employeePreferenceExcludedShiftCodes.has(code)))]
+      : [];
     const monthly_preferences = req.body.monthly_preferences && typeof req.body.monthly_preferences === 'object' && !Array.isArray(req.body.monthly_preferences)
       ? Object.fromEntries(Object.entries(req.body.monthly_preferences).filter(([key, value]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key) && value && typeof value === 'object').map(([key, value]) => [key, {
-          preferred_shifts: Array.isArray(value.preferred_shifts) ? value.preferred_shifts.map(String).slice(0, 20) : [],
-          unwanted_shifts: Array.isArray(value.unwanted_shifts) ? value.unwanted_shifts.map(String).slice(0, 20) : [],
+          preferred_shifts: sanitizeShiftCodes(value.preferred_shifts).slice(0, 20),
+          unwanted_shifts: sanitizeShiftCodes(value.unwanted_shifts).slice(0, 20),
         }]))
       : {};
-
-    const validateArray = (value) => (Array.isArray(value) ? value : []);
 
     const { rows } = await pool.query(
       `INSERT INTO employee_preferences (user_id, preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, preferred_days, blocked_days, avoid_colleagues, workload_preference, notes, monthly_preferences, updated_at)
@@ -396,12 +401,12 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
        RETURNING *`,
       [
         userId,
-        JSON.stringify(validateArray(preferred_shifts)),
-        JSON.stringify(validateArray(unwanted_shifts)),
-        JSON.stringify(validateArray(preferred_holidays)),
+        JSON.stringify(sanitizeShiftCodes(preferred_shifts)),
+        JSON.stringify(sanitizeShiftCodes(unwanted_shifts)),
+        JSON.stringify(Array.isArray(preferred_holidays) ? preferred_holidays : []),
         max_nights_per_month || null,
         JSON.stringify([]),
-        JSON.stringify(validateArray(blocked_days)),
+        JSON.stringify(Array.isArray(blocked_days) ? blocked_days : []),
         JSON.stringify([]),
         workload_preference || 'normal',
          notes || null,

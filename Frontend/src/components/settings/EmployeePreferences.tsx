@@ -135,7 +135,9 @@ interface Preferences {
 }
 
 const SHIFT_CODES = ['E1', 'E2', 'L1', 'L2', 'N'];
-const EMPLOYEE_PREFERENCE_EXCLUDED_CODES = new Set(['DBS', 'E1SA', 'E1WE', 'L1WE']);
+// Legacy half-shift definitions are planning-only and must never be selectable
+// as an employee preference.
+const EMPLOYEE_PREFERENCE_EXCLUDED_CODES = new Set(['DBS', 'E1SA', 'E1WE', 'L1WE', 'HE1', 'HE2', 'HL1', 'HL2']);
 const SHIFT_LABELS_DE: Record<string, string> = { E1: 'Frühschicht 1', E2: 'Frühschicht 2', L1: 'Spätschicht 1', L2: 'Spätschicht 2', N: 'Nachtschicht' };
 const SHIFT_LABELS_EN: Record<string, string> = { E1: 'Early shift 1', E2: 'Early shift 2', L1: 'Late shift 1', L2: 'Late shift 2', N: 'Night shift' };
 const DAY_LABELS_DE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
@@ -210,7 +212,10 @@ function applyEmployeeSelectableShiftDefinitions(
 ) {
   const selectableDefinitions = definitions.filter((definition: any) => {
     const code = String(definition?.code || '').trim().toUpperCase();
-    return Boolean(code) && definition?.is_active !== false && !EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code);
+    const duration = Number(definition?.duration_hours);
+    const isHalfShift = EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code)
+      || (Number.isFinite(duration) && duration > 0 && duration < 6);
+    return Boolean(code) && definition?.is_active !== false && !isHalfShift;
   });
   const configuredCodes = selectableDefinitions.map((definition: any) => String(definition.code).trim().toUpperCase());
   setOptions(Array.from(new Set([...SHIFT_CODES, ...configuredCodes])).filter((code) => !EMPLOYEE_PREFERENCE_EXCLUDED_CODES.has(code)));
