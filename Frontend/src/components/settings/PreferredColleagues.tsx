@@ -71,7 +71,7 @@ const COPY = {
   },
 } as const;
 
-export default function PreferredColleagues() {
+export default function PreferredColleagues({ onVisibilityResolved }: { onVisibilityResolved?: (enabled: boolean) => void }) {
   const { language } = useLanguage();
   const locale = getLanguageLocale(language);
   const copy = COPY[language as keyof typeof COPY] || COPY.en;
@@ -93,7 +93,9 @@ export default function PreferredColleagues() {
           getPreferredColleagues(),
           api.get('/dashboard/preference-config').catch(() => ({ data: { colleaguePreferencesEnabled: true } })),
         ]);
-        setEnabled(settings.data?.colleaguePreferencesEnabled !== false);
+        const colleaguePreferencesEnabled = settings.data?.colleaguePreferencesEnabled !== false;
+        setEnabled(colleaguePreferencesEnabled);
+        onVisibilityResolved?.(colleaguePreferencesEnabled);
         setEligible(elig);
         setSelected(prefs);
         setInitial(prefs);
@@ -153,7 +155,7 @@ export default function PreferredColleagues() {
     );
   }
 
-  if (!enabled) return <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">{language === 'de' ? 'Die Auswahl von Wunschkollegen wurde durch die Administration deaktiviert.' : 'Preferred colleague selection has been disabled by an administrator.'}</div>;
+  if (!enabled) return null;
 
   return (
     <div className="flex flex-col gap-4">

@@ -191,6 +191,7 @@ export default function Settings() {
   const [meta, setMeta] = useState<UserMeta | null>(null);
   const [competenceProfile, setCompetenceProfile] = useState<EmployeeSkills | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showPreferredColleagues, setShowPreferredColleagues] = useState(true);
 
   /* SYSTEM THRESHOLDS */
   type AppSettings = {
@@ -501,9 +502,11 @@ export default function Settings() {
           </EnterpriseCard>
 
           {/* PREFERRED COLLEAGUES (Wunschkollegen) */}
-          <EnterpriseCard noPadding={false} className="flex flex-col gap-4">
-            <PreferredColleagues />
-          </EnterpriseCard>
+          {showPreferredColleagues && (
+            <EnterpriseCard noPadding={false} className="flex flex-col gap-4">
+              <PreferredColleagues onVisibilityResolved={setShowPreferredColleagues} />
+            </EnterpriseCard>
+          )}
 
           {/* EMPLOYEE PREFERENCES (Schichtplan-Wünsche) */}
           <EnterpriseCard noPadding={false} className="flex flex-col gap-4">

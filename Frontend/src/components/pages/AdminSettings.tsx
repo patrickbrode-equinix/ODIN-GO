@@ -1093,10 +1093,10 @@ function TogglesTab() {
       <div className="space-y-3">
         <div className="flex items-center justify-between rounded bg-gray-50 px-3 py-2 dark:bg-gray-800/50">
           <div>
-            <div className="text-sm font-medium">{isGerman ? 'Wunschkollegen-Auswahl' : 'Preferred colleague selection'}</div>
-            <div className="text-xs text-gray-400">{isGerman ? 'Mitarbeiter können Kollegen als gemeinsame Planungspräferenz auswählen.' : 'Employees can select colleagues as a shared planning preference.'}</div>
+            <div className="text-sm font-medium">{isGerman ? 'Wunschkollegen in Mitarbeitereinstellungen anzeigen' : 'Show preferred colleagues in employee settings'}</div>
+            <div className="text-xs text-gray-400">{isGerman ? 'Blendet den gesamten Bereich Wunschkollegen für Mitarbeiter ein oder aus.' : 'Shows or hides the complete preferred-colleagues section for employees.'}</div>
           </div>
-          <button onClick={toggleColleaguePreferences} className="focus:outline-none" aria-label={isGerman ? 'Wunschkollegen umschalten' : 'Toggle preferred colleagues'}>
+          <button onClick={toggleColleaguePreferences} className="focus:outline-none" aria-label={isGerman ? 'Wunschkollegen-Sichtbarkeit umschalten' : 'Toggle preferred colleague visibility'}>
             {colleaguePreferencesEnabled ? <ToggleRight className="h-7 w-7 text-green-500" /> : <ToggleLeft className="h-7 w-7 text-gray-400" />}
           </button>
         </div>
