@@ -1450,7 +1450,12 @@ export default function Shiftplan() {
           {Array.from({ length: 12 }).map((_, idx) => {
             const label = formatMonthLabel(selectedYear, idx + 1, locale);
             const active = idx === selectedMonthIndex;
-            const hasData = monthsWithData.includes(label);
+            const labelVariants = new Set([
+              label,
+              formatMonthLabel(selectedYear, idx + 1, "de-DE"),
+              formatMonthLabel(selectedYear, idx + 1, "en-US"),
+            ].map((value) => value.replace(/\u00a0/g, " ").trim().toLocaleLowerCase()));
+            const hasData = monthsWithData.some((month) => labelVariants.has(String(month || "").replace(/\u00a0/g, " ").trim().toLocaleLowerCase()));
 
             return (
               <button
@@ -1458,10 +1463,12 @@ export default function Shiftplan() {
                 onClick={() => handleShiftplanMonthSelect(idx)}
                 className={`
                             px-4 py-1.5 text-[11px] rounded-md transition-all font-bold uppercase tracking-wider whitespace-nowrap border
-                            ${active
-                    ? "bg-indigo-600/90 text-white shadow-sm border-indigo-500"
-                    : hasData
-                      ? "text-emerald-400/90 border-emerald-500/20 bg-emerald-500/10 hover:bg-emerald-500/20"
+                            ${hasData
+                    ? active
+                      ? "bg-emerald-600 text-white shadow-sm border-emerald-300 ring-2 ring-emerald-300/35"
+                      : "text-emerald-400/90 border-emerald-500/20 bg-emerald-500/10 hover:bg-emerald-500/20"
+                    : active
+                      ? "bg-red-600 text-white shadow-sm border-red-300 ring-2 ring-red-300/35"
                       : "text-red-400/90 border-red-500/30 bg-red-500/10 hover:bg-red-500/20"
                   }
                           `}
