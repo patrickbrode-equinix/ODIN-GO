@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { Bell, ChevronDown, FlaskConical, Plus, Power, PowerOff, Radio, Trash2, Users } from "lucide-react";
 import { api } from "../../api/api";
 import { useAuth } from "../../context/AuthContext";
+import { LANGUAGE_TO_LOCALE, useLanguage } from "../../context/LanguageContext";
 
 type Recipient = {
   id: number;
@@ -21,15 +22,22 @@ type Notification = {
   recipients?: Recipient[];
 };
 
-const recurrenceLabels: Record<Notification["recurrence"], string> = {
-  once: "Einmalig",
-  daily: "Täglich",
-  weekly: "Wöchentlich",
-  monthly: "Monatlich",
+const RECURRENCE_LABELS: Record<"de" | "en", Record<Notification["recurrence"], string>> = {
+  de: { once: "Einmalig", daily: "Täglich", weekly: "Wöchentlich", monthly: "Monatlich" },
+  en: { once: "Once", daily: "Daily", weekly: "Weekly", monthly: "Monthly" },
 };
+
+const COPY = {
+  de: { heading: "Benachrichtigungen", loadFailed: "Benachrichtigungen konnten nicht geladen werden.", createFailed: "Die Benachrichtigung konnte nicht erstellt werden.", updateFailed: "Der Status konnte nicht geändert werden.", deleteConfirm: "Benachrichtigung \"{title}\" wirklich löschen?", deleteFailed: "Die Benachrichtigung konnte nicht gelöscht werden.", testExtensionRequired: "Das Test-Popup ist nur verfügbar, wenn ODIN GO innerhalb von Jarvis geöffnet und die Erweiterung verbunden ist.", testJarvisRequired: "Das Test-Popup ist nur verfügbar, wenn ODIN GO innerhalb von Jarvis geöffnet ist.", testTitle: "ODIN GO Test", testBody: "Die Popup-Zustellung funktioniert in diesem Jarvis-Fenster.", currentUser: "Aktueller Benutzer", subtitle: "Benachrichtigungen erscheinen beim Öffnen von Jarvis mittig als Popup.", connected: "Jarvis verbunden", outsideJarvis: "Außerhalb von Jarvis", testPopup: "Test-Popup", popupsEnabled: "Meine Popups aktiviert", popupsDisabled: "Meine Popups deaktiviert", notification: "Benachrichtigung", instruction: "Anweisung", title: "Titel", recurrence: "Wiederholung", recipients: "Empfänger", allEmployees: "Alle Mitarbeitenden", personSelected: "1 Person ausgewählt", peopleSelected: "{count} Personen ausgewählt", selected: "Ausgewählt", noEmployees: "Keine Mitarbeitenden verfügbar.", recipientsHint: "Ohne Auswahl wird die Meldung an alle Mitarbeitenden gesendet.", publishing: "Wird veröffentlicht...", publish: "Veröffentlichen", active: "Aktiv", inactive: "Deaktiviert", createdBy: "Erstellt von", unknown: "Unbekannt", deactivate: "Deaktivieren", activate: "Aktivieren", delete: "Löschen", empty: "Noch keine Benachrichtigungen angelegt." },
+  en: { heading: "Notifications", loadFailed: "Notifications could not be loaded.", createFailed: "The notification could not be created.", updateFailed: "The status could not be updated.", deleteConfirm: "Delete notification \"{title}\"?", deleteFailed: "The notification could not be deleted.", testExtensionRequired: "The test popup is only available when ODIN GO is opened inside Jarvis and the extension is connected.", testJarvisRequired: "The test popup is only available when ODIN GO is opened inside Jarvis.", testTitle: "ODIN GO Test", testBody: "Popup delivery is working in this Jarvis window.", currentUser: "Current user", subtitle: "Notifications appear as a centred popup when Jarvis is opened.", connected: "Connected to Jarvis", outsideJarvis: "Outside Jarvis", testPopup: "Test popup", popupsEnabled: "My popups enabled", popupsDisabled: "My popups disabled", notification: "Notification", instruction: "Instruction", title: "Title", recurrence: "Recurrence", recipients: "Recipients", allEmployees: "All employees", personSelected: "1 person selected", peopleSelected: "{count} people selected", selected: "Selected", noEmployees: "No employees available.", recipientsHint: "Without a selection, the message is sent to all employees.", publishing: "Publishing...", publish: "Publish", active: "Active", inactive: "Inactive", createdBy: "Created by", unknown: "Unknown", deactivate: "Deactivate", activate: "Activate", delete: "Delete", empty: "No notifications have been created yet." },
+} as const;
 
 export default function JarvisNotifications() {
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const copy = COPY[language];
+  const locale = LANGUAGE_TO_LOCALE[language];
+  const recurrenceLabels = RECURRENCE_LABELS[language];
   const [items, setItems] = useState<Notification[]>([]);
   const [recipients, setRecipients] = useState<Recipient[]>([]);
   const [selectedRecipientIds, setSelectedRecipientIds] = useState<number[]>([]);
@@ -53,9 +61,9 @@ export default function JarvisNotifications() {
 
   useEffect(() => {
     void loadWorkspace().catch((requestError: any) => {
-      setError(requestError?.response?.data?.message || requestError?.response?.data?.error || "Notifications konnten nicht geladen werden.");
+      setError(copy.loadFailed);
     });
-  }, [loadWorkspace]);
+  }, [copy.loadFailed, loadWorkspace]);
 
   const postToExtension = useCallback((type: string, payload: Record<string, unknown> = {}) => {
     if (window.parent === window) return false;
@@ -86,10 +94,10 @@ export default function JarvisNotifications() {
   );
 
   const recipientButtonLabel = selectedRecipientIds.length === 0
-    ? "Alle Mitarbeitenden"
+    ? copy.allEmployees
     : selectedRecipientIds.length === 1
-      ? selectedRecipients[0]?.displayName || "1 Person ausgewählt"
-      : `${selectedRecipientIds.length} Personen ausgewählt`;
+      ? selectedRecipients[0]?.displayName || copy.personSelected
+      : copy.peopleSelected.replace("{count}", String(selectedRecipientIds.length));
 
   const togglePersonalNotifications = async () => {
     const next = !enabled;
@@ -134,7 +142,7 @@ export default function JarvisNotifications() {
       setRecipientMenuOpen(false);
       postToExtension("ODIN_GO_NOTIFICATIONS_CHANGED");
     } catch (requestError: any) {
-      setError(requestError?.response?.data?.message || requestError?.response?.data?.error || "Die Notification konnte nicht erstellt werden.");
+      setError(copy.createFailed);
     } finally {
       setSaving(false);
     }
@@ -150,14 +158,14 @@ export default function JarvisNotifications() {
         : entry));
       postToExtension("ODIN_GO_NOTIFICATIONS_CHANGED");
     } catch (requestError: any) {
-      setError(requestError?.response?.data?.message || requestError?.response?.data?.error || "Der Status konnte nicht geändert werden.");
+      setError(copy.updateFailed);
     } finally {
       setActionId(null);
     }
   };
 
   const remove = async (item: Notification) => {
-    if (!window.confirm(`Notification „${item.title}“ wirklich löschen?`)) return;
+    if (!window.confirm(copy.deleteConfirm.replace("{title}", item.title))) return;
     setActionId(item.id);
     setError("");
     try {
@@ -165,7 +173,7 @@ export default function JarvisNotifications() {
       setItems((current) => current.filter((entry) => entry.id !== item.id));
       postToExtension("ODIN_GO_NOTIFICATIONS_CHANGED");
     } catch (requestError: any) {
-      setError(requestError?.response?.data?.message || requestError?.response?.data?.error || "Die Notification konnte nicht gelöscht werden.");
+      setError(copy.deleteFailed);
     } finally {
       setActionId(null);
     }
@@ -174,22 +182,22 @@ export default function JarvisNotifications() {
   const showTestPopup = () => {
     setError("");
     if (!extensionConnected) {
-      setError("Der Test-Popup ist nur verfügbar, wenn ODIN GO innerhalb von Jarvis geöffnet und die Extension verbunden ist.");
+      setError(copy.testExtensionRequired);
       return;
     }
     const sent = postToExtension("ODIN_GO_NOTIFICATION_PREVIEW", {
       notification: {
         id: -Date.now(),
-        title: title.trim() || "ODIN GO Test",
-        body: body.trim() || "Die Popup-Zustellung funktioniert in diesem Jarvis-Fenster.",
+        title: title.trim() || copy.testTitle,
+        body: body.trim() || copy.testBody,
         notification_kind: notificationKind,
         recurrence,
-        created_by: user.displayName || "Aktueller Benutzer",
+        created_by: user.displayName || copy.currentUser,
         created_at: new Date().toISOString(),
         preview: true,
       },
     });
-    if (!sent) setError("Der Test-Popup ist nur verfügbar, wenn ODIN GO innerhalb von Jarvis geöffnet ist.");
+    if (!sent) setError(copy.testJarvisRequired);
   };
 
   return (
@@ -198,19 +206,19 @@ export default function JarvisNotifications() {
         <div className="flex items-center gap-3">
           <Bell className="h-6 w-6 text-blue-400" />
           <div>
-            <h1 className="text-xl font-bold">Notifications</h1>
-            <p className="mt-1 text-sm text-slate-400">Benachrichtigungen erscheinen beim Öffnen von Jarvis mittig als Popup.</p>
+            <h1 className="text-xl font-bold">{copy.heading}</h1>
+            <p className="mt-1 text-sm text-slate-400">{copy.subtitle}</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold ${extensionConnected ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-slate-700 bg-slate-950 text-slate-400"}`}>
-            <Radio className="h-3.5 w-3.5" />{extensionConnected ? "Jarvis verbunden" : "Außerhalb von Jarvis"}
+            <Radio className="h-3.5 w-3.5" />{extensionConnected ? copy.connected : copy.outsideJarvis}
           </span>
           <button type="button" onClick={showTestPopup} className="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700">
-            <FlaskConical className="h-4 w-4" /> Test-Popup
+            <FlaskConical className="h-4 w-4" /> {copy.testPopup}
           </button>
           <button type="button" onClick={() => void togglePersonalNotifications()} className={`rounded-lg border px-4 py-2 text-sm font-semibold ${enabled ? "border-blue-500 bg-blue-600 text-white" : "border-slate-600 bg-slate-800 text-slate-300"}`}>
-            {enabled ? "Meine Popups aktiviert" : "Meine Popups deaktiviert"}
+            {enabled ? copy.popupsEnabled : copy.popupsDisabled}
           </button>
         </div>
       </div>
@@ -219,25 +227,22 @@ export default function JarvisNotifications() {
 
       <form onSubmit={create} className={`space-y-3 rounded-xl border p-5 ${notificationKind === "instruction" ? "border-red-500/70 bg-red-950/15 shadow-[0_0_24px_rgba(239,68,68,0.14)]" : "border-slate-700 bg-slate-900"}`}>
         <div className="grid gap-3 sm:grid-cols-2">
-          <button type="button" onClick={() => setNotificationKind("notification")} className={`rounded-lg border px-4 py-3 text-left text-sm font-semibold ${notificationKind === "notification" ? "border-blue-500 bg-blue-600 text-white" : "border-slate-700 bg-slate-950 text-slate-300"}`}>Benachrichtigung</button>
-          <button type="button" onClick={() => setNotificationKind("instruction")} className={`rounded-lg border px-4 py-3 text-left text-sm font-semibold ${notificationKind === "instruction" ? "border-red-500 bg-red-600 text-white" : "border-slate-700 bg-slate-950 text-slate-300"}`}>Anweisung</button>
+          <button type="button" onClick={() => setNotificationKind("notification")} className={`rounded-lg border px-4 py-3 text-left text-sm font-semibold ${notificationKind === "notification" ? "border-blue-500 bg-blue-600 text-white" : "border-slate-700 bg-slate-950 text-slate-300"}`}>{copy.notification}</button>
+          <button type="button" onClick={() => setNotificationKind("instruction")} className={`rounded-lg border px-4 py-3 text-left text-sm font-semibold ${notificationKind === "instruction" ? "border-red-500 bg-red-600 text-white" : "border-slate-700 bg-slate-950 text-slate-300"}`}>{copy.instruction}</button>
         </div>
-        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Titel" className="w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2" />
-        <textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder={notificationKind === "instruction" ? "Anweisung" : "Benachrichtigung"} className="min-h-24 w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2" />
+        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={copy.title} className="w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2" />
+        <textarea value={body} onChange={(event) => setBody(event.target.value)} placeholder={notificationKind === "instruction" ? copy.instruction : copy.notification} className="min-h-24 w-full rounded-xl border border-white/15 bg-slate-900 px-3 py-2" />
 
         <div className="grid gap-3 lg:grid-cols-[220px_minmax(260px,1fr)_auto] lg:items-start">
           <label className="space-y-1.5 text-xs font-semibold text-slate-300">
-            Wiederholung
+            {copy.recurrence}
             <select value={recurrence} onChange={(event) => setRecurrence(event.target.value as Notification["recurrence"])} className="block w-full rounded-xl border border-white/15 bg-slate-950 px-3 py-2.5 text-sm text-slate-100">
-              <option value="once">Einmalig</option>
-              <option value="daily">Täglich</option>
-              <option value="weekly">Wöchentlich</option>
-              <option value="monthly">Monatlich</option>
+              {Object.entries(recurrenceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
           </label>
 
           <div className="relative space-y-1.5">
-            <div className="text-xs font-semibold text-slate-300">Empfänger</div>
+            <div className="text-xs font-semibold text-slate-300">{copy.recipients}</div>
             <button type="button" onClick={() => setRecipientMenuOpen((open) => !open)} className="flex w-full items-center justify-between gap-3 rounded-xl border border-white/15 bg-slate-950 px-3 py-2.5 text-left text-sm text-slate-100">
               <span className="flex min-w-0 items-center gap-2"><Users className="h-4 w-4 shrink-0 text-blue-400" /><span className="truncate">{recipientButtonLabel}</span></span>
               <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition ${recipientMenuOpen ? "rotate-180" : ""}`} />
@@ -245,7 +250,7 @@ export default function JarvisNotifications() {
             {recipientMenuOpen ? (
               <div className="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-600 bg-slate-950 p-2 shadow-2xl">
                 <button type="button" onClick={() => setSelectedRecipientIds([])} className={`mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${selectedRecipientIds.length === 0 ? "bg-blue-600 text-white" : "text-slate-200 hover:bg-slate-800"}`}>
-                  <span>Alle Mitarbeitenden</span><span className="text-xs">{selectedRecipientIds.length === 0 ? "Ausgewählt" : ""}</span>
+                  <span>{copy.allEmployees}</span><span className="text-xs">{selectedRecipientIds.length === 0 ? copy.selected : ""}</span>
                 </button>
                 <div className="my-1 h-px bg-slate-700" />
                 {recipients.map((recipient) => {
@@ -257,14 +262,14 @@ export default function JarvisNotifications() {
                     </label>
                   );
                 })}
-                {!recipients.length ? <p className="px-3 py-2 text-sm text-slate-500">Keine Mitarbeitenden verfügbar.</p> : null}
+                {!recipients.length ? <p className="px-3 py-2 text-sm text-slate-500">{copy.noEmployees}</p> : null}
               </div>
             ) : null}
-            <p className="text-[11px] text-slate-500">Ohne Auswahl wird die Meldung an alle Mitarbeitenden gesendet.</p>
+            <p className="text-[11px] text-slate-500">{copy.recipientsHint}</p>
           </div>
 
           <button disabled={saving} className={`mt-5 inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 font-semibold text-white disabled:opacity-50 ${notificationKind === "instruction" ? "bg-red-600 hover:bg-red-500" : "bg-blue-600 hover:bg-blue-500"}`}>
-            <Plus className="h-4 w-4" /> {saving ? "Wird veröffentlicht..." : "Veröffentlichen"}
+            <Plus className="h-4 w-4" /> {saving ? copy.publishing : copy.publish}
           </button>
         </div>
       </form>
@@ -273,34 +278,34 @@ export default function JarvisNotifications() {
         {items.map((item) => {
           const targetLabel = item.recipients?.length
             ? item.recipients.map((recipient) => recipient.displayName).join(", ")
-            : "Alle Mitarbeitenden";
+            : copy.allEmployees;
           return (
             <article key={item.id} className={`flex flex-col gap-4 rounded-xl border p-4 lg:flex-row lg:items-start lg:justify-between ${!item.active ? "border-slate-800 bg-slate-950 opacity-65" : item.notification_kind === "instruction" ? "border-red-500/70 bg-red-950/15 shadow-[0_0_22px_rgba(239,68,68,0.14)]" : "border-slate-700 bg-slate-900"}`}>
               <div className="min-w-0">
                 <div className="mb-2 flex flex-wrap items-center gap-2">
-                  <span className={`rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${item.notification_kind === "instruction" ? "bg-red-500/20 text-red-300" : "bg-blue-500/20 text-blue-300"}`}>{item.notification_kind === "instruction" ? "Anweisung" : "Benachrichtigung"}</span>
+                  <span className={`rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider ${item.notification_kind === "instruction" ? "bg-red-500/20 text-red-300" : "bg-blue-500/20 text-blue-300"}`}>{item.notification_kind === "instruction" ? copy.instruction : copy.notification}</span>
                   <span className="text-xs text-slate-400">{recurrenceLabels[item.recurrence]}</span>
-                  <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-700 text-slate-300"}`}>{item.active ? "Aktiv" : "Deaktiviert"}</span>
+                  <span className={`rounded-full px-2 py-1 text-[10px] font-bold ${item.active ? "bg-emerald-500/15 text-emerald-300" : "bg-slate-700 text-slate-300"}`}>{item.active ? copy.active : copy.inactive}</span>
                 </div>
                 <h2 className="font-semibold">{item.title}</h2>
                 <p className="mt-1 whitespace-pre-wrap text-sm text-slate-400">{item.body}</p>
-                <p className="mt-3 flex items-start gap-1.5 text-xs text-slate-400"><Users className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>Empfänger: {targetLabel}</span></p>
-                <p className="mt-1 text-xs text-slate-500">Erstellt von {item.created_by || "Unbekannt"} · {new Date(item.created_at).toLocaleString("de-DE")}</p>
+                <p className="mt-3 flex items-start gap-1.5 text-xs text-slate-400"><Users className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{copy.recipients}: {targetLabel}</span></p>
+                <p className="mt-1 text-xs text-slate-500">{copy.createdBy} {item.created_by || copy.unknown} · {new Date(item.created_at).toLocaleString(locale)}</p>
               </div>
               {user.isAdmin ? (
                 <div className="flex shrink-0 flex-wrap gap-2">
                   <button disabled={actionId === item.id} onClick={() => void toggle(item)} className="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700 disabled:opacity-50">
-                    {item.active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}{item.active ? "Deaktivieren" : "Aktivieren"}
+                    {item.active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}{item.active ? copy.deactivate : copy.activate}
                   </button>
                   <button disabled={actionId === item.id} onClick={() => void remove(item)} className="inline-flex items-center gap-2 rounded-lg border border-red-500/40 bg-red-950/40 px-3 py-2 text-xs font-semibold text-red-200 hover:bg-red-900/60 disabled:opacity-50">
-                    <Trash2 className="h-4 w-4" /> Löschen
+                    <Trash2 className="h-4 w-4" /> {copy.delete}
                   </button>
                 </div>
               ) : null}
             </article>
           );
         })}
-        {!items.length && <p className="text-sm text-slate-500">Noch keine Notifications angelegt.</p>}
+        {!items.length && <p className="text-sm text-slate-500">{copy.empty}</p>}
       </div>
     </div>
   );
