@@ -18,6 +18,7 @@ import {
   FolderKanban,
   HeartPulse,
   LockKeyhole,
+  MessageSquare,
   MapPin,
   Minimize2,
   Moon,
@@ -50,6 +51,7 @@ const ShiftplanControlCenter = lazy(() => import("./ShiftplanControlCenter"));
 const Users = lazy(() => import("./Users"));
 const ProjectsPage = lazy(() => import("./ProjectsPage"));
 const JarvisNotifications = lazy(() => import("./JarvisNotifications"));
+const FeedbackPage = lazy(() => import("./FeedbackPage"));
 const ShiftHandover = lazy(() => import("./ShiftHandover"));
 const PollsPanel = lazy(() => import("../PollsPanel").then((module) => ({ default: module.PollsPanel })));
 const EqixHistoryPanel = lazy(() => import("../EqixHistoryPanel"));
@@ -99,6 +101,7 @@ const PRIMARY_TABS: WorkspaceTab[] = [
   { id: "wellbeing", label: { de: "Wellbeing", en: "Wellbeing" }, path: "/wellbeing", icon: HeartPulse, group: "primary" },
   { id: "projects", label: { de: "Projekte", en: "Projects" }, path: "/projects", icon: FolderKanban, group: "primary" },
   { id: "notifications", label: { de: "Notifications", en: "Notifications" }, path: "/notifications", icon: Bell, group: "primary" },
+  { id: "feedback", label: { de: "Feedback", en: "Feedback" }, path: "/feedback", icon: MessageSquare, group: "primary" },
   { id: "polls", label: { de: "Umfragen", en: "Surveys" }, path: "/polls", icon: Vote, group: "primary" },
 ];
 
@@ -528,6 +531,7 @@ export default function OdinGoWorkspace() {
             <Route path="users" element={<PageGuard pageKey="user_management" min="write"><Users /></PageGuard>} />
             <Route path="projects" element={<ProjectsPage />} />
              <Route path="notifications" element={<JarvisNotifications />} />
+             <Route path="feedback" element={<FeedbackPage />} />
              <Route path="polls" element={<PollsPanel />} />
             <Route path="*" element={<Navigate to={`shiftplan${location.search}`} replace />} />
           </Routes>

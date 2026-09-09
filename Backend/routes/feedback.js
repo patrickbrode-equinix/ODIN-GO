@@ -12,6 +12,18 @@ import { config } from "../config/index.js";
 
 const router = express.Router();
 
+function isPatrickBrode(user) {
+  const normalize = (value) => String(value || '').trim().toLocaleLowerCase('de-DE').replace(/\s+/g, ' ');
+  const displayName = normalize(user?.displayName);
+  const email = normalize(user?.email);
+  return displayName === 'patrick brode' || email === 'patrick.brode@eu.equinix.com' || email === 'patrick.brode@equinix.com';
+}
+
+function requirePatrickBrode(req, res, next) {
+  if (isPatrickBrode(req.user)) return next();
+  return res.status(403).json({ error: 'Nur Patrick Brode darf den Feedback-Status bearbeiten.' });
+}
+
 /* ------------------------------------------------ */
 /* MULTER – Screenshot in Memory (kein Disk)        */
 /* ------------------------------------------------ */
@@ -53,11 +65,12 @@ async function saveFeedbackToDb(data) {
 router.get(
   "/entries",
   requireAuth,
-  requirePageAccess("admin_settings", "view"),
   async (req, res) => {
     const rawLimit = Number.parseInt(String(req.query.limit ?? "50"), 10);
     const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
 
+    const archived = String(req.query.archived || '').trim().toLowerCase() === 'true';
+    const isOwner = !isPatrickBrode(req.user);
     try {
       const { rows } = await db.query(
         `SELECT
@@ -69,11 +82,18 @@ router.get(
            sender_email AS "senderEmail",
            screenshot_name AS "screenshotName",
            status,
+           admin_comment AS "adminComment",
+           status_updated_by AS "statusUpdatedBy",
+           status_updated_at AS "statusUpdatedAt",
+           archived_at AS "archivedAt",
+           archived_by AS "archivedBy",
            created_at AS "createdAt"
          FROM feedback_entries
+         WHERE archived_at IS ${archived ? 'NOT' : ''} NULL
+           AND ($2::boolean = FALSE OR sender_email = $3)
          ORDER BY created_at DESC
          LIMIT $1`,
-        [limit]
+        [limit, isOwner, req.user?.email || '']
       );
 
       res.json(rows);
@@ -175,26 +195,57 @@ const VALID_STATUSES = ['open', 'in_progress', 'done'];
 router.patch(
   "/entries/:id/status",
   requireAuth,
-  requirePageAccess("admin_settings", "write"),
+  requirePatrickBrode,
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
-      const { status } = req.body;
+      const { status, comment } = req.body;
       if (!status || !VALID_STATUSES.includes(status)) {
         return res.status(400).json({ error: `Status muss einer von ${VALID_STATUSES.join(', ')} sein` });
       }
+      const adminComment = String(comment || '').trim();
+      if (!adminComment) return res.status(400).json({ error: 'Ein Kommentar ist für die Statusänderung erforderlich.' });
       const { rows } = await db.query(
-        `UPDATE feedback_entries SET status = $1 WHERE id = $2
+        `UPDATE feedback_entries
+            SET status = $1,
+                admin_comment = $2,
+                status_updated_by = $3,
+                status_updated_at = NOW()
+          WHERE id = $4 AND archived_at IS NULL
          RETURNING id, type, title, description, sender_name AS "senderName",
                    sender_email AS "senderEmail", screenshot_name AS "screenshotName",
-                   status, created_at AS "createdAt"`,
-        [status, id]
+                   status, admin_comment AS "adminComment", status_updated_by AS "statusUpdatedBy",
+                   status_updated_at AS "statusUpdatedAt", created_at AS "createdAt"`,
+        [status, adminComment, req.user.displayName || req.user.email || 'Patrick Brode', id]
       );
       if (!rows.length) return res.status(404).json({ error: "Feedback-Eintrag nicht gefunden" });
       res.json(rows[0]);
     } catch (err) {
       console.error("[FEEDBACK] Status update error:", err);
       res.status(500).json({ error: "Status konnte nicht aktualisiert werden." });
+    }
+  }
+);
+
+router.patch(
+  "/entries/:id/archive",
+  requireAuth,
+  requirePatrickBrode,
+  async (req, res) => {
+    try {
+      const id = Number.parseInt(req.params.id, 10);
+      const { rows } = await db.query(
+        `UPDATE feedback_entries
+            SET archived_at = NOW(), archived_by = $1
+          WHERE id = $2 AND archived_at IS NULL
+          RETURNING id, archived_at AS "archivedAt", archived_by AS "archivedBy"`,
+        [req.user.displayName || req.user.email || 'Patrick Brode', id]
+      );
+      if (!rows.length) return res.status(404).json({ error: 'Feedback-Eintrag nicht gefunden oder bereits archiviert.' });
+      res.json(rows[0]);
+    } catch (err) {
+      console.error('[FEEDBACK] Archive error:', err);
+      res.status(500).json({ error: 'Feedback konnte nicht archiviert werden.' });
     }
   }
 );
@@ -206,7 +257,7 @@ router.patch(
 router.delete(
   "/entries/:id",
   requireAuth,
-  requirePageAccess("admin_settings", "write"),
+  requirePatrickBrode,
   async (req, res) => {
     try {
       const id = parseInt(req.params.id);
