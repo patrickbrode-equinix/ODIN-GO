@@ -64,7 +64,7 @@ function statusLabel(value: string) {
 }
 
 const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = false }: { draft: Draft; compact?: boolean }) {
-  const { employees, days, shiftsByEmployee, coloByEmployee, coloPool } = useMemo(() => {
+  const { employees, days, shiftsByEmployee, coloByEmployee, coloPool, dispatcherPool } = useMemo(() => {
     const employeeNames = [...new Set((draft.shifts_json || []).map((entry) => entry.employee_name))]
       .sort((left, right) => left.localeCompare(right, "de"));
     const [year, month] = draft.month.split("-").map(Number);
