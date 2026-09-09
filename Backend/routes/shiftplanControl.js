@@ -612,7 +612,6 @@ function hasSubmittedEmployeePreferences(preferenceRow) {
     || hasEntries(preferenceRow.blocked_days)
     || (Number.isInteger(Number(preferenceRow.max_nights_per_month)) && preferenceRow.max_nights_per_month !== null)
     || String(preferenceRow.notes || '').trim().length > 0
-    || String(preferenceRow.workload_preference || 'normal').trim().toLowerCase() !== 'normal'
   );
 }
 

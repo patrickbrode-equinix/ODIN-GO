@@ -57,7 +57,6 @@ interface UserPreferences {
   preferredDays?: string[];
   blockedDays?: string[];
   avoidColleagues?: string[];
-  workloadPreference?: string | null;
   monthlyPreferences?: Record<string, unknown> | null;
   notes?: string | null;
   updatedAt?: string | null;
@@ -359,7 +358,6 @@ export default function Users() {
         ["Gesperrte Tage", preferences.blockedDays],
         ["Zu vermeidende Kollegen", preferences.avoidColleagues],
         ["Max. Nachtschichten/Monat", preferences.maxNightsPerMonth],
-        ["Arbeitslastpräferenz", preferences.workloadPreference],
         ["Monatliche Präferenzen", preferences.monthlyPreferences],
         ["Notizen", preferences.notes],
         ["Zuletzt geändert", preferences.updatedAt ? formatAbsoluteDateTime(preferences.updatedAt, locale) : null],
@@ -744,11 +742,10 @@ export default function Users() {
                                     "border-amber-500/20"
                                   )}
                                   {renderPreferenceCard(
-                                    language === "de" ? "Belastung" : "Workload",
-                                    language === "de" ? "Persoenliche Belastungsgrenzen." : "Personal workload limits.",
+                                    language === "de" ? "Nachtschichten" : "Night shifts",
+                                    language === "de" ? "Persoenliches Nachtlimit." : "Personal night-shift limit.",
                                     <div className="space-y-2 text-xs">
                                       <div><span className="text-muted-foreground">Nachtlimit:</span> <strong>{renderPreferenceValue(prefs.maxNightsPerMonth)}</strong></div>
-                                      <div><span className="text-muted-foreground">Arbeitslast:</span> <strong>{renderPreferenceValue(prefs.workloadPreference)}</strong></div>
                                     </div>,
                                     "border-sky-500/20"
                                   )}
@@ -772,7 +769,6 @@ export default function Users() {
                               <div><strong>{language === "de" ? "Gesperrte Tage" : "Blocked days"}:</strong> {renderPreferenceValue(prefs.blockedDays)}</div>
                               <div><strong>{language === "de" ? "Feiertagswünsche" : "Holiday wishes"}:</strong> {renderPreferenceValue(prefs.preferredHolidays)}</div>
                               <div><strong>{language === "de" ? "Kollegen vermeiden" : "Avoid colleagues"}:</strong> {renderPreferenceValue(prefs.avoidColleagues)}</div>
-                              <div><strong>{language === "de" ? "Arbeitslast" : "Workload"}:</strong> {renderPreferenceValue(prefs.workloadPreference)}</div>
                               <div><strong>{language === "de" ? "Notizen" : "Notes"}:</strong> {renderPreferenceValue(prefs.notes)}</div>
                             </div>
                           ) : (

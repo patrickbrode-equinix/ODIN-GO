@@ -35,17 +35,11 @@ const COPY = {
     wholeYearHint: 'Die bisherigen Schichtwünsche gelten als Ganzjahreswunsch.',
     holidays: 'Feiertage, an denen du nicht arbeiten möchtest',
     holidaysHelp: 'Wähle Feiertage aus, an denen du nicht eingeplant werden möchtest. Die Auswahl wird als persönlicher Wunsch berücksichtigt.',
-    nightsLoad: 'Schichten, Wochenenden & Belastung',
+    nightsLoad: 'Schichten und Wochenenden',
     nightsLoadHelp: 'Nachtschichten zählen als vollständiger 7-Tage-Block. Früh- und Spätschichten sowie Wochenenden werden pro Monat gezählt.',
     maxNights: 'Nachtschicht-Blöcke pro Monat',
     maxWeekends: 'Wochenenddienste pro Monat',
     noLimit: 'Unbegrenzt',
-    workload: 'Belastungspräferenz',
-    workloadLight: 'Reduziert',
-    workloadNormal: 'Normal',
-    workloadHeavy: 'Erhöht',
-    workloadBody: 'Belastung beschreibt, wie stark du insgesamt verplant werden möchtest. Reduziert bevorzugt eine eher leichtere Planung, Normal steht für die übliche Verteilung und Erhöht signalisiert, dass du bei Bedarf auch stärker berücksichtigt werden kannst.',
-    workloadHint: 'Diese Einstellung ist ein weicher Wunsch. Harte Regeln, gesetzliche Grenzen, faire Verteilung und Mindestbesetzung haben weiterhin Vorrang vor der Belastungspräferenz.',
     weekDays: 'Tage, an denen du nicht arbeiten kannst',
     weekDaysHelp: 'Ausgewählte Wochentage sind verbindlich gesperrt. Die automatische Planung darf dich an diesen Tagen niemals einteilen.',
     weekDayLegend: 'Ausgewählte Tage sind ein absolutes Tabu für die Planung.',
@@ -76,17 +70,11 @@ const COPY = {
     wholeYearHint: 'The existing shift wishes apply as a whole-year preference.',
     holidays: 'Holidays you do not want to work',
     holidaysHelp: 'Choose holidays on which you do not want to be scheduled. The selection is treated as a personal preference.',
-    nightsLoad: 'Shifts, weekends & workload',
+    nightsLoad: 'Shifts and weekends',
     nightsLoadHelp: 'Night shifts count as a complete 7-day block. Early/late shifts and weekend duties are counted per month.',
     maxNights: 'Night-shift blocks per month',
     maxWeekends: 'Weekend duties per month',
     noLimit: 'Unlimited',
-    workload: 'Workload preference',
-    workloadLight: 'Reduced',
-    workloadNormal: 'Normal',
-    workloadHeavy: 'Increased',
-    workloadBody: 'Workload describes how heavily you want to be scheduled overall. Reduced prefers a lighter plan, Normal is the standard distribution, and Increased signals that you can be considered more strongly if needed.',
-    workloadHint: 'This is a soft preference. Hard rules, legal limits, fair distribution, and minimum staffing still take priority over workload preference.',
     weekDays: 'Days you cannot work',
     weekDaysHelp: 'Selected weekdays are binding exclusions. Automatic planning must never assign you on those days.',
     weekDayLegend: 'Selected days are absolute exclusions for planning.',
@@ -130,7 +118,6 @@ interface Preferences {
   preferred_days: number[];
   blocked_days: number[];
   avoid_colleagues: string[];
-  workload_preference: string;
   notes: string;
 }
 
@@ -202,7 +189,7 @@ const DEFAULTS: Preferences = {
   preferred_shifts: [], unwanted_shifts: [], preferred_holidays: [], max_nights_per_month: null,
   monthly_preferences: {},
   preferred_days: [], blocked_days: [], avoid_colleagues: [],
-  max_weekends_per_month: null, workload_preference: 'normal', notes: '',
+  max_weekends_per_month: null, notes: '',
 };
 
 function applyEmployeeSelectableShiftDefinitions(
@@ -312,7 +299,7 @@ export default function EmployeePreferences() {
         const monthly = Object.fromEntries(Object.entries(stored.monthly_preferences || {}).map(([key, value]: [string, any]) => [key, { ...value, preferred_shifts: allowed(value?.preferred_shifts), unwanted_shifts: allowed(value?.unwanted_shifts) }]));
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
-          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), workload_preference: stored.workload_preference || 'normal', notes: stored.notes || '',
+          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), notes: stored.notes || '',
         });
       } else {
         setPrefs(DEFAULTS);
@@ -536,7 +523,7 @@ export default function EmployeePreferences() {
         </div>
       </EnterpriseCard>
 
-      {/* Max Nights + Workload */}
+      {/* Night blocks and weekend duties */}
       <EnterpriseCard>
         <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3">
           <Moon className="w-4 h-4 text-indigo-400" />
@@ -560,21 +547,6 @@ export default function EmployeePreferences() {
             <input type="number" value={prefs.max_weekends_per_month ?? ''} onChange={e => update('max_weekends_per_month', e.target.value ? parseInt(e.target.value) : null)}
               className="w-full mt-1 px-3 py-2 text-sm rounded-lg border border-border/30 bg-background/40 text-foreground" min="0" max="8" placeholder={copy.noLimit} />
           </div>
-          <div>
-            <label className="text-xs text-muted-foreground">{copy.workload}</label>
-            <select value={prefs.workload_preference} onChange={e => update('workload_preference', e.target.value)}
-              className="w-full mt-1 px-3 py-2 text-sm rounded-lg border border-border/30 bg-background/40 text-foreground">
-              <option value="light">{copy.workloadLight}</option>
-              <option value="normal">{copy.workloadNormal}</option>
-              <option value="heavy">{copy.workloadHeavy}</option>
-            </select>
-            <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-              {copy.workloadBody}
-            </p>
-          </div>
-        </div>
-        <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/10 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          {copy.workloadHint}
         </div>
       </EnterpriseCard>
 

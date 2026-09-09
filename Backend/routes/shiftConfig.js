@@ -368,7 +368,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, workload_preference, notes } = req.body;
+    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, notes } = req.body;
     // Half shifts are operational planning details, not employee-selectable preferences.
     // Filter them server-side as well so stale browser bundles cannot reintroduce them.
     const employeePreferenceExcludedShiftCodes = new Set(['HE1', 'HE2', 'HL1', 'HL2']);
@@ -412,7 +412,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         JSON.stringify([]),
         JSON.stringify(Array.isArray(blocked_days) ? blocked_days : []),
         JSON.stringify([]),
-        workload_preference || 'normal',
+        'normal',
          notes || null,
          JSON.stringify(monthly_preferences),
       ]
