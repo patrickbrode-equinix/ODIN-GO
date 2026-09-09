@@ -13,6 +13,7 @@ import { toast } from "sonner"; // [NEW]
 import { ShiftplanTable } from "../shiftplan/ShiftplanTable";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { getShiftKindStyle, SHIFT_COLOR_LEGEND } from "../shiftplan/shiftColors";
+import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 import { ShiftContextMenu } from "../shiftplan/ShiftContextMenu";
 import { useShiftSelection } from "../../hooks/useShiftSelection";
 import { useHiddenEmployees } from "../../hooks/useHiddenEmployees";
@@ -1316,6 +1317,7 @@ export default function Shiftplan() {
             <div className="flex flex-wrap items-center gap-1.5" aria-label="Farblegende Schichten">
               {SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold"><strong>{item.code}</strong><span className="hidden 2xl:inline">{item.label}</span></span>)}
             </div>
+            <ShiftTimeLegend shiftTimes={shiftTimes} />
             <div className="theme-divider mx-1 h-5 w-px" />
             {/* FEIERTAGE BUTTON: left-click toggles overlay, right-click shows list */}
             <div className="relative">
@@ -1670,7 +1672,6 @@ export default function Shiftplan() {
                 constraintsMap={constraintsMap}
                 constraintViolations={constraintViolations}
                 attendanceMap={attendanceMap}
-                shiftTimes={shiftTimes}
               />
               {contextMenu && (
                 <ShiftContextMenu

@@ -11,7 +11,6 @@ import {
   Users,
 } from "lucide-react";
 
-import { shiftTypes } from "../../store/shiftStore";
 import { useAuth } from "../../context/AuthContext";
 import { LANGUAGE_TO_LOCALE, useLanguage } from "../../context/LanguageContext";
 import { fetchSchedule } from "../shiftplan/shiftplan.api";
@@ -22,6 +21,7 @@ import { getRoleDef, useWeekplanRoleStore } from "../../store/weekplanRoleStore"
 import { isColoEmployee, parseColoPool } from "../../utils/colo";
 import { api } from "../../api/api";
 import type { EnrichedCommitTicket } from "../commit/commit.types";
+import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
@@ -52,7 +52,6 @@ interface SubGroup {
 interface EmployeeRow {
   name:      string;
   shiftCode: string;
-  shiftTime: string;
   cat:       ShiftCat;
   roleKey?:  string;
   isColo?: boolean;
@@ -444,7 +443,7 @@ function EmployeeCard({
                 {employee.isDispatcher ? <span className="ml-1.5 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1 py-px text-[8px] font-black text-pink-200">DP</span> : null}
               </div>
               <div className="mt-0.5 text-[7.5px] font-black uppercase tracking-[0.22em]" style={{ color: `${hex}70` }}>
-                {employee.shiftCode} · {employee.shiftTime}
+                {employee.shiftCode}
               </div>
               {employee.roleKey && getRoleDef(employee.roleKey) && (
                 <div className="mt-1 text-[8px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>
@@ -904,7 +903,6 @@ export default function TagesplanungPage() {
         return {
           name: name.replace(",", "").trim(),
           shiftCode,
-          shiftTime: shiftTypes[shiftCode]?.time || "—",
           cat: SHIFT_CAT[shiftCode] ?? "special",
           roleKey: getRole(name, todayKey),
           isColo: isColoEmployee(name, coloPool),
@@ -1038,6 +1036,7 @@ export default function TagesplanungPage() {
                     {nowDate.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" })}
                   </span>
                 </div>
+                <ShiftTimeLegend compact className="mt-2" />
               </div>
             </div>
 

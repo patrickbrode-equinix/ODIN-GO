@@ -18,8 +18,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { getShiftColorKind, getShiftColorStyle, getShiftKindStyle, SHIFT_COLOR_LEGEND } from "../shiftplan/shiftColors";
 import { isColoEmployee } from "../../utils/colo";
-import { shiftTypes } from "../../store/shiftStore";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
+import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 
 type DraftSummary = {
   id: number;
@@ -63,7 +63,7 @@ function statusLabel(value: string) {
   return "Entwurf";
 }
 
-const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = false, shiftTimes = {} }: { draft: Draft; compact?: boolean; shiftTimes?: ShiftTimeMap }) {
+const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = false }: { draft: Draft; compact?: boolean }) {
   const { employees, days, shiftsByEmployee, coloByEmployee, coloPool } = useMemo(() => {
     const employeeNames = [...new Set((draft.shifts_json || []).map((entry) => entry.employee_name))]
       .sort((left, right) => left.localeCompare(right, "de"));
@@ -112,11 +112,10 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
                 const code = shiftsByEmployee.get(employee)?.get(value) || "";
                 const coloAssignment = coloByEmployee.get(employee)?.get(value);
                 const kind = getShiftColorKind(code);
-                const shiftTime = code ? shiftTimes[code.trim().toUpperCase()] || shiftTypes[code]?.time || "--:--" : null;
                 return (
                   <td key={value} className="border-l border-white/6 p-1 text-center">
                     <div className="flex flex-col items-center gap-1">
-                      {code ? <><span style={getShiftColorStyle(code)} className={`shift-badge shift-badge-${kind} inline-flex ${compact ? "min-h-5 min-w-6 px-1" : "min-h-7 min-w-8 px-1.5"} items-center justify-center rounded-md border font-bold`}>{code}</span><span className="whitespace-nowrap text-[8px] font-medium leading-none text-muted-foreground">{shiftTime}</span></> : null}
+                      {code ? <span style={getShiftColorStyle(code)} className={`shift-badge shift-badge-${kind} inline-flex ${compact ? "min-h-5 min-w-6 px-1" : "min-h-7 min-w-8 px-1.5"} items-center justify-center rounded-md border font-bold`}>{code}</span> : null}
                       {coloAssignment ? <span title={coloAssignment.comment} className="inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1 py-px text-[8px] font-black text-cyan-100">CO</span> : null}
                     </div>
                   </td>
@@ -130,7 +129,7 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
   );
 });
 
-function LazyYearDraftTable({ draft, shiftTimes }: { draft: DraftSummary; shiftTimes: ShiftTimeMap }) {
+function LazyYearDraftTable({ draft }: { draft: DraftSummary }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [visible, setVisible] = useState(false);
   const [schedule, setSchedule] = useState<Draft | null>(null);
@@ -166,7 +165,7 @@ function LazyYearDraftTable({ draft, shiftTimes }: { draft: DraftSummary; shiftT
       {loadError
         ? <div className="flex min-h-72 items-center justify-center text-sm text-red-300">{loadError}</div>
         : schedule
-        ? <DraftScheduleTable draft={schedule} compact shiftTimes={shiftTimes} />
+        ? <DraftScheduleTable draft={schedule} compact />
         : <div className="flex min-h-72 items-center justify-center text-sm text-muted-foreground">Monatsplan wird beim Scrollen geladen.</div>}
     </div>
   );
@@ -378,7 +377,7 @@ export default function ShiftplanDrafts() {
                 <div><h3 className="text-lg font-bold text-foreground">{draft.title || formatMonth(draft.month)} <span className="text-xs font-normal text-muted-foreground">v{draft.version}</span></h3><div className="mt-1 text-xs text-muted-foreground">{draft.feedback_count || 0} Kommentare · {draft.approve_votes || 0} Zustimmung · {draft.needs_changes_votes || 0} Änderungswünsche</div></div>
                 <Button type="button" variant="outline" onClick={() => void openMonthFromYear(draft)}>Monat öffnen</Button>
               </div>
-              <LazyYearDraftTable draft={draft} shiftTimes={shiftTimes} />
+              <LazyYearDraftTable draft={draft} />
             </section>
           ))}
           {!yearDrafts.length && !loading ? <div className="liquid-panel rounded-[26px] p-12 text-center text-muted-foreground">Für {selectedYear} sind noch keine gespeicherten Drafts vorhanden.</div> : null}
@@ -412,9 +411,10 @@ export default function ShiftplanDrafts() {
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}</div>
+                  <ShiftTimeLegend shiftTimes={shiftTimes} className="mt-2" />
                 </section>
 
-                <section className="liquid-panel overflow-hidden rounded-[26px]"><DraftScheduleTable draft={activeDraft} shiftTimes={shiftTimes} /></section>
+                <section className="liquid-panel overflow-hidden rounded-[26px]"><DraftScheduleTable draft={activeDraft} /></section>
 
                 <section className="grid gap-5 lg:grid-cols-2">
                   <div className="liquid-panel rounded-[26px] p-5">
