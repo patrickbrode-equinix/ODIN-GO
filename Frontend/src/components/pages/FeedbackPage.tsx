@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Archive, Bug, CheckCircle2, ClipboardList, Lightbulb, Loader2, MessageSquare, Send, UserRound } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Archive, Bug, CheckCircle2, ClipboardList, Lightbulb, Loader2, MessageSquare, Paperclip, Send, UserRound, X } from 'lucide-react';
 import { api } from '../../api/api';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
@@ -28,6 +28,7 @@ const COPY = {
     title: 'Feedback', subtitle: 'Bugs und Verbesserungsvorschläge strukturiert erfassen und nachverfolgen.',
     create: 'Neues Feedback', type: 'Art', bug: 'Bug', improvement: 'Verbesserung',
     subject: 'Titel', subjectPlaceholder: 'Kurze Zusammenfassung', description: 'Beschreibung', descriptionPlaceholder: 'Was ist passiert oder was sollte verbessert werden?',
+    attachment: 'Screenshot anhängen', attachmentHint: 'PNG, JPEG, GIF oder WebP, maximal 10 MB', chooseScreenshot: 'Screenshot auswählen', removeScreenshot: 'Screenshot entfernen',
     submit: 'Feedback speichern', sending: 'Wird gespeichert…', active: 'Aktiv', archive: 'Archiv',
     empty: 'Noch keine Einträge vorhanden.', created: 'Erstellt von', statusOpen: 'Open', statusProgress: 'In Progress', statusResolved: 'Resolved',
     comment: 'Kommentar von Patrick Brode', commentPlaceholder: 'Statusänderung begründen oder Ergebnis dokumentieren…',
@@ -39,6 +40,7 @@ const COPY = {
     title: 'Feedback', subtitle: 'Capture and track bugs and improvement ideas in one place.',
     create: 'New feedback', type: 'Type', bug: 'Bug', improvement: 'Improvement',
     subject: 'Title', subjectPlaceholder: 'Short summary', description: 'Description', descriptionPlaceholder: 'What happened or what should be improved?',
+    attachment: 'Attach screenshot', attachmentHint: 'PNG, JPEG, GIF, or WebP, maximum 10 MB', chooseScreenshot: 'Choose screenshot', removeScreenshot: 'Remove screenshot',
     submit: 'Save feedback', sending: 'Saving…', active: 'Active', archive: 'Archive',
     empty: 'No entries yet.', created: 'Created by', statusOpen: 'Open', statusProgress: 'In Progress', statusResolved: 'Resolved',
     comment: 'Comment by Patrick Brode', commentPlaceholder: 'Explain the status change or document the outcome…',
@@ -63,6 +65,7 @@ export default function FeedbackPage() {
   const [type, setType] = useState<FeedbackType>('Bug');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [screenshot, setScreenshot] = useState<File | null>(null);
   const [entries, setEntries] = useState<FeedbackEntry[]>([]);
   const [archived, setArchived] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -70,6 +73,7 @@ export default function FeedbackPage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null);
   const [comments, setComments] = useState<Record<number, string>>({});
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
+  const screenshotInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,9 +100,12 @@ export default function FeedbackPage() {
       body.append('title', title.trim());
       body.append('description', description.trim());
       body.append('route', window.location.pathname);
+      if (screenshot) body.append('screenshot', screenshot);
       await api.post('/feedback', body, { headers: { 'Content-Type': 'multipart/form-data' } });
       setTitle('');
       setDescription('');
+      setScreenshot(null);
+      if (screenshotInputRef.current) screenshotInputRef.current.value = '';
       setMessage({ text: language === 'de' ? 'Feedback wurde gespeichert.' : 'Feedback was saved.' });
       if (!archived) await load();
     } catch (error) {
@@ -162,6 +169,21 @@ export default function FeedbackPage() {
           <div className="space-y-3">
             <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={copy.subjectPlaceholder} className="w-full rounded-xl border border-border/60 bg-background/65 px-3 py-2.5 text-sm text-foreground outline-none focus:border-sky-500/60" aria-label={copy.subject} />
             <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder={copy.descriptionPlaceholder} className="min-h-28 w-full rounded-xl border border-border/60 bg-background/65 px-3 py-2.5 text-sm text-foreground outline-none focus:border-sky-500/60" aria-label={copy.description} />
+            <div>
+              <div className="mb-1.5 text-sm font-medium text-foreground">{copy.attachment}</div>
+              {screenshot ? (
+                <div className="flex items-center gap-3 rounded-xl border border-border/60 bg-background/50 px-3 py-2 text-sm text-foreground">
+                  <Paperclip className="h-4 w-4 shrink-0 text-sky-400" />
+                  <span className="min-w-0 flex-1 truncate">{screenshot.name}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{Math.ceil(screenshot.size / 1024)} KB</span>
+                  <button type="button" onClick={() => { setScreenshot(null); if (screenshotInputRef.current) screenshotInputRef.current.value = ''; }} className="rounded-md p-1 text-muted-foreground hover:bg-red-500/10 hover:text-red-300" title={copy.removeScreenshot} aria-label={copy.removeScreenshot}><X className="h-4 w-4" /></button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => screenshotInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-xl border border-dashed border-border/70 bg-background/40 px-3 py-2 text-sm font-medium text-muted-foreground transition hover:border-sky-500/50 hover:bg-sky-500/5 hover:text-sky-200"><Paperclip className="h-4 w-4" />{copy.chooseScreenshot}</button>
+              )}
+              <input ref={screenshotInputRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) setScreenshot(file); }} />
+              <p className="mt-1.5 text-xs text-muted-foreground">{copy.attachmentHint}</p>
+            </div>
             <div className="flex justify-end"><button type="button" onClick={() => void submit()} disabled={saving || !title.trim() || !description.trim()} className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:opacity-50"><Send className="h-4 w-4" />{saving ? copy.sending : copy.submit}</button></div>
           </div>
         </div>
