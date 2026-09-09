@@ -397,6 +397,8 @@ export type TranslationKey =
   | "dashboardInfo.removeAutoDeletion"
   /* ── ProjectsPanel ── */
   | "projects.createNewProject"
+  | "projects.title"
+  | "projects.subtitle"
   | "projects.projectNameLabel"
   | "projects.projectNamePlaceholder"
   | "projects.responsibleLabel"
@@ -416,6 +418,9 @@ export type TranslationKey =
   | "projects.completedSection"
   | "projects.noProjects"
   | "projects.createFirstButton"
+  | "projects.participantsLabel"
+  | "projects.participantsHint"
+  | "projects.deleteConfirm"
   /* ── Register ── */
   | "register.registerFailed"
   | "register.title"
@@ -1618,6 +1623,8 @@ const TRANSLATIONS: Record<TranslationKey, Record<LanguageCode, string>> = {
   "dashboardInfo.autoDeletion": { de: "Automatische Löschung", en: "Automatic deletion" },
   "dashboardInfo.removeAutoDeletion": { de: "Auto-Löschung entfernen", en: "Remove auto deletion" },
   /* ── ProjectsPanel ── */
+  "projects.title": { de: "Projekte", en: "Projects" },
+  "projects.subtitle": { de: "Projektstatus, Beschreibung und beteiligte Mitarbeiter zentral pflegen.", en: "Manage project status, descriptions, and participating employees in one place." },
   "projects.createNewProject": { de: "Neues Projekt erstellen", en: "Create new project" },
   "projects.projectNameLabel": { de: "Projektname *", en: "Project name *" },
   "projects.projectNamePlaceholder": { de: "Projektname", en: "Project name" },
@@ -1638,6 +1645,9 @@ const TRANSLATIONS: Record<TranslationKey, Record<LanguageCode, string>> = {
   "projects.completedSection": { de: "Abgeschlossen", en: "Completed" },
   "projects.noProjects": { de: "Noch keine Projekte vorhanden.", en: "No projects available yet." },
   "projects.createFirstButton": { de: "Erstes Projekt erstellen", en: "Create first project" },
+  "projects.participantsLabel": { de: "Teilnehmende Mitarbeiter", en: "Participating employees" },
+  "projects.participantsHint": { de: "Mehrere Einträge mit Strg oder Umschalt auswählen.", en: "Use Ctrl or Shift to select multiple employees." },
+  "projects.deleteConfirm": { de: "Projekt \"{name}\" wirklich löschen?", en: "Delete project \"{name}\"?" },
   /* ── Register ── */
   "register.registerFailed": { de: "Registrierung fehlgeschlagen", en: "Registration failed" },
   "register.title": { de: "Konto registrieren", en: "Register account" },

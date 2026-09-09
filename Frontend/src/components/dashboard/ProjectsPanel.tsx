@@ -82,8 +82,7 @@ function CreateProjectForm({
   defaultCreator: string;
   employees: string[];
 }) {
-  const { language, t } = useLanguage();
-  const isGerman = language === "de";
+  const { t } = useLanguage();
   const [name, setName] = useState("");
   const [responsible, setResponsible] = useState("");
   const [expectedDone, setExpectedDone] = useState("");
@@ -182,11 +181,11 @@ function CreateProjectForm({
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-slate-400">{isGerman ? "Teilnehmende Mitarbeiter" : "Participating employees"}</Label>
+        <Label className="text-xs text-slate-400">{t("projects.participantsLabel")}</Label>
         <select multiple value={participants} onChange={(event) => setParticipants([...event.currentTarget.selectedOptions].map((option) => option.value))} className="min-h-32 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
           {employees.map((employee) => <option key={employee} value={employee}>{employee}</option>)}
         </select>
-        <p className="text-[11px] text-slate-500">{isGerman ? "Mehrere Einträge mit Strg oder Umschalt auswählen." : "Use Ctrl or Shift to select multiple employees."}</p>
+        <p className="text-[11px] text-slate-500">{t("projects.participantsHint")}</p>
       </div>
 
       <div className="flex justify-end gap-2">
@@ -250,7 +249,7 @@ function ProjectCard({
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(language === "de" ? `Projekt "${project.name}" wirklich löschen?` : `Delete project "${project.name}"?`)) return;
+    if (!window.confirm(t("projects.deleteConfirm").replace("{name}", project.name))) return;
     try {
       await api.delete(`/projects/${project.id}`);
       onDeleted(project.id);
@@ -361,7 +360,7 @@ function ProjectCard({
             disabled={saving}
             className="h-7 px-3 text-xs"
           >
-            {saving ? "..." : (isGerman ? "Speichern" : "Save")}
+            {saving ? "..." : t("common.save")}
           </Button>
           <Button
             size="sm"
