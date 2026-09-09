@@ -82,7 +82,8 @@ function CreateProjectForm({
   defaultCreator: string;
   employees: string[];
 }) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
+  const isGerman = language === "de";
   const [name, setName] = useState("");
   const [responsible, setResponsible] = useState("");
   const [expectedDone, setExpectedDone] = useState("");
@@ -181,11 +182,11 @@ function CreateProjectForm({
       </div>
 
       <div className="space-y-1">
-        <Label className="text-xs text-slate-400">Teilnehmende Mitarbeiter</Label>
+        <Label className="text-xs text-slate-400">{isGerman ? "Teilnehmende Mitarbeiter" : "Participating employees"}</Label>
         <select multiple value={participants} onChange={(event) => setParticipants([...event.currentTarget.selectedOptions].map((option) => option.value))} className="min-h-32 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
           {employees.map((employee) => <option key={employee} value={employee}>{employee}</option>)}
         </select>
-        <p className="text-[11px] text-slate-500">Mehrere Einträge mit Strg oder Umschalt auswählen.</p>
+        <p className="text-[11px] text-slate-500">{isGerman ? "Mehrere Einträge mit Strg oder Umschalt auswählen." : "Use Ctrl or Shift to select multiple employees."}</p>
       </div>
 
       <div className="flex justify-end gap-2">
@@ -220,7 +221,9 @@ function ProjectCard({
   onDeleted: (id: number) => void;
 }) {
   const { language, t } = useLanguage();
+  const isGerman = language === "de";
   const locale = language === "de" ? "de-DE" : "en-US";
+  const dayAbbreviation = isGerman ? "T" : "d";
   const [editing, setEditing] = useState(false);
   const [progress, setProgress] = useState(project.progress);
   const [saving, setSaving] = useState(false);
@@ -290,7 +293,7 @@ function ProjectCard({
                 {new Date(project.expected_done).toLocaleDateString(locale, { timeZone: 'Europe/Berlin' })}
                 {daysLeft !== null && (
                   <span className="ml-1 text-[11px]">
-                    ({daysLeft < 0 ? `${Math.abs(daysLeft)}d ${t("projects.overdue")}` : daysLeft === 0 ? t("projects.today") : `${daysLeft}d`})
+                    ({daysLeft < 0 ? `${Math.abs(daysLeft)}${dayAbbreviation} ${t("projects.overdue")}` : daysLeft === 0 ? t("projects.today") : `${daysLeft}${dayAbbreviation}`})
                   </span>
                 )}
               </span>
@@ -324,7 +327,7 @@ function ProjectCard({
           <button
             onClick={handleDelete}
             className="p-1.5 rounded-lg hover:bg-red-500/20 text-slate-500 hover:text-red-400 transition"
-            title={t("common.cancel")}
+            title={t("common.delete")}
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -358,7 +361,7 @@ function ProjectCard({
             disabled={saving}
             className="h-7 px-3 text-xs"
           >
-            {saving ? "..." : "OK"}
+            {saving ? "..." : (isGerman ? "Speichern" : "Save")}
           </Button>
           <Button
             size="sm"
@@ -379,7 +382,7 @@ function ProjectCard({
 /* ---------------------------------------------------- */
 
 export function ProjectsPanel({ compact = false }: { compact?: boolean }) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const { user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -416,7 +419,7 @@ export function ProjectsPanel({ compact = false }: { compact?: boolean }) {
     setProjects((prev) => prev.filter((x) => x.id !== id));
   };
 
-  const displayName = getUserDisplayName(user) || "Unknown";
+  const displayName = getUserDisplayName(user) || (language === "de" ? "Unbekannt" : "Unknown");
 
   const active = projects.filter((p) => p.status === "active");
   const completed = projects.filter((p) => p.status === "completed");
@@ -505,7 +508,8 @@ export function ProjectsPanel({ compact = false }: { compact?: boolean }) {
 
 /* Compact card for TV dashboard */
 export function ProjectCardCompact({ project }: { project: Project }) {
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
+  const dayAbbreviation = language === "de" ? "T" : "d";
   const daysLeft = project.expected_done
     ? Math.ceil((new Date(project.expected_done).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
     : null;
@@ -522,7 +526,7 @@ export function ProjectCardCompact({ project }: { project: Project }) {
       <ProgressBar progress={project.progress} mini />
       {daysLeft !== null && (
         <p className={`text-[11px] ${daysLeft < 0 ? "text-red-400" : "text-slate-500"}`}>
-          {daysLeft < 0 ? `${Math.abs(daysLeft)}d ${t("projects.overdue")}` : daysLeft === 0 ? t("projects.today") : `${daysLeft}d`}
+          {daysLeft < 0 ? `${Math.abs(daysLeft)}${dayAbbreviation} ${t("projects.overdue")}` : daysLeft === 0 ? t("projects.today") : `${daysLeft}${dayAbbreviation}`}
         </p>
       )}
     </div>
