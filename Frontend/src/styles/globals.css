@@ -76,7 +76,8 @@
 /* ROOT / LIGHT THEME  (Apple Design Language)      */
 /* ------------------------------------------------ */
 :root {
-  --font-size: 13px;
+  /* App-wide readable baseline. Tailwind's rem-based text utilities inherit this. */
+  --font-size: 14px;
 
   /* ── Semantic backgrounds ── */
   --background: #F5F5F7;         /* Apple System Background */
@@ -370,6 +371,17 @@ body,
 
 html {
   font-size: var(--font-size);
+}
+
+/* Keep supporting copy and table labels legible without flattening the visual hierarchy. */
+#root .text-xs {
+  font-size: max(0.8125rem, 12px);
+  line-height: 1.4;
+}
+
+/* Native controls should never fall below the regular reading size. */
+#root :is(button, input, select, textarea) {
+  font-size: max(0.875rem, 13px);
 }
 
 #root {
