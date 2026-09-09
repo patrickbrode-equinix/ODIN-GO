@@ -34,12 +34,18 @@ export function computeUnderstaffWarnings(
   schedule: Schedule,
   year: number,
   monthIndex1: number,
-  daysInMonth: number
+  daysInMonth: number,
+  referenceDate = new Date(),
 ): UnderstaffWarning[] {
   const warnings: UnderstaffWarning[] = [];
+  const today = new Date(referenceDate);
+  today.setHours(0, 0, 0, 0);
 
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(year, monthIndex1 - 1, day);
+    // Historical staffing gaps are informative in reports, but they are no
+    // longer actionable warnings in the operational shift plan.
+    if (date < today) continue;
     const dow = date.getDay(); // 0=Sun..6=Sat
 
     let early = 0;
