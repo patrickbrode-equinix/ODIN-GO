@@ -114,4 +114,22 @@ router.post("/", async (req, res) => {
   }
 });
 
+router.delete("/:id", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "INVALID_SHIFT_HANDOVER_ID", message: "Die Schichtübergabe ist ungültig." });
+  }
+
+  try {
+    const result = await db.query("DELETE FROM shift_handovers WHERE id = $1", [id]);
+    if (!result.rowCount) {
+      return res.status(404).json({ error: "SHIFT_HANDOVER_NOT_FOUND", message: "Die Schichtübergabe wurde nicht gefunden." });
+    }
+    return res.status(204).end();
+  } catch (error) {
+    console.error("SHIFT HANDOVER DELETE ERROR:", error);
+    return res.status(500).json({ error: "SHIFT_HANDOVER_DELETE_FAILED", message: "Die Schichtübergabe konnte nicht gelöscht werden." });
+  }
+});
+
 export default router;

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Save,
   Ticket,
+  Trash2,
   UserRound,
 } from "lucide-react";
 import { api } from "../../api/api";
@@ -60,6 +61,21 @@ function categoryStyle(category: Category) {
   return "border-slate-600 bg-slate-800 text-slate-200";
 }
 
+function creationDay(entry: ShiftHandoverEntry) {
+  const date = new Date(entry.createdAt);
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toLocaleDateString("sv-SE");
+}
+
+function formatCreationDay(day: string) {
+  if (day === "unknown") return "Ohne gespeichertes Datum";
+  return new Date(`${day}T12:00:00`).toLocaleDateString("de-DE", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  });
+}
+
 export default function ShiftHandover() {
   const { user } = useAuth();
   const [handoverAt, setHandoverAt] = useState(nowForInput);
@@ -72,6 +88,7 @@ export default function ShiftHandover() {
   const [filter, setFilter] = useState<"all" | Category>("all");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -99,6 +116,15 @@ export default function ShiftHandover() {
     [entries, filter],
   );
 
+  const entriesByCreationDay = useMemo(() => {
+    const groups = new Map<string, ShiftHandoverEntry[]>();
+    visibleEntries.forEach((entry) => {
+      const day = creationDay(entry);
+      groups.set(day, [...(groups.get(day) || []), entry]);
+    });
+    return [...groups.entries()].sort(([left], [right]) => right.localeCompare(left));
+  }, [visibleEntries]);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -123,6 +149,23 @@ export default function ShiftHandover() {
       setError(requestError?.response?.data?.message || "Die Schichtübergabe konnte nicht gespeichert werden.");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const deleteEntry = async (entry: ShiftHandoverEntry) => {
+    if (!window.confirm(`Schichtübergabe vom ${new Date(entry.createdAt).toLocaleString("de-DE")} wirklich löschen?`)) return;
+
+    setDeletingId(entry.id);
+    setError("");
+    setSuccess("");
+    try {
+      await api.delete(`/shift-handovers/${entry.id}`);
+      setEntries((current) => current.filter((currentEntry) => currentEntry.id !== entry.id));
+      setSuccess("Die Schichtübergabe wurde gelöscht.");
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.message || "Die Schichtübergabe konnte nicht gelöscht werden.");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -205,7 +248,7 @@ export default function ShiftHandover() {
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-700 pb-4">
           <div className="flex items-center gap-2">
             <History className="h-5 w-5 text-blue-300" />
-            <div><h2 className="font-semibold">Gespeicherte Schichtübergaben</h2><p className="text-xs text-slate-500">Chronologische Historie aller erfassten Übergaben.</p></div>
+            <div><h2 className="font-semibold">Gespeicherte Schichtübergaben</h2><p className="text-xs text-slate-500">Nach dem Speichertag gruppiert, damit ältere Übergaben schnell auffindbar bleiben.</p></div>
           </div>
           <div className="flex items-center gap-2">
             <select aria-label="Historie nach Kategorie filtern" value={filter} onChange={(event) => setFilter(event.target.value as "all" | Category)} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-xs text-slate-200">
@@ -216,15 +259,27 @@ export default function ShiftHandover() {
           </div>
         </div>
 
-        <div className="mt-4 space-y-3">
-          {visibleEntries.map((entry) => (
+        <div className="mt-4 space-y-6">
+          {entriesByCreationDay.map(([day, dayEntries]) => (
+            <section key={day} aria-label={`Übergaben vom ${formatCreationDay(day)}`}>
+              <div className="mb-3 flex items-center justify-between gap-3 border-b border-slate-700 pb-2">
+                <h3 className="text-sm font-semibold text-slate-200">{formatCreationDay(day)}</h3>
+                <span className="rounded-full border border-slate-600 bg-slate-800 px-2.5 py-1 text-[11px] font-semibold text-slate-300">{dayEntries.length} {dayEntries.length === 1 ? "Übergabe" : "Übergaben"}</span>
+              </div>
+              <div className="space-y-3">
+                {dayEntries.map((entry) => (
             <article key={entry.id} className="rounded-lg border border-slate-700 bg-slate-950 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-xs font-bold text-blue-200">{DIRECTION_LABELS[entry.direction]}</span>
                   <span className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${categoryStyle(entry.category)}`}>{CATEGORY_LABELS[entry.category]}</span>
                 </div>
-                <time className="text-xs tabular-nums text-slate-400">{new Date(entry.handoverAt).toLocaleString("de-DE")}</time>
+                <div className="flex items-center gap-2">
+                  <time className="text-xs tabular-nums text-slate-400">{new Date(entry.handoverAt).toLocaleString("de-DE")}</time>
+                  <button type="button" onClick={() => void deleteEntry(entry)} disabled={deletingId === entry.id} className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-200 hover:bg-red-500/20 disabled:cursor-wait disabled:opacity-60" title="Schichtübergabe löschen">
+                    <Trash2 className="h-3.5 w-3.5" />{deletingId === entry.id ? "Löscht..." : "Löschen"}
+                  </button>
+                </div>
               </div>
 
               {TICKET_CATEGORIES.has(entry.category) ? (
@@ -240,6 +295,9 @@ export default function ShiftHandover() {
                 <span>Gespeichert am {new Date(entry.createdAt).toLocaleString("de-DE")}</span>
               </div>
             </article>
+                ))}
+              </div>
+            </section>
           ))}
           {!loading && visibleEntries.length === 0 ? <div className="rounded-lg border border-dashed border-slate-700 px-4 py-8 text-center text-sm text-slate-500">Noch keine Schichtübergaben in dieser Kategorie gespeichert.</div> : null}
           {loading && entries.length === 0 ? <div className="py-8 text-center text-sm text-slate-500">Schichtübergaben werden geladen...</div> : null}

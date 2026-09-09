@@ -130,6 +130,27 @@ describe("shift handover routes", () => {
     }
   });
 
+  it("deletes a saved handover for a verified Jarvis user", async () => {
+    let deletedId = null;
+    db.query = async (sql, params = []) => {
+      if (String(sql).includes("FROM users")) return { rows: [{ id: 7, login_name: "test.user", email: "test@example.test", first_name: "Test", last_name: "User", user_group: "Employee", is_root: false }] };
+      if (String(sql).includes("UPDATE users")) return { rows: [], rowCount: 1 };
+      if (String(sql).includes("DELETE FROM shift_handovers")) {
+        deletedId = params[0];
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    };
+    const server = await startApp();
+    try {
+      const response = await fetch(`${server.baseUrl}/api/shift-handovers/12`, { method: "DELETE", headers: headers() });
+      assert.equal(response.status, 204);
+      assert.equal(deletedId, 12);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects access without a verified Jarvis identity", async () => {
     db.query = async (sql) => {
       if (String(sql).includes("FROM users")) return { rows: [{ id: 1, login_name: "root", first_name: "Root", last_name: "User", is_root: true }] };
