@@ -167,6 +167,7 @@ interface AdvancedPlanningSettings {
   weekendBufferPercent: number;
   weekendMinDispatchers: number;
   colleaguePreferencesEnabled: boolean;
+  blockedWeekdayEmployees: string[];
 }
 
 interface DbsConfig {
@@ -239,6 +240,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   weekendBufferPercent: 15,
   weekendMinDispatchers: 1,
   colleaguePreferencesEnabled: true,
+  blockedWeekdayEmployees: [],
 };
 
 const DEFAULT_DBS_CONFIG: DbsConfig = {
@@ -338,6 +340,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     weekendBufferPercent: parseNumberSetting(settings['shiftplan.weekend_buffer_percent'], DEFAULT_ADVANCED_SETTINGS.weekendBufferPercent),
     weekendMinDispatchers: parseNumberSetting(settings['shiftplan.weekend_min_dispatchers'], DEFAULT_ADVANCED_SETTINGS.weekendMinDispatchers),
     colleaguePreferencesEnabled: parseBooleanSetting(settings['shiftplan.colleague_preferences_enabled'], DEFAULT_ADVANCED_SETTINGS.colleaguePreferencesEnabled),
+    blockedWeekdayEmployees: parseEmployeePoolSetting(settings['shiftplan.blocked_weekday_employee_pool']),
   };
 }
 
@@ -624,6 +627,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [coloSearch, setColoSearch] = useState('');
   const [dispatcherConfig, setDispatcherConfig] = useState<DispatcherConfig>(DEFAULT_DISPATCHER_CONFIG);
   const [dispatcherSearch, setDispatcherSearch] = useState('');
+  const [blockedWeekdaySearch, setBlockedWeekdaySearch] = useState('');
   const [overtimeConfig, setOvertimeConfig] = useState<OvertimeConfig>(DEFAULT_OVERTIME_CONFIG);
   const [holidayStaffingConfig, setHolidayStaffingConfig] = useState<HolidayStaffingConfig>(extractHolidayStaffingConfig({}));
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedPlanningSettings>(DEFAULT_ADVANCED_SETTINGS);
@@ -814,6 +818,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.weekend_buffer_percent': advancedSettings.weekendBufferPercent,
         'shiftplan.weekend_min_dispatchers': advancedSettings.weekendMinDispatchers,
         'shiftplan.colleague_preferences_enabled': advancedSettings.colleaguePreferencesEnabled,
+        'shiftplan.blocked_weekday_employee_pool': JSON.stringify(advancedSettings.blockedWeekdayEmployees),
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
     } catch (error: any) {
@@ -1111,6 +1116,14 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   ));
   const selectedColoEmployees = coloConfig.employeePool.filter((employee) => (
     !normalizedColoSearch || employee.toLocaleLowerCase('de').includes(normalizedColoSearch)
+  ));
+  const normalizedBlockedWeekdaySearch = blockedWeekdaySearch.trim().toLocaleLowerCase('de');
+  const availableBlockedWeekdayEmployees = employees.filter((employee) => (
+    !advancedSettings.blockedWeekdayEmployees.includes(employee)
+    && (!normalizedBlockedWeekdaySearch || employee.toLocaleLowerCase('de').includes(normalizedBlockedWeekdaySearch))
+  ));
+  const selectedBlockedWeekdayEmployees = advancedSettings.blockedWeekdayEmployees.filter((employee) => (
+    !normalizedBlockedWeekdaySearch || employee.toLocaleLowerCase('de').includes(normalizedBlockedWeekdaySearch)
   ));
   const minimumWeekendPoolSize = coloConfig.weekendInstallationStaff + coloConfig.weekendTroubleshootingStaff;
 
@@ -2003,6 +2016,49 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           <input type="checkbox" checked={advancedSettings.colleaguePreferencesEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, colleaguePreferencesEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
           Kollegenpräferenzen für Mitarbeiter freigeben
         </label>
+      </Section>
+
+      {/* ── Access to hard weekday exclusions ── */}
+      <Section title={isGerman ? 'Freigabe: Nicht verfügbare Wochentage' : 'Access: unavailable weekdays'} icon={Users} defaultOpen={false}>
+        <div className="space-y-4">
+          <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            {isGerman
+              ? 'Nur ausgewählte Mitarbeitende sehen in ihren Einstellungen „Tage, an denen du nicht arbeiten kannst“. Diese Angaben sind für die Planung ein festes Tabu.'
+              : 'Only selected employees can see “Days you cannot work” in their settings. These selections are hard exclusions for scheduling.'}
+          </div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
+            <input value={blockedWeekdaySearch} onChange={(event) => setBlockedWeekdaySearch(event.target.value)} placeholder={isGerman ? 'Mitarbeiter suchen…' : 'Search employees…'} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 py-2 pl-10 pr-3 text-sm text-slate-100" />
+          </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-950/45">
+              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{isGerman ? 'Alle Mitarbeitenden' : 'All employees'}</span>
+                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{availableBlockedWeekdayEmployees.length}</span>
+              </div>
+              <div className="max-h-72 space-y-1 overflow-y-auto p-2">
+                {availableBlockedWeekdayEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Keine weiteren Mitarbeitenden' : 'No additional employees'}</div> : availableBlockedWeekdayEmployees.map((employee) => (
+                  <button key={employee} type="button" onClick={() => setAdvancedSettings((current) => ({ ...current, blockedWeekdayEmployees: [...current.blockedWeekdayEmployees, employee] }))} className="flex w-full items-center justify-between rounded-xl border border-transparent px-3 py-2 text-left text-sm text-slate-200 transition hover:border-amber-400/25 hover:bg-amber-500/10">
+                    <span className="truncate">{employee}</span><span className="text-xs text-amber-200">{isGerman ? 'Freigeben' : 'Allow'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="overflow-hidden rounded-2xl border border-amber-400/25 bg-amber-500/5">
+              <div className="flex items-center justify-between border-b border-amber-400/15 px-4 py-3">
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-100">{isGerman ? 'Freigegeben' : 'Allowed'}</span>
+                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-100">{advancedSettings.blockedWeekdayEmployees.length}</span>
+              </div>
+              <div className="max-h-72 space-y-1 overflow-y-auto p-2">
+                {selectedBlockedWeekdayEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Noch niemand ausgewählt' : 'No one selected yet'}</div> : selectedBlockedWeekdayEmployees.map((employee) => (
+                  <button key={employee} type="button" onClick={() => setAdvancedSettings((current) => ({ ...current, blockedWeekdayEmployees: current.blockedWeekdayEmployees.filter((entry) => entry !== employee) }))} className="flex w-full items-center justify-between rounded-xl border border-amber-400/15 bg-amber-500/8 px-3 py-2 text-left text-sm text-amber-50 transition hover:border-red-400/25 hover:bg-red-500/10">
+                    <span className="truncate">{employee}</span><span className="text-xs text-slate-400">{isGerman ? 'Entfernen' : 'Remove'}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
       </Section>
 
       {/* ── Weekend planning ── */}

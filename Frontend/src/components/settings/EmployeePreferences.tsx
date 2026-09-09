@@ -265,6 +265,7 @@ export default function EmployeePreferences() {
   const [preferenceMonth, setPreferenceMonth] = useState(new Date().getMonth() + 1);
   const [shiftOptions, setShiftOptions] = useState<string[]>(SHIFT_CODES);
   const [shiftNameMap, setShiftNameMap] = useState<Record<string, string>>({});
+  const [canSelectBlockedDays, setCanSelectBlockedDays] = useState(false);
 
   const refreshShiftOptions = useCallback(async () => {
     try {
@@ -290,6 +291,7 @@ export default function EmployeePreferences() {
         api.get('/shift-config/definitions').catch(() => ({ data: { definitions: [] } })),
       ]);
       applyEmployeeSelectableShiftDefinitions(definitionsRes.data?.definitions || [], setShiftOptions, setShiftNameMap);
+      setCanSelectBlockedDays(prefRes.data?.canSelectBlockedDays === true);
       if (prefRes.data.preferences) {
         const stored = prefRes.data.preferences;
         const allowed = (value: unknown) => (Array.isArray(value) ? value.filter((code) => {
@@ -550,8 +552,8 @@ export default function EmployeePreferences() {
         </div>
       </EnterpriseCard>
 
-      {/* Unavailable weekdays */}
-      <EnterpriseCard>
+      {/* Unavailable weekdays - only available to employees released by administration. */}
+      {canSelectBlockedDays && <EnterpriseCard>
         <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3">
           <CalendarDays className="w-4 h-4 text-blue-400" />
           {copy.weekDays}
@@ -575,7 +577,7 @@ export default function EmployeePreferences() {
           })}
         </div>
         <p className="text-[10px] text-muted-foreground mt-2">{copy.weekDayLegend}</p>
-      </EnterpriseCard>
+      </EnterpriseCard>}
 
       {/* Notes */}
       <EnterpriseCard>

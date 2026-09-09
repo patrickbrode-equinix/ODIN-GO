@@ -866,6 +866,22 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     throw new Error('Keine Mitarbeiter im System gefunden');
   }
   const employeeNameLookup = buildEmployeeNameLookup(employees);
+  const blockedWeekdayAccessRes = await pool.query(
+    "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_weekday_employee_pool' LIMIT 1"
+  );
+  let blockedWeekdayAccessEntries = [];
+  try {
+    const raw = blockedWeekdayAccessRes.rows[0]?.value;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    blockedWeekdayAccessEntries = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    blockedWeekdayAccessEntries = [];
+  }
+  const blockedWeekdayAccessEmployees = new Set(
+    blockedWeekdayAccessEntries
+      .map((employee) => resolveEmployeeName(employee, employeeNameLookup))
+      .filter((employee) => employee && employees.includes(employee))
+  );
 
   const absRes = await pool.query(
     `SELECT employee_name, start_date, end_date, type FROM absences WHERE start_date <= $1 AND end_date >= $2`,
@@ -931,7 +947,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   for (const row of empPrefRes.rows) {
     const employeeName = resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup);
     if (!employeeName) continue;
-    empPrefsMap.set(employeeName, row);
+    // Weekday exclusions are hard rules, but only for employees explicitly released in Admin Settings.
+    empPrefsMap.set(employeeName, blockedWeekdayAccessEmployees.has(employeeName) ? row : { ...row, blocked_days: [] });
   }
 
   const preferencesForDate = (employeeName, dateStr) => {

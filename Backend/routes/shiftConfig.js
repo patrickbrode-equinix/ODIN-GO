@@ -28,6 +28,55 @@ function normalizeFixedShiftType(value) {
   return null;
 }
 
+function parseEmployeeAccessPool(value) {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    return Array.isArray(parsed) ? parsed.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+function comparableEmployeeName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase('de-DE')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ');
+}
+
+async function canUseBlockedWeekdayPreferences(user) {
+  const { rows } = await pool.query(
+    "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_weekday_employee_pool' LIMIT 1"
+  );
+  const allowedEmployees = parseEmployeeAccessPool(rows[0]?.value);
+  if (allowedEmployees.length === 0) return false;
+
+  const candidates = [user?.displayName];
+  if (user?.id) {
+    const userResult = await pool.query(
+      'SELECT first_name, last_name, provisioned_employee_name FROM users WHERE id = $1 LIMIT 1',
+      [user.id]
+    );
+    const localUser = userResult.rows[0];
+    if (localUser) {
+      candidates.push(
+        localUser.provisioned_employee_name,
+        [localUser.first_name, localUser.last_name].filter(Boolean).join(' '),
+        [localUser.last_name, localUser.first_name].filter(Boolean).join(', '),
+      );
+    }
+  }
+
+  const allowed = new Set(allowedEmployees.map(comparableEmployeeName).filter(Boolean));
+  return candidates.some((candidate) => allowed.has(comparableEmployeeName(candidate)));
+}
+
 /* ------------------------------------------------ */
 /* SHIFT DEFINITIONS                                */
 /* ------------------------------------------------ */
@@ -346,8 +395,16 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const { rows } = await pool.query('SELECT * FROM employee_preferences WHERE user_id=$1', [userId]);
-    res.json({ ok: true, preferences: rows[0] || null });
+    const [preferenceResult, canSelectBlockedDays] = await Promise.all([
+      pool.query('SELECT * FROM employee_preferences WHERE user_id=$1', [userId]),
+      canUseBlockedWeekdayPreferences(req.user),
+    ]);
+    const preference = preferenceResult.rows[0] || null;
+    res.json({
+      ok: true,
+      canSelectBlockedDays,
+      preferences: preference && !canSelectBlockedDays ? { ...preference, blocked_days: [] } : preference,
+    });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -369,6 +426,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
     const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, notes } = req.body;
+    const canSelectBlockedDays = await canUseBlockedWeekdayPreferences(req.user);
     // Half shifts are operational planning details, not employee-selectable preferences.
     // Filter them server-side as well so stale browser bundles cannot reintroduce them.
     const employeePreferenceExcludedShiftCodes = new Set(['HE1', 'HE2', 'HL1', 'HL2']);
@@ -380,6 +438,9 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     const maxNightBlocksPerMonth = Number.isInteger(parsedNightBlockLimit) && parsedNightBlockLimit > 0
       ? Math.min(parsedNightBlockLimit, 4)
       : null;
+    const sanitizedBlockedDays = canSelectBlockedDays && Array.isArray(blocked_days)
+      ? [...new Set(blocked_days.map((day) => Number.parseInt(String(day), 10)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
+      : [];
     const monthly_preferences = req.body.monthly_preferences && typeof req.body.monthly_preferences === 'object' && !Array.isArray(req.body.monthly_preferences)
       ? Object.fromEntries(Object.entries(req.body.monthly_preferences).filter(([key, value]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key) && value && typeof value === 'object').map(([key, value]) => [key, {
           preferred_shifts: sanitizeShiftCodes(value.preferred_shifts).slice(0, 20),
@@ -410,7 +471,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         JSON.stringify(Array.isArray(preferred_holidays) ? preferred_holidays : []),
         maxNightBlocksPerMonth,
         JSON.stringify([]),
-        JSON.stringify(Array.isArray(blocked_days) ? blocked_days : []),
+        JSON.stringify(sanitizedBlockedDays),
         JSON.stringify([]),
         'normal',
          notes || null,
