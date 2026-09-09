@@ -22,6 +22,7 @@ import { isColoEmployee, parseColoPool } from "../../utils/colo";
 import { api } from "../../api/api";
 import type { EnrichedCommitTicket } from "../commit/commit.types";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
+import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
@@ -846,6 +847,7 @@ export default function TagesplanungPage() {
   const [schedule, setSchedule] = useState<Record<string, Record<number, string>>>({});
   const [scheduleLoading, setScheduleLoading] = useState(true);
   const [scheduleError, setScheduleError] = useState("");
+  const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
   const [coloPool, setColoPool] = useState<string[]>([]);
   const [dispatcherConfig, setDispatcherConfig] = useState<{ enabled: boolean; priorities: string[] }>({ enabled: true, priorities: [] });
   const { fetchRoles, getRole } = useWeekplanRoleStore();
@@ -856,6 +858,12 @@ export default function TagesplanungPage() {
       setColoPool(parseColoPool(data?.["shiftplan.colo_pool"]));
       setDispatcherConfig({ enabled: data?.["shiftplan.dispatcher_enabled"] !== "false", priorities: parseColoPool(data?.["shiftplan.dispatcher_pool"]) });
     }).catch(() => { setColoPool([]); setDispatcherConfig({ enabled: true, priorities: [] }); });
+  }, []);
+
+  useEffect(() => {
+    api.get("/shift-config/definitions")
+      .then(({ data }) => setShiftTimes(buildShiftTimeMap(data?.definitions)))
+      .catch(() => setShiftTimes({}));
   }, []);
 
   useEffect(() => {
@@ -1036,7 +1044,7 @@ export default function TagesplanungPage() {
                     {nowDate.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" })}
                   </span>
                 </div>
-                <ShiftTimeLegend compact className="mt-2" />
+                <ShiftTimeLegend shiftTimes={shiftTimes} compact className="mt-2" />
               </div>
             </div>
 
