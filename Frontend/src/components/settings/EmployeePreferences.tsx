@@ -39,7 +39,7 @@ const COPY = {
     nightsLoadHelp: 'Nachtschichten zählen als vollständiger 7-Tage-Block. Früh- und Spätschichten sowie Wochenenden werden pro Monat gezählt.',
     maxNights: 'Nachtschicht-Blöcke pro Monat',
     maxWeekends: 'Wochenenddienste pro Monat',
-    noLimit: 'Keine Begrenzung',
+    noLimit: 'Unbegrenzt',
     workload: 'Belastungspräferenz',
     workloadLight: 'Reduziert',
     workloadNormal: 'Normal',
@@ -80,7 +80,7 @@ const COPY = {
     nightsLoadHelp: 'Night shifts count as a complete 7-day block. Early/late shifts and weekend duties are counted per month.',
     maxNights: 'Night-shift blocks per month',
     maxWeekends: 'Weekend duties per month',
-    noLimit: 'No limit',
+    noLimit: 'Unlimited',
     workload: 'Workload preference',
     workloadLight: 'Reduced',
     workloadNormal: 'Normal',
@@ -238,6 +238,12 @@ function isSameList(left: string[], right: string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function normalizeNightBlockLimit(value: unknown): number | null {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return Math.min(parsed, 4);
+}
+
 function formatHolidayDates(value: string, locale: string): string {
   const holidayName = HOLIDAY_DATE_NAMES[value];
   if (!holidayName) return '';
@@ -306,7 +312,7 @@ export default function EmployeePreferences() {
         const monthly = Object.fromEntries(Object.entries(stored.monthly_preferences || {}).map(([key, value]: [string, any]) => [key, { ...value, preferred_shifts: allowed(value?.preferred_shifts), unwanted_shifts: allowed(value?.unwanted_shifts) }]));
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
-          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: stored.max_nights_per_month, max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), workload_preference: stored.workload_preference || 'normal', notes: stored.notes || '',
+          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []), workload_preference: stored.workload_preference || 'normal', notes: stored.notes || '',
         });
       } else {
         setPrefs(DEFAULTS);
@@ -540,8 +546,14 @@ export default function EmployeePreferences() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div>
             <label className="text-xs text-muted-foreground">{copy.maxNights}</label>
-            <input type="number" value={prefs.max_nights_per_month ?? ''} onChange={e => update('max_nights_per_month', e.target.value ? parseInt(e.target.value) : null)}
-              className="w-full mt-1 px-3 py-2 text-sm rounded-lg border border-border/30 bg-background/40 text-foreground" min="0" max="31" placeholder={copy.noLimit} />
+            <select
+              value={prefs.max_nights_per_month ?? ''}
+              onChange={(event) => update('max_nights_per_month', event.target.value ? Number(event.target.value) : null)}
+              className="mt-1 w-full rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-sm text-foreground"
+            >
+              <option value="">{copy.noLimit}</option>
+              {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
+            </select>
           </div>
           <div>
             <label className="text-xs text-muted-foreground">{copy.maxWeekends}</label>

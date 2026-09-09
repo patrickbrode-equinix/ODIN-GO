@@ -376,6 +376,10 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
       ? [...new Set(value.map((code) => String(code || '').trim().toUpperCase())
         .filter((code) => code && !employeePreferenceExcludedShiftCodes.has(code)))]
       : [];
+    const parsedNightBlockLimit = Number.parseInt(String(max_nights_per_month ?? ''), 10);
+    const maxNightBlocksPerMonth = Number.isInteger(parsedNightBlockLimit) && parsedNightBlockLimit > 0
+      ? Math.min(parsedNightBlockLimit, 4)
+      : null;
     const monthly_preferences = req.body.monthly_preferences && typeof req.body.monthly_preferences === 'object' && !Array.isArray(req.body.monthly_preferences)
       ? Object.fromEntries(Object.entries(req.body.monthly_preferences).filter(([key, value]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key) && value && typeof value === 'object').map(([key, value]) => [key, {
           preferred_shifts: sanitizeShiftCodes(value.preferred_shifts).slice(0, 20),
@@ -404,7 +408,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         JSON.stringify(sanitizeShiftCodes(preferred_shifts)),
         JSON.stringify(sanitizeShiftCodes(unwanted_shifts)),
         JSON.stringify(Array.isArray(preferred_holidays) ? preferred_holidays : []),
-        max_nights_per_month || null,
+        maxNightBlocksPerMonth,
         JSON.stringify([]),
         JSON.stringify(Array.isArray(blocked_days) ? blocked_days : []),
         JSON.stringify([]),
