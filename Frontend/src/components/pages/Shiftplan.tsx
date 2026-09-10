@@ -27,6 +27,7 @@ import { useLanguage } from "../../context/LanguageContext";
 import { isColoEmployee, parseColoPool } from "../../utils/colo";
 
 import {
+  changeScheduleShifts,
   createManualShiftplanEmployee,
   deleteManualShiftplanEmployee,
   fetchSchedule,
@@ -201,6 +202,14 @@ export default function Shiftplan() {
   const [editTarget, setEditTarget] = useState<null | { employeeName: string; day: number; current: string }>(null);
   const EMPTY = "__EMPTY__";
   const [editValue, setEditValue] = useState<string>(EMPTY);
+  const [manualChangeOpen, setManualChangeOpen] = useState(false);
+  const [manualChangeConfirmOpen, setManualChangeConfirmOpen] = useState(false);
+  const [manualChangeSaving, setManualChangeSaving] = useState(false);
+  const [manualChangeTarget, setManualChangeTarget] = useState<null | {
+    employeeName: string;
+    changes: Array<{ day: number; current: string | null }>;
+  }>(null);
+  const [manualChangeValue, setManualChangeValue] = useState("");
 
   // [NEW] Skills & Coverage State
   const [showSkills, setShowSkills] = usePersistentToggle("shiftplan-show-skills", false);
@@ -1019,6 +1028,33 @@ export default function Shiftplan() {
     const keys = getSelectedKeys();
     if (!keys.size) return;
 
+    if (value === "CHANGE_SHIFT") {
+      const selected = Array.from(keys)
+        .map((key) => {
+          const [employeeName, rawDay] = key.split("|||");
+          const day = Number(rawDay);
+          return employeeName && Number.isInteger(day) ? { employeeName, day } : null;
+        })
+        .filter((entry): entry is { employeeName: string; day: number } => Boolean(entry));
+      const employees = Array.from(new Set(selected.map((entry) => entry.employeeName)));
+      if (employees.length !== 1) {
+        toast.error(isGerman
+          ? "Bitte markiere nur Tage eines Mitarbeiters für eine gemeinsame Schichtänderung."
+          : "Select days for one employee only to change shifts together.");
+        setContextMenu(null);
+        return;
+      }
+      const employeeName = employees[0];
+      const changes = selected
+        .sort((a, b) => a.day - b.day)
+        .map(({ day }) => ({ day, current: String(schedule?.[employeeName]?.[day] || "") || null }));
+      setManualChangeTarget({ employeeName, changes });
+      setManualChangeValue("");
+      setManualChangeOpen(true);
+      setContextMenu(null);
+      return;
+    }
+
     // [NEW] ABESENCE HANDLING
     if (value === "HISTORY") {
       // Pick the first employee from selection
@@ -1153,27 +1189,44 @@ export default function Shiftplan() {
       return;
     }
 
-    if (!window.confirm(`Möchten Sie die Änderung für ${keys.size} ${keys.size === 1 ? 'Eintrag' : 'Einträge'} übernehmen?`)) {
-      setContextMenu(null);
-      return;
-    }
-
-    setSchedule((prev: any) => {
-      const next = { ...(prev || {}) };
-      for (const k of keys) {
-        const [employeeName, dayRaw] = k.split("|||");
-        const day = Number(dayRaw);
-        if (!employeeName || !Number.isFinite(day)) continue;
-        const row = { ...(next[employeeName] || {}) };
-        if (!value || value === "") delete row[day];
-        else row[day] = value;
-        next[employeeName] = row;
-      }
-      shiftStore.setSchedule(activeMonthLabel, next);
-      return next;
-    });
-    setIsDirty(true);
     setContextMenu(null);
+  };
+
+  const confirmManualShiftChange = () => {
+    if (!manualChangeTarget || !manualChangeValue) return;
+    setManualChangeConfirmOpen(true);
+  };
+
+  const saveManualShiftChange = async () => {
+    if (!manualChangeTarget || !manualChangeValue || manualChangeSaving) return;
+    setManualChangeSaving(true);
+    try {
+      const response = await changeScheduleShifts(activeMonthLabel, {
+        employeeName: manualChangeTarget.employeeName,
+        days: manualChangeTarget.changes.map((change) => change.day),
+        shiftCode: manualChangeValue,
+      });
+      const changedDays = new Set(response.changes.map((change) => change.day));
+      setSchedule((previous: any) => {
+        const next = { ...(previous || {}) };
+        const row = { ...(next[manualChangeTarget.employeeName] || {}) };
+        changedDays.forEach((day) => { row[day] = manualChangeValue; });
+        next[manualChangeTarget.employeeName] = row;
+        shiftStore.setSchedule(activeMonthLabel, next);
+        return next;
+      });
+      setManualChangeConfirmOpen(false);
+      setManualChangeOpen(false);
+      clearSelection();
+      toast.success(isGerman
+        ? `${response.changes.length} Schicht${response.changes.length === 1 ? "" : "en"} geändert und protokolliert.`
+        : `${response.changes.length} shift${response.changes.length === 1 ? "" : "s"} changed and logged.`);
+    } catch (error) {
+      console.error("MANUAL SHIFT CHANGE ERROR:", error);
+      toast.error(isGerman ? "Schichtänderung konnte nicht gespeichert werden." : "The shift change could not be saved.");
+    } finally {
+      setManualChangeSaving(false);
+    }
   };
 
   const applyEdit = () => {
@@ -1830,6 +1883,81 @@ export default function Shiftplan() {
               </div>
             </div>
           ) : null}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={manualChangeOpen} onOpenChange={(open) => {
+        setManualChangeOpen(open);
+        if (!open) setManualChangeConfirmOpen(false);
+      }}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{isGerman ? "Schichten ändern" : "Change shifts"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2 text-sm">
+            <div className="rounded-lg border border-border bg-muted/25 p-3">
+              <div className="text-xs text-muted-foreground">{isGerman ? "Mitarbeiter" : "Employee"}</div>
+              <div className="mt-1 font-semibold">{manualChangeTarget?.employeeName}</div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">{isGerman ? "Ausgewählte Tage" : "Selected days"}</label>
+              <div className="mt-1 max-h-28 space-y-1 overflow-y-auto rounded-lg border border-border bg-muted/20 p-2">
+                {manualChangeTarget?.changes.map((change) => (
+                  <div key={change.day} className="flex items-center justify-between gap-3 text-xs">
+                    <span>{change.day}. {activeMonthLabel}</span>
+                    <span className="font-semibold">{change.current || "—"} <span className="text-muted-foreground">→</span> {manualChangeValue || "?"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground">{isGerman ? "Neue Schicht" : "New shift"}</label>
+              <Select value={manualChangeValue} onValueChange={setManualChangeValue}>
+                <SelectTrigger className="mt-1"><SelectValue placeholder={isGerman ? "Schicht auswählen" : "Select a shift"} /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(shiftTimes).length > 0
+                    ? Object.entries(shiftTimes).map(([code, time]) => <SelectItem key={code} value={code}>{code} ({time})</SelectItem>)
+                    : ["E1", "E2", "L1", "L2", "N"].map((code) => <SelectItem key={code} value={code}>{code}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {isGerman
+                ? "Die Änderung wird sofort gespeichert und im Änderungsprotokoll dokumentiert."
+                : "The change is saved immediately and recorded in the change log."}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setManualChangeOpen(false)}>{t("common.cancel")}</Button>
+            <Button onClick={confirmManualShiftChange} disabled={!manualChangeValue}>{isGerman ? "Änderung prüfen" : "Review change"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={manualChangeConfirmOpen} onOpenChange={setManualChangeConfirmOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{isGerman ? "Schichtänderung bestätigen" : "Confirm shift change"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <p>
+              {isGerman ? "Bitte prüfe die Änderung sorgfältig. Sie wird sofort im Dienstplan gespeichert." : "Please review this change carefully. It will be saved to the live schedule immediately."}
+            </p>
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3">
+              <div><span className="text-muted-foreground">{isGerman ? "Mitarbeiter:" : "Employee:"}</span> <strong>{manualChangeTarget?.employeeName}</strong></div>
+              <div className="mt-2 max-h-40 space-y-1 overflow-y-auto text-xs">
+                {manualChangeTarget?.changes.map((change) => (
+                  <div key={change.day}>{change.day}. {activeMonthLabel}: <strong>{change.current || "—"}</strong> → <strong>{manualChangeValue}</strong></div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setManualChangeConfirmOpen(false)} disabled={manualChangeSaving}>{t("common.cancel")}</Button>
+            <Button onClick={() => void saveManualShiftChange()} disabled={manualChangeSaving}>
+              {manualChangeSaving ? (isGerman ? "Wird gespeichert…" : "Saving…") : (isGerman ? "Jetzt verbindlich ändern" : "Apply change")}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

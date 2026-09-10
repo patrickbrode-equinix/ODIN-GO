@@ -75,7 +75,7 @@ export function HistoryDialog({ open, onOpenChange, year, month, employeeName }:
                                         </TableCell>
                                         <TableCell className="text-xs text-muted-foreground">{log.changed_by}</TableCell>
                                         <TableCell className="text-xs text-muted-foreground">
-                                            {format(new Date(log.changed_at), "dd.MM. HH:mm", { locale: de })}
+                                            {format(new Date(log.created_at), "dd.MM. HH:mm", { locale: de })}
                                         </TableCell>
                                     </TableRow>
                                 ))

@@ -6,9 +6,9 @@ export interface ShiftChangeLog {
     date: string;
     old_value: string | null;
     new_value: string | null;
-    changed_by: string;
-    changed_at: string;
-    source: string;
+  changed_by: string;
+  created_at: string;
+  source: string;
 }
 
 export async function fetchShiftHistory(params: {

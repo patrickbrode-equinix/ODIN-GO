@@ -36,7 +36,11 @@ const COPY = {
     holidays: 'Feiertage, an denen du nicht arbeiten möchtest',
     holidaysHelp: 'Wähle Feiertage aus, an denen du nicht eingeplant werden möchtest. Die Auswahl wird als persönlicher Wunsch berücksichtigt.',
     nightsLoad: 'Schichten und Wochenenden',
-    nightsLoadHelp: 'Nachtschichten zählen als vollständiger 7-Tage-Block. Früh- und Spätschichten sowie Wochenenden werden pro Monat gezählt.',
+    nightsLoadHelp: 'Wähle dein Nachtmodell. Eine abgewählte Nachtschicht bleibt ein absolutes Tabu und wird unabhängig vom Modell niemals geplant.',
+    nightModel: 'Nachtschicht-Modell',
+    sevenDayNight: '7 Tage am Stück',
+    shortNight: 'Kurze Nachtblöcke',
+    nightModelDisabled: 'Nachtschicht ist als unerwünscht markiert. Das Nachtmodell wird nicht für die Planung verwendet.',
     maxNights: 'Nachtschicht-Blöcke pro Monat',
     maxWeekends: 'Wochenenddienste pro Monat',
     noLimit: 'Unbegrenzt',
@@ -68,7 +72,11 @@ const COPY = {
     holidays: 'Holidays you do not want to work',
     holidaysHelp: 'Choose holidays on which you do not want to be scheduled. The selection is treated as a personal preference.',
     nightsLoad: 'Shifts and weekends',
-    nightsLoadHelp: 'Night shifts count as a complete 7-day block. Early/late shifts and weekend duties are counted per month.',
+    nightsLoadHelp: 'Choose your night model. An unwanted night shift remains an absolute exclusion and is never planned regardless of the model.',
+    nightModel: 'Night-shift model',
+    sevenDayNight: '7 consecutive days',
+    shortNight: 'Short night blocks',
+    nightModelDisabled: 'Night shift is marked as unwanted. The night model is not used for planning.',
     maxNights: 'Night-shift blocks per month',
     maxWeekends: 'Weekend duties per month',
     noLimit: 'Unlimited',
@@ -108,6 +116,7 @@ interface Preferences {
   monthly_preferences: Record<string, { preferred_shifts: string[]; unwanted_shifts: string[] }>;
   preferred_holidays: string[];
   max_nights_per_month: number | null;
+  night_model: 'SEVEN_DAY' | 'SHORT';
   max_weekends_per_month: number | null;
   preferred_days: number[];
   blocked_days: number[];
@@ -179,7 +188,7 @@ const HOLIDAY_DATE_NAMES: Record<string, string> = {
 };
 
 const DEFAULTS: Preferences = {
-  preferred_shifts: [], unwanted_shifts: [], preferred_holidays: [], max_nights_per_month: null,
+  preferred_shifts: [], unwanted_shifts: [], preferred_holidays: [], max_nights_per_month: null, night_model: 'SEVEN_DAY',
   monthly_preferences: {},
   preferred_days: [], blocked_days: [], avoid_colleagues: [],
   max_weekends_per_month: null,
@@ -294,7 +303,7 @@ export default function EmployeePreferences() {
         const monthly = Object.fromEntries(Object.entries(stored.monthly_preferences || {}).map(([key, value]: [string, any]) => [key, { ...value, preferred_shifts: allowed(value?.preferred_shifts), unwanted_shifts: allowed(value?.unwanted_shifts) }]));
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
-          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []),
+          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), night_model: stored.night_model === 'SHORT' ? 'SHORT' : 'SEVEN_DAY', max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []),
         });
       } else {
         setPrefs(DEFAULTS);
@@ -526,6 +535,28 @@ export default function EmployeePreferences() {
           <HelpTip text={copy.nightsLoadHelp} />
         </h3>
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label className="text-xs text-muted-foreground">{copy.nightModel}</label>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {([
+                ['SEVEN_DAY', copy.sevenDayNight],
+                ['SHORT', copy.shortNight],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  disabled={prefs.unwanted_shifts.includes('N')}
+                  onClick={() => update('night_model', value)}
+                  className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${prefs.night_model === value
+                    ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300'
+                    : 'border-border/30 bg-background/40 text-muted-foreground hover:border-indigo-500/30'} disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {prefs.unwanted_shifts.includes('N') && <p className="mt-2 text-[11px] text-muted-foreground">{copy.nightModelDisabled}</p>}
+          </div>
           <div>
             <label className="text-xs text-muted-foreground">{copy.maxNights}</label>
             <select

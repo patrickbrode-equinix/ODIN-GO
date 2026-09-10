@@ -30,6 +30,8 @@ type AuthContextType = {
   canAccess: (pageKey: string, min?: AccessLevel) => boolean;
   canView: (pageKey: string) => boolean;
   canWrite: (pageKey: string) => boolean;
+  webLoginRequired: boolean;
+  loginToWeb: (password: string) => Promise<void>;
   unlockAdmin: (password: string) => Promise<void>;
 };
 
@@ -55,6 +57,7 @@ function consumeExtensionContext() {
   if (apiKey) sessionStorage.setItem("shiftplanner_api_key", apiKey);
 
   return {
+    embedded: params.get("embed") === "1" || window.self !== window.top,
     adminUnlocked: Boolean(adminToken || sessionStorage.getItem("shiftplanner_admin_token")),
     employeeName: employee || "Mitarbeiter",
   };
@@ -88,6 +91,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const loginToWeb = useCallback(async (password: string) => {
+    await unlockAdmin(password);
+  }, [unlockAdmin]);
+
   const value = useMemo<AuthContextType>(() => {
     const nameParts = extensionContext.employeeName.trim().split(/\s+/);
     const firstName = nameParts.shift() || "Mitarbeiter";
@@ -95,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const normalizedEmployeeName = extensionContext.employeeName.trim().toLocaleLowerCase("de-DE").replace(/\s+/g, " ");
     const patrickBypass = normalizedEmployeeName === "patrick brode";
     const adminUnlocked = Boolean(adminToken || extensionContext.adminUnlocked || patrickBypass);
+    const webLoginRequired = !extensionContext.embedded && !adminUnlocked;
 
     const user: User = {
       id: 0,
@@ -125,9 +133,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       canAccess,
       canView: canAccess,
       canWrite,
+      webLoginRequired,
+      loginToWeb,
       unlockAdmin,
     };
-  }, [adminToken, extensionContext, unlockAdmin]);
+  }, [adminToken, extensionContext, loginToWeb, unlockAdmin]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -11,11 +11,14 @@ import {
   getDeterministicRotationRank,
   getExclusivePreferredShiftType,
   getMonthBoundarySeriesRemaining,
+  getNightSeriesDaysForModel,
   getPreferenceShiftCode,
   getTargetHoursScore,
   isDayBlockedByEmployeePreference,
   isShiftUnwantedByEmployeePreference,
   isNightShiftRefused,
+  NIGHT_MODELS,
+  normalizeNightModel,
   normalizePreferenceDayValues,
   normalizePlanningShiftTypeKey,
   rankSafeSubstituteCandidates,
@@ -88,6 +91,13 @@ describe('shiftplanGeneration helpers', () => {
         { code: 'E1', planned_slots: 1 },
       ]
     );
+  });
+
+  it('caps even an invalid configured minimum at max_staff', () => {
+    const planned = buildShiftSlots([
+      { code: 'N', shift_type: 'night', min_staff: 4, max_staff: 3 },
+    ]);
+    assert.equal(planned[0].planned_slots, 3);
   });
 
   it('keeps a stable shift block preferable without overpowering employee wishes', () => {
@@ -174,6 +184,15 @@ describe('shiftplanGeneration helpers', () => {
   it('treats an explicit no-night wish as a hard exclusion', () => {
     assert.equal(isNightShiftRefused({ unwanted_shifts: ['N'] }), true);
     assert.equal(isNightShiftRefused({ unwanted_shifts: ['E1'] }), false);
+  });
+
+  it('uses the legacy seven-day model by default and caps short night blocks at three days', () => {
+    assert.equal(normalizeNightModel(), NIGHT_MODELS.SEVEN_DAY);
+    assert.equal(normalizeNightModel('invalid'), NIGHT_MODELS.SEVEN_DAY);
+    assert.equal(normalizeNightModel('short'), NIGHT_MODELS.SHORT);
+    assert.equal(getNightSeriesDaysForModel({ nightModel: NIGHT_MODELS.SEVEN_DAY, remainingDays: 12 }), 7);
+    assert.equal(getNightSeriesDaysForModel({ nightModel: NIGHT_MODELS.SHORT, remainingDays: 12 }), 3);
+    assert.equal(getNightSeriesDaysForModel({ nightModel: NIGHT_MODELS.SHORT, remainingDays: 2 }), 2);
   });
 
   it('treats every selected unwanted shift as a hard exclusion, including weekend variants', () => {

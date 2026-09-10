@@ -57,6 +57,20 @@ export async function importSchedule(
   return res.data;
 }
 
+export type ManualShiftChange = {
+  day: number;
+  oldShift: string | null;
+  newShift: string;
+};
+
+export async function changeScheduleShifts(
+  month: string,
+  payload: { employeeName: string; days: number[]; shiftCode: string },
+): Promise<{ success: boolean; changes: ManualShiftChange[] }> {
+  const res = await api.post(`/schedules/${encodeURIComponent(month)}/change-shifts`, payload);
+  return asObject(res.data, "changeScheduleShifts") as { success: boolean; changes: ManualShiftChange[] };
+}
+
 export async function createManualShiftplanEmployee(month: string, employeeName: string) {
   const res = await api.post(`/schedules/${encodeURIComponent(month)}/manual-employees`, {
     employeeName,

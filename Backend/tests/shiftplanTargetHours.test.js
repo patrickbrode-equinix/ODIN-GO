@@ -44,7 +44,7 @@ describe('shiftplan target hours planning', () => {
     assert.deepEqual(planned.map((entry) => entry.planned_slots), [1, 1]);
   });
 
-  it('treats max_staff as soft when a large team otherwise cannot reach target hours', () => {
+  it('never exceeds max_staff when a large team otherwise cannot reach target hours', () => {
     const employees = Array.from({ length: 48 }, (_, index) => `Emp ${index + 1}`);
     const planned = buildDailyShiftSlots({
       shiftDefinitions: [
@@ -63,9 +63,8 @@ describe('shiftplan target hours planning', () => {
     });
 
     const totalSlots = planned.reduce((sum, entry) => sum + entry.planned_slots, 0);
-    assert.equal(totalSlots, 34);
-    assert.ok(totalSlots > 23, 'the old hard max_staff ceiling must be exceeded');
-    assert.ok(totalSlots <= employees.length, 'never plan more than one slot per employee and day');
+    assert.equal(totalSlots, 23);
+    assert.ok(planned.every((entry) => entry.planned_slots <= entry.max_staff));
   });
 
   it('sizes Monday starts by full block hours instead of isolated day hours', () => {
@@ -85,7 +84,8 @@ describe('shiftplan target hours planning', () => {
     });
 
     const starts = planned.reduce((sum, entry) => sum + entry.planned_slots, 0);
-    assert.ok(starts >= 29 && starts <= employees.length);
+    assert.equal(starts, 15);
+    assert.ok(planned.every((entry) => entry.planned_slots <= entry.max_staff));
   });
 
   it('never offsets one employee overtime against another employee shortfall', () => {

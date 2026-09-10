@@ -2,8 +2,10 @@
 import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import StandaloneWebLogin from "./components/StandaloneWebLogin";
 import { PageGuard } from "./router/PageGuard";
 import { getDefaultRouteForCurrentMode, IS_SHIFTPLANNER_MODE } from "./config/appMode";
+import { useAuth } from "./context/AuthContext";
 
 /* Public – small, always needed immediately */
 const TVFullscreen          = lazy(() => import("./components/pages/TVFullscreen"));
@@ -29,9 +31,19 @@ const TeamsCommunicationCenter = lazy(() => import("./components/pages/TeamsComm
 const AdminSettings          = lazy(() => import("./components/pages/AdminSettings"));
 const ShiftplanControlCenter = lazy(() => import("./components/pages/ShiftplanControlCenter"));
 const UserPreferencesPage    = lazy(() => import("./components/pages/UserPreferencesPage"));
+
+function ProtectedApplicationLayout() {
+  const { webLoginRequired } = useAuth();
+  return webLoginRequired ? <StandaloneWebLogin /> : <Layout />;
+}
 const JarvisNotifications    = lazy(() => import("./components/pages/JarvisNotifications"));
 const ProjectsPage           = lazy(() => import("./components/pages/ProjectsPage"));
 const OdinGoWorkspace        = lazy(() => import("./components/pages/OdinGoWorkspace"));
+
+function ProtectedOdinGoWorkspace() {
+  const { webLoginRequired } = useAuth();
+  return webLoginRequired ? <StandaloneWebLogin /> : <OdinGoWorkspace />;
+}
 
 /* Loading fallback */
 function PageLoader() {
@@ -72,7 +84,7 @@ export default function App() {
         {/* PUBLIC ROUTES             */}
         {/* ========================= */}
         <Route path="/tv-fullscreen" element={<TVFullscreen />} />
-        <Route path="/odin-go/*" element={<OdinGoWorkspace />} />
+        <Route path="/odin-go/*" element={<ProtectedOdinGoWorkspace />} />
 
         {/* ========================= */}
         {/* PUBLIC TV DASHBOARD       */}
@@ -86,7 +98,7 @@ export default function App() {
           {/* ========================= */}
           {/* MAIN APP (with Layout)   */}
           {/* ========================= */}
-          <Route element={<Layout />}>
+          <Route element={<ProtectedApplicationLayout />}>
 
             {/* Default */}
             <Route index element={<Navigate to={defaultRoute} replace />} />

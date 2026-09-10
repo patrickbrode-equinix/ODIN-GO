@@ -58,17 +58,7 @@ export function ShiftContextMenu({ x, y, employeeName, selectedCount = 1, onClos
                     <span className="font-semibold text-foreground">{t("shiftContext.employee")}: {employeeName || "—"}</span>
                     <span>{selectedCount > 1 ? `${selectedCount} ${t("shiftContext.daysSelected")}` : `1 ${t("shiftContext.daySelected")}`}</span>
                 </div>
-                <MenuItem label={t("shiftContext.early1")} onClick={() => onSelect('E1')} />
-                <MenuItem label={t("shiftContext.early2")} onClick={() => onSelect('E2')} />
-                <MenuItem label={t("shiftContext.late1")} onClick={() => onSelect('L1')} />
-                <MenuItem label={t("shiftContext.late2")} onClick={() => onSelect('L2')} />
-                <MenuItem label={t("shiftContext.night")} onClick={() => onSelect('N')} />
-                <div className="h-px bg-border my-1" />
-                <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground">{t("shiftContext.halfShifts")}</div>
-                <MenuItem label={t("shiftContext.halfEarly1")} onClick={() => onSelect('HE1')} />
-                <MenuItem label={t("shiftContext.halfEarly2")} onClick={() => onSelect('HE2')} />
-                <MenuItem label={t("shiftContext.halfLate1")} onClick={() => onSelect('HL1')} />
-                <MenuItem label={t("shiftContext.halfLate2")} onClick={() => onSelect('HL2')} />
+                <MenuItem label={isGerman ? "Schicht ändern…" : "Change shift…"} onClick={() => onSelect('CHANGE_SHIFT')} />
                 <div className="h-px bg-border my-1" />
                 <div className="px-2 py-1 text-[10px] font-bold text-muted-foreground">{t("shiftContext.absence")}</div>
                 <MenuItem label={t("shiftContext.vacation")} onClick={() => onSelect('ABSENCE:VACATION')} />
@@ -77,8 +67,6 @@ export function ShiftContextMenu({ x, y, employeeName, selectedCount = 1, onClos
                 <MenuItem label={t("shiftContext.offsite")} onClick={() => onSelect('ABSENCE:OFFSITE')} />
                 <div className="h-px bg-border my-1" />
                 <MenuItem label={isGerman ? "Kommen/Gehen erfassen" : "Track arrival/departure"} onClick={() => onSelect('ATTENDANCE')} />
-                <div className="h-px bg-border my-1" />
-                <MenuItem label={t("shiftContext.clearDelete")} onClick={() => onSelect('')} danger />
                 <div className="h-px bg-border my-1" />
                 <MenuItem label={t("shiftContext.competencies")} onClick={() => onSelect('COMPETENCIES')} />
                 <MenuItem label={t("shiftContext.changeHistory")} onClick={() => onSelect('HISTORY')} />

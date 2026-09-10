@@ -12,6 +12,7 @@ import { useLanguage } from "../../context/LanguageContext";
 import { ActivityLogPanel } from "../activity/ActivityLogPanel";
 import { fetchTvSlideConfig, updateTvSlideConfig, type TvSlideConfig } from "../../api/tvConfig";
 import { fetchSettingsAudit, type SettingsAuditEntry } from "../../api/settingsAudit";
+import { fetchShiftHistory, type ShiftChangeLog } from "../../api/history";
 import { api } from "../../api/api";
 import { AssignmentSettingsPanel } from "../assignment/AssignmentSettingsPanel";
 import { OdinAutomationControlPanel } from "../assignment/OdinAutomationControlPanel";
@@ -1082,6 +1083,14 @@ function TogglesTab() {
     } catch (err) { console.error(err); }
   };
 
+  const toggleColleaguePreferences = async () => {
+    const next = !colleaguePreferencesEnabled;
+    try {
+      await api.put('/app-settings', { 'shiftplan.colleague_preferences_enabled': next });
+      setColleaguePreferencesEnabled(next);
+    } catch (err) { console.error(err); }
+  };
+
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -1385,21 +1394,21 @@ function AuditTab() {
   const { language } = useLanguage();
   const isGerman = language === "de";
   const [entries, setEntries] = useState<SettingsAuditEntry[]>([]);
+  const [shiftChanges, setShiftChanges] = useState<ShiftChangeLog[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setEntries(await fetchSettingsAudit({ limit: 100 })); } catch (e) { console.error(e); }
+    try {
+      const [settingsEntries, scheduleEntries] = await Promise.all([
+        fetchSettingsAudit({ limit: 100 }),
+        fetchShiftHistory({ limit: 100 }),
+      ]);
+      setEntries(settingsEntries);
+      setShiftChanges(scheduleEntries.filter((entry) => entry.source === "MANUAL_SHIFT_CHANGE"));
+    } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
-
-  const toggleColleaguePreferences = async () => {
-    const next = !colleaguePreferencesEnabled;
-    try {
-      await api.put('/app-settings', { 'shiftplan.colleague_preferences_enabled': next });
-      setColleaguePreferencesEnabled(next);
-    } catch (err) { console.error(err); }
-  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -1446,6 +1455,47 @@ function AuditTab() {
             {entries.length === 0 ? <div className="py-8 text-center text-sm text-slate-400">{isGerman ? "Noch keine Änderungen protokolliert." : "No changes logged yet."}</div> : null}
           </>
         )}
+      </EnterpriseCard>
+
+      <EnterpriseCard className="border-sky-500/20 bg-[radial-gradient(circle_at_top_right,#0c4a6e22_0%,#020617_65%)]">
+        <div className="mb-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.24em] text-sky-300/75">
+            {isGerman ? "Dienstplan" : "Schedule"}
+          </div>
+          <div className="mt-2 text-lg font-semibold text-slate-100">
+            {isGerman ? "Manuelle Schichtänderungen" : "Manual shift changes"}
+          </div>
+          <div className="mt-1 text-sm text-slate-400">
+            {isGerman
+              ? "Direkt im Dienstplan bestätigte Änderungen inklusive vorheriger und neuer Schicht."
+              : "Changes confirmed directly in the schedule, including previous and new shift."}
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-[0.22em] text-slate-400">
+                <th className="px-3 py-2">{isGerman ? "Zeitpunkt" : "Time"}</th>
+                <th className="px-3 py-2">{isGerman ? "Person" : "Person"}</th>
+                <th className="px-3 py-2">{isGerman ? "Mitarbeiter" : "Employee"}</th>
+                <th className="px-3 py-2">{isGerman ? "Datum" : "Date"}</th>
+                <th className="px-3 py-2">{isGerman ? "Änderung" : "Change"}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {shiftChanges.map((entry) => (
+                <tr key={`shift-${entry.id}`} className="border-b border-white/5 text-slate-200 hover:bg-white/5">
+                  <td className="whitespace-nowrap px-3 py-3 text-xs text-slate-400">{new Date(entry.created_at).toLocaleString(isGerman ? "de-DE" : "en-GB", { timeZone: "Europe/Berlin" })}</td>
+                  <td className="px-3 py-3 text-xs">{entry.changed_by || "—"}</td>
+                  <td className="px-3 py-3 text-xs font-medium">{entry.employee_name}</td>
+                  <td className="whitespace-nowrap px-3 py-3 text-xs">{new Date(entry.date).toLocaleDateString(isGerman ? "de-DE" : "en-GB")}</td>
+                  <td className="px-3 py-3 text-xs"><span className="font-semibold text-rose-300">{entry.old_value || "—"}</span> <span className="text-slate-500">→</span> <span className="font-semibold text-emerald-300">{entry.new_value || "—"}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {shiftChanges.length === 0 ? <div className="py-8 text-center text-sm text-slate-400">{isGerman ? "Noch keine manuellen Schichtänderungen protokolliert." : "No manual shift changes have been logged yet."}</div> : null}
       </EnterpriseCard>
     </div>
   );

@@ -36,8 +36,11 @@ import {
   getShiftSeriesDays,
   getShiftDurationHours,
   getMonthBoundarySeriesRemaining,
+  getNightSeriesDaysForModel,
   isDayBlockedByEmployeePreference,
   isNightShiftRefused,
+  NIGHT_MODELS,
+  normalizeNightModel,
   normalizePreferenceDayValues,
   isShiftDefinitionDraftPlannable,
   normalizePlanningShiftTypeKey,
@@ -994,6 +997,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const empRecoveryReason = {};
   const empSeriesCode = {};
   const empSeriesRemaining = {};
+  const empSeriesTotalDays = {};
   const empLastWorkedShiftCode = {};
   const empLastWorkedShiftType = {};
   const empLastWorkedDay = {};
@@ -1053,6 +1057,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empRecoveryReason[employee] = carried.recoveryReason || null;
     empSeriesCode[employee] = carried.seriesCode || null;
     empSeriesRemaining[employee] = Math.max(Number.parseInt(carried.seriesRemaining, 10) || 0, 0);
+    empSeriesTotalDays[employee] = Math.max(Number.parseInt(carried.seriesTotalDays, 10) || 0, 0);
     empLastWorkedShiftCode[employee] = carried.lastWorkedShiftCode || null;
     empLastWorkedShiftType[employee] = carried.lastWorkedShiftType || null;
     empLastWorkedDay[employee] = null;
@@ -1075,6 +1080,35 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return isDayBlockedByEmployeePreference(empPrefsMap.get(employeeName), dow);
   };
 
+  const getEmployeeNightModel = (employeeName) => normalizeNightModel(empPrefsMap.get(employeeName)?.night_model);
+  const getPlannedSeriesDays = (employeeName, shiftDef, day) => {
+    if (normalizePlanningShiftTypeKey(shiftDef?.shift_type) !== 'night') {
+      return getAnchoredSeriesDays(shiftDef, dayOfWeek(year, mon, day));
+    }
+    if (getEmployeeNightModel(employeeName) !== NIGHT_MODELS.SHORT) {
+      return getAnchoredSeriesDays(shiftDef, dayOfWeek(year, mon, day));
+    }
+
+    // Short blocks may start on every day. Reduce only for the month boundary
+    // or a known hard block; never create four consecutive nights.
+    let blockDays = getNightSeriesDaysForModel({
+      nightModel: NIGHT_MODELS.SHORT,
+      remainingDays: planningEndDay - day + 1,
+    });
+    const preferences = empPrefsMap.get(employeeName);
+    for (let offset = 1; offset < blockDays; offset++) {
+      const nextDay = day + offset;
+      const nextDate = `${month}-${String(nextDay).padStart(2, '0')}`;
+      if (isEmployeeAbsentOnDate(employeeName, nextDate)
+        || isEmployeeBlockedByPreferenceOnDay(employeeName, dayOfWeek(year, mon, nextDay))
+        || isShiftUnwantedByEmployeePreference(preferencesForDate(employeeName, nextDate), shiftDef.code)) {
+        blockDays = offset;
+        break;
+      }
+    }
+    return Math.max(blockDays, 1);
+  };
+
   const getCreditedAbsenceHours = (absence, weekend) => {
     if (!absence || weekend) return 0;
     return CREDITED_ABSENCE_TYPES.has(String(absence.type || '').toUpperCase()) ? CREDITED_ABSENCE_HOURS : 0;
@@ -1084,7 +1118,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const previousWorkedShiftType = empLastWorkedShiftType[emp];
     const configuredSeriesDays = getShiftSeriesDays(shiftDef);
     const continuingBlock = empSeriesRemaining[emp] > 0 && empSeriesCode[emp] === shiftDef.code;
-    const seriesDays = continuingBlock ? configuredSeriesDays : getAnchoredSeriesDays(shiftDef, dayOfWeek(year, mon, day));
+    const seriesDays = continuingBlock
+      ? (empSeriesTotalDays[emp] || configuredSeriesDays)
+      : getPlannedSeriesDays(emp, shiftDef, day);
     const remainingBefore = continuingBlock ? empSeriesRemaining[emp] : 0;
     const dayInSeries = continuingBlock ? Math.max(seriesDays - remainingBefore + 1, 1) : 1;
     const remainingAfter = seriesDays > 1
@@ -1095,9 +1131,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (remainingAfter > 0) {
       empSeriesCode[emp] = shiftDef.code;
       empSeriesRemaining[emp] = remainingAfter;
+      empSeriesTotalDays[emp] = seriesDays;
     } else {
       empSeriesCode[emp] = null;
       empSeriesRemaining[emp] = 0;
+      empSeriesTotalDays[emp] = 0;
     }
 
     shifts.push({ employee_name: emp, day, shift_code: shiftDef.code });
@@ -1275,7 +1313,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         && day === 1
         && dow !== 1
         && continuingEmployees.length < baseNeededStaff;
-      if (!canStartShiftSeries({ day, dayOfWeek: dow, definition: shiftDef }) && !hasConfiguredNightTransition && !isBoundaryBootstrap) {
+      const hasShortNightCandidate = normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night'
+        && availableForDay.some((employee) => getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT
+          && !assignedToday.has(employee)
+          && !isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), shiftDef.code));
+      if (!canStartShiftSeries({ day, dayOfWeek: dow, definition: shiftDef }) && !hasConfiguredNightTransition && !isBoundaryBootstrap && !hasShortNightCandidate) {
         const requiredStaff = Math.max(Number.parseInt(String(shiftDef.min_staff ?? 0), 10) || 0, 0);
         if (continuingEmployees.length < requiredStaff) {
           conflicts.push({
@@ -1335,7 +1377,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const specialPool = specialPoolsByShift.get(normalizedShiftCode);
           const isRestrictedPoolShift = restrictedPoolShiftCodes.has(normalizedShiftCode);
           const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
-          const seriesDays = getAnchoredSeriesDays(shiftDef, dow);
+          const seriesDays = getPlannedSeriesDays(employee, shiftDef, day);
+          const nightModel = getEmployeeNightModel(employee);
           let hardBlocked = false;
 
           if (isDayBlockedByEmployeePreference(prefs, dow)) {
@@ -1361,9 +1404,18 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             reasons.push(`Feste Schichtvorgabe: nur ${fixedShiftType}`);
           }
 
-          if (planConfig.respect_employee_wishes && shiftDef.shift_type === 'night' && isNightShiftRefused(prefs)) {
+          if (shiftDef.shift_type === 'night' && isNightShiftRefused(prefs)) {
             hardBlocked = true;
             reasons.push('Harter Mitarbeiterwunsch: keine Nachtschicht');
+          }
+
+          if (shiftDef.shift_type === 'night'
+            && nightModel === NIGHT_MODELS.SEVEN_DAY
+            && !canStartShiftSeries({ day, dayOfWeek: dow, definition: shiftDef })
+            && !hasConfiguredNightTransition
+            && !isBoundaryBootstrap) {
+            hardBlocked = true;
+            reasons.push('Nachtmodell 7 Tage: Neue Nachtserie kann nur montags beginnen');
           }
 
           const individualNightLimit = Number.parseInt(String(prefs?.max_nights_per_month ?? ''), 10);
@@ -1425,7 +1477,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             if (prevDef && prevDef.shift_type === shiftDef.shift_type) consecutiveSame++;
             else break;
           }
-          const effectiveSameShiftLimit = Math.max(rotation.max_consecutive_same, seriesDays);
+          const effectiveSameShiftLimit = shiftDef.shift_type === 'night' && nightModel === NIGHT_MODELS.SHORT
+            ? 3
+            : Math.max(rotation.max_consecutive_same, seriesDays);
           if (consecutiveSame >= effectiveSameShiftLimit) {
             hardBlocked = true;
             reasons.push(`Max. gleiche Schichtart in Folge erreicht (${consecutiveSame}/${effectiveSameShiftLimit})`);
@@ -1663,6 +1717,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         if (empSeriesRemaining[employee] > 0) {
           empSeriesCode[employee] = null;
           empSeriesRemaining[employee] = 0;
+          empSeriesTotalDays[employee] = 0;
         }
         const recoveryDaysBefore = empRequiredFreeDays[employee];
         const recoveryReasonBefore = empRecoveryReason[employee];
@@ -1813,6 +1868,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       reasons,
     };
   };
+  const hasDefinitionCapacityForEmployee = (employee, day, definition) => {
+    const maxStaff = Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0);
+    if (maxStaff === 0) return false;
+    const code = String(definition?.code || '').trim().toUpperCase();
+    const assignedElsewhere = shifts.filter((entry) => Number(entry.day) === Number(day)
+      && String(entry.shift_code || '').trim().toUpperCase() === code
+      && entry.employee_name !== employee).length;
+    return assignedElsewhere < maxStaff;
+  };
 
   for (const employee of activeEmployees) {
     const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
@@ -1844,6 +1908,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         if (isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), catchupDefinition.code)) continue;
         if (isRecoveryProtectedDay(employee, day)) continue;
         if (wouldViolateAdjacentTransition(employee, day, catchupDefinition)) continue;
+        if (!hasDefinitionCapacityForEmployee(employee, day, catchupDefinition)) continue;
         if (!normalizeWeekdaySetting(catchupDefinition.applicable_days, [1, 2, 3, 4, 5]).includes(dow)) continue;
 
         let adjacentWorkdays = 0;
@@ -1895,6 +1960,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (Array.from({ length: 7 }, (_, offset) => monday + offset).some((day) => isEmployeeBlockedByPreferenceOnDay(employee, dayOfWeek(year, mon, day)))) continue;
           if (isRecoveryProtectedDay(employee, sunday)) continue;
           if (violatesWeekendRecoveryAfterBlock(employee, Array.from({ length: 7 }, (_, offset) => monday + offset))) continue;
+          if (!Array.from({ length: 7 }, (_, offset) => monday + offset).every((day) => hasDefinitionCapacityForEmployee(employee, day, earlyWeekendDefinition))) continue;
 
           for (let day = monday; day <= saturday; day++) {
             const shift = shifts.find((entry) => entry.employee_name === employee && entry.day === day);
@@ -1968,6 +2034,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (additionalDays.some((day) => isEmployeeBlockedByPreferenceOnDay(employee, dayOfWeek(year, mon, day)))) continue;
           if (additionalDays.some((day) => isRecoveryProtectedDay(employee, day))) continue;
           if (additionalDays.some((day) => wouldViolateAdjacentTransition(employee, day, blockDefinition))) continue;
+          if (blockDays.some((day) => !hasDefinitionCapacityForEmployee(employee, day, blockDefinition))) continue;
           if (violatesWeekendRecoveryAfterBlock(employee, blockDays)) continue;
 
           const blockedByOtherShift = blockDays.some((day) => {
@@ -2026,6 +2093,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (isRecoveryProtectedDay(employee, day)) continue;
           if (!applicableDays.has(dow)) continue;
           if (wouldViolateAdjacentTransition(employee, day, definition)) continue;
+          if (!hasDefinitionCapacityForEmployee(employee, day, definition)) continue;
 
           const workedDays = Object.keys(empDayAssignment[employee])
             .map((entry) => Number.parseInt(entry, 10))
@@ -2167,6 +2235,67 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  // Final hard-constraint audit. The planning pass must never silently return
+  // a draft with an overstaffed definition, a refused night, or a short-night
+  // run longer than three consecutive days.
+  for (let day = planningStartDay; day <= planningEndDay; day++) {
+    const assignmentsToday = shifts.filter((entry) => Number(entry.day) === day);
+    for (const definition of shiftDefs) {
+      const code = String(definition.code || '').trim().toUpperCase();
+      const assigned = assignmentsToday.filter((entry) => String(entry.shift_code || '').trim().toUpperCase() === code).length;
+      const maxStaff = Math.max(Number.parseInt(String(definition.max_staff ?? 0), 10) || 0, 0);
+      if (maxStaff > 0 && assigned > maxStaff) {
+        conflicts.push({
+          day,
+          date: `${month}-${String(day).padStart(2, '0')}`,
+          shift: code,
+          severity: 'critical',
+          type: 'max_staff_reached',
+          assigned,
+          maxStaff,
+          message: `${code} am ${month}-${String(day).padStart(2, '0')}: ${assigned}/${maxStaff} Personen eingeplant; maximale Besetzung überschritten.`,
+        });
+      }
+    }
+  }
+
+  for (const employee of activeEmployees) {
+    const preferences = empPrefsMap.get(employee);
+    const employeeShifts = shifts
+      .filter((entry) => entry.employee_name === employee)
+      .sort((left, right) => Number(left.day) - Number(right.day));
+    const nightDays = new Set(employeeShifts
+      .filter((entry) => normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type) === 'night')
+      .map((entry) => Number(entry.day)));
+
+    if (isNightShiftRefused(preferences) && nightDays.size > 0) {
+      conflicts.push({
+        employee,
+        severity: 'critical',
+        type: 'hard_blocked_shift',
+        message: `${employee}: Nachtschicht wurde trotz harter Abwahl eingeplant.`,
+      });
+    }
+
+    if (getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT) {
+      let consecutiveNights = 0;
+      for (let day = planningStartDay; day <= planningEndDay; day++) {
+        consecutiveNights = nightDays.has(day) ? consecutiveNights + 1 : 0;
+        if (consecutiveNights > 3) {
+          conflicts.push({
+            employee,
+            day,
+            date: `${month}-${String(day).padStart(2, '0')}`,
+            severity: 'critical',
+            type: 'short_night_limit_reached',
+            message: `${employee}: Das Nachtmodell Kurz erlaubt maximal drei aufeinanderfolgende Nachtschichten.`,
+          });
+          break;
+        }
+      }
+    }
+  }
+
   shifts.sort((left, right) => left.day - right.day || left.employee_name.localeCompare(right.employee_name, 'de'));
 
   const coloRolePlan = buildColoRolePlan({
@@ -2300,6 +2429,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       recoveryReason: empRecoveryReason[employee],
       seriesCode: empSeriesCode[employee],
       seriesRemaining: empSeriesRemaining[employee],
+      seriesTotalDays: empSeriesTotalDays[employee],
       lastWorkedShiftCode: empLastWorkedShiftCode[employee],
       lastWorkedShiftType: empLastWorkedShiftType[employee],
       forcedNextShiftCode: empForcedNextShiftCode[employee],

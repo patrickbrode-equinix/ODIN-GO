@@ -28,6 +28,23 @@ function normalizeFixedShiftType(value) {
   return null;
 }
 
+function validateShiftDefinitionInput(input = {}) {
+  const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const duration = Number.parseFloat(String(input.duration_hours ?? 8));
+  const minStaff = Number.parseInt(String(input.min_staff ?? 1), 10);
+  const maxStaff = Number.parseInt(String(input.max_staff ?? 5), 10);
+  const shiftType = String(input.shift_type || 'early').trim().toLowerCase();
+  const allowedTypes = new Set(['early', 'late', 'night', 'special', 'free', 'absent']);
+  const days = Array.isArray(input.applicable_days) ? input.applicable_days : [0, 1, 2, 3, 4, 5, 6];
+
+  if (!timePattern.test(String(input.start_time || '')) || !timePattern.test(String(input.end_time || ''))) return 'Ungültige Schichtzeit';
+  if (!Number.isFinite(duration) || duration <= 0 || duration > 24) return 'Ungültige Schichtdauer';
+  if (!Number.isInteger(minStaff) || minStaff < 0 || !Number.isInteger(maxStaff) || maxStaff < minStaff) return 'Mindestbesetzung darf die maximale Besetzung nicht überschreiten';
+  if (!allowedTypes.has(shiftType)) return 'Ungültiger Schichttyp';
+  if (!days.every((day) => Number.isInteger(Number(day)) && Number(day) >= 0 && Number(day) <= 6)) return 'Ungültige Wochentage';
+  return null;
+}
+
 function parseEmployeeAccessPool(value) {
   try {
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
@@ -94,6 +111,8 @@ router.put('/definitions/:id', requirePageAccess('shiftplan_control', 'write'), 
   try {
     const { name, short_name, shift_type, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, is_active, sort_order, applicable_days } = req.body;
     const id = parseInt(req.params.id);
+    const validationError = validateShiftDefinitionInput({ shift_type, start_time, end_time, duration_hours, min_staff, max_staff, applicable_days });
+    if (validationError) return res.status(400).json({ ok: false, error: validationError });
     const normalizedApplicableDays = Array.isArray(applicable_days) ? applicable_days : [0, 1, 2, 3, 4, 5, 6];
     const normalizedStartDayOffset = Number.isInteger(Number(start_day_offset)) ? Number(start_day_offset) : 0;
     const normalizedEndDayOffset = Number.isInteger(Number(end_day_offset)) ? Number(end_day_offset) : 0;
@@ -131,6 +150,8 @@ router.post('/definitions', requirePageAccess('shiftplan_control', 'write'), asy
   try {
     const { code, name, short_name, shift_type, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, sort_order, applicable_days } = req.body;
     if (!code || !name) return res.status(400).json({ ok: false, error: 'Code und Name erforderlich' });
+    const validationError = validateShiftDefinitionInput({ shift_type, start_time, end_time, duration_hours, min_staff, max_staff, applicable_days });
+    if (validationError) return res.status(400).json({ ok: false, error: validationError });
     const normalizedApplicableDays = Array.isArray(applicable_days) ? applicable_days : [0, 1, 2, 3, 4, 5, 6];
     const normalizedStartDayOffset = Number.isInteger(Number(start_day_offset)) ? Number(start_day_offset) : 0;
     const normalizedEndDayOffset = Number.isInteger(Number(end_day_offset)) ? Number(end_day_offset) : 0;
@@ -425,7 +446,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days } = req.body;
+    const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, blocked_days, night_model } = req.body;
     const canSelectBlockedDays = await canUseBlockedWeekdayPreferences(req.user);
     // Half shifts are operational planning details, not employee-selectable preferences.
     // Filter them server-side as well so stale browser bundles cannot reintroduce them.
@@ -438,6 +459,10 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     const maxNightBlocksPerMonth = Number.isInteger(parsedNightBlockLimit) && parsedNightBlockLimit > 0
       ? Math.min(parsedNightBlockLimit, 4)
       : null;
+    const normalizedNightModel = String(night_model || 'SEVEN_DAY').trim().toUpperCase();
+    if (!['SEVEN_DAY', 'SHORT'].includes(normalizedNightModel)) {
+      return res.status(400).json({ ok: false, error: 'Ungültiges Nachtschicht-Modell' });
+    }
     const sanitizedBlockedDays = canSelectBlockedDays && Array.isArray(blocked_days)
       ? [...new Set(blocked_days.map((day) => Number.parseInt(String(day), 10)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
       : [];
@@ -449,8 +474,8 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
       : {};
 
     const { rows } = await pool.query(
-      `INSERT INTO employee_preferences (user_id, preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, preferred_days, blocked_days, avoid_colleagues, workload_preference, notes, monthly_preferences, updated_at)
-       VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb, NOW())
+      `INSERT INTO employee_preferences (user_id, preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, preferred_days, blocked_days, avoid_colleagues, workload_preference, notes, monthly_preferences, night_model, updated_at)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11::jsonb, $12, NOW())
        ON CONFLICT (user_id) DO UPDATE SET
          preferred_shifts = $2::jsonb,
          unwanted_shifts = $3::jsonb,
@@ -462,6 +487,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
           workload_preference = $9,
           notes = employee_preferences.notes,
           monthly_preferences = $11::jsonb,
+          night_model = $12,
           updated_at = NOW()
        RETURNING *`,
       [
@@ -474,8 +500,9 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         JSON.stringify(sanitizedBlockedDays),
         JSON.stringify([]),
         'normal',
-         null,
-         JSON.stringify(monthly_preferences),
+        null,
+        JSON.stringify(monthly_preferences),
+        normalizedNightModel,
       ]
     );
     res.json({ ok: true, preferences: rows[0] });

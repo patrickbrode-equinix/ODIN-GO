@@ -93,6 +93,19 @@ export async function requireAuth(req, res, next) {
         }
       }
 
+      // The standalone web surface is password protected through the same
+      // signed admin token used by the embedded application. Jarvis embeds
+      // supply a verified identity token instead. Do not silently fall back
+      // to the placeholder user for either access path.
+      if (!adminUnlocked && !verifiedIdentity) {
+        return res.status(401).json({
+          code: adminError ? "ADMIN_SESSION_EXPIRED" : "JARVIS_IDENTITY_REQUIRED",
+          message: adminError
+            ? "Die Passwort-Sitzung ist abgelaufen. Bitte erneut anmelden."
+            : "Bitte melde dich mit dem Passwort an oder öffne Jarvis, damit deine Identität bestätigt werden kann.",
+        });
+      }
+
       const result = await db.query(
         `SELECT id, login_name, email, user_group, first_name, last_name, is_root
          FROM users

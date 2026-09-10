@@ -68,8 +68,10 @@ export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOf
     let baseCount = 0;
     for (const definition of definitions) {
       const minStaff = Math.max(Number.parseInt(String(definition?.min_staff ?? 0), 10) || 0, 0);
-      slotCounts.set(definition.code, minStaff);
-      baseCount += minStaff;
+      const maxStaff = Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0);
+      const plannedMinimum = Math.min(minStaff, maxStaff);
+      slotCounts.set(definition.code, plannedMinimum);
+      baseCount += plannedMinimum;
     }
 
     const typeKey = normalizePlanningShiftTypeKey(definitions[0]?.shift_type);
@@ -85,7 +87,7 @@ export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOf
         const maxStaff = Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0);
         const current = slotCounts.get(definition.code) || 0;
 
-        if (maxStaff > 0 && current >= maxStaff) continue;
+        if (current >= maxStaff) continue;
 
         slotCounts.set(definition.code, current + 1);
         remaining -= 1;
@@ -105,6 +107,24 @@ export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOf
 export function getShiftDurationHours(definition) {
   const parsed = Number.parseFloat(String(definition?.duration_hours ?? 8));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8;
+}
+
+export const NIGHT_MODELS = Object.freeze({
+  SEVEN_DAY: 'SEVEN_DAY',
+  SHORT: 'SHORT',
+});
+
+// Existing night planning used seven-day blocks. Keep that behavior as the
+// default for migrated and incomplete preference records.
+export function normalizeNightModel(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return normalized === NIGHT_MODELS.SHORT ? NIGHT_MODELS.SHORT : NIGHT_MODELS.SEVEN_DAY;
+}
+
+export function getNightSeriesDaysForModel({ nightModel, remainingDays = 7 } = {}) {
+  const availableDays = Math.max(Number.parseInt(String(remainingDays), 10) || 0, 0);
+  if (normalizeNightModel(nightModel) === NIGHT_MODELS.SHORT) return Math.min(3, availableDays);
+  return Math.min(7, availableDays);
 }
 
 const WEEKDAY_ALIASES = new Map([
@@ -453,8 +473,8 @@ export function buildDailyShiftSlots({
     for (const definition of baseSlots) {
       if (remainingExtraSlots <= 0) break;
 
-      const maxStaff = Number.parseInt(String(definition?.max_staff ?? definition?.planned_slots ?? 0), 10);
-      const normalizedMaxStaff = Number.isFinite(maxStaff) && maxStaff > 0 ? maxStaff : (definition.planned_slots || 0);
+      const maxStaff = Number.parseInt(String(definition?.max_staff ?? 0), 10);
+      const normalizedMaxStaff = Number.isFinite(maxStaff) && maxStaff >= 0 ? maxStaff : 0;
       const currentCount = slotCounts.get(definition.code) || 0;
 
       if (currentCount >= normalizedMaxStaff) continue;
@@ -465,22 +485,6 @@ export function buildDailyShiftSlots({
     }
 
     if (!placedExtraSlot) break;
-  }
-
-  // max_staff is the preferred operational staffing level. Contracted hours
-  // can require additional people on a shift when the team is larger.
-  while (remainingExtraSlots > 0 && baseSlots.length > 0) {
-    const orderedDefinitions = [...baseSlots].sort((left, right) => {
-      const countDiff = (slotCounts.get(left.code) || 0) - (slotCounts.get(right.code) || 0);
-      if (countDiff !== 0) return countDiff;
-      return String(left.code || '').localeCompare(String(right.code || ''), 'de');
-    });
-
-    for (const definition of orderedDefinitions) {
-      if (remainingExtraSlots <= 0) break;
-      slotCounts.set(definition.code, (slotCounts.get(definition.code) || 0) + 1);
-      remainingExtraSlots -= 1;
-    }
   }
 
   return baseSlots.map((definition) => ({

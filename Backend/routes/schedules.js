@@ -157,6 +157,47 @@ async function resolveStoredMonthLabel(client, requestedLabel, parsedMonth) {
   return matching || requestedLabel;
 }
 
+/* ------------------------------------------------ */
+/* GET /api/schedules/history                       */
+/* Must be registered before /:month.               */
+/* ------------------------------------------------ */
+router.get(
+  "/history",
+  requireAuth,
+  requirePageAccess("shiftplan", "view"),
+  async (req, res) => {
+    try {
+      const { year, month, employee_name, limit = 100 } = req.query;
+      let query = "SELECT * FROM shift_change_log";
+      const params = [];
+      const conditions = [];
+
+      if (year && month) {
+        const parsedMonth = Number(month);
+        const start = `${year}-${String(parsedMonth).padStart(2, "0")}-01`;
+        const end = `${year}-${String(parsedMonth).padStart(2, "0")}-31`;
+        conditions.push(`date >= $${params.length + 1}`);
+        params.push(start);
+        conditions.push(`date <= $${params.length + 1}`);
+        params.push(end);
+      }
+      if (employee_name) {
+        conditions.push(`employee_name = $${params.length + 1}`);
+        params.push(employee_name);
+      }
+      if (conditions.length > 0) query += ` WHERE ${conditions.join(" AND ")}`;
+      query += ` ORDER BY created_at DESC LIMIT $${params.length + 1}`;
+      params.push(Math.min(Math.max(Number(limit) || 100, 1), 500));
+
+      const { rows } = await db.query(query, params);
+      res.json(rows);
+    } catch (error) {
+      console.error("HISTORY ERROR:", error);
+      res.status(500).json({ error: "Failed to fetch history" });
+    }
+  }
+);
+
 function normalizeEmployeeActionName(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
@@ -1005,6 +1046,12 @@ router.put(
     try {
       await client.query("BEGIN");
 
+      const existingShiftResult = await client.query(
+        `SELECT shift_code FROM shifts WHERE month=$1 AND employee_name=$2 AND day=$3 FOR UPDATE`,
+        [month, employeeName, day]
+      );
+      const previousShiftCode = existingShiftResult.rows[0]?.shift_code ?? null;
+
       const manualEmployeeRes = await client.query(
         `SELECT 1 FROM (
            SELECT employee_name
@@ -1039,12 +1086,115 @@ router.put(
         );
       }
 
+      if (previousShiftCode !== (shiftCode || null)) {
+        const parsedMonth = parseMonthLabel(month);
+        const changedDate = parsedMonth
+          ? `${parsedMonth.year}-${String(parsedMonth.month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+          : new Date().toISOString().slice(0, 10);
+        const changedBy = req.user?.displayName || req.user?.email || req.user?.loginName || "Unknown";
+        await client.query(
+          `INSERT INTO shift_change_log (employee_name, date, old_value, new_value, changed_by, source)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [employeeName, changedDate, previousShiftCode, shiftCode || null, changedBy, "MANUAL_SHIFT_CHANGE"]
+        );
+      }
+
       await client.query("COMMIT");
       res.json({ success: true });
     } catch (e) {
       await client.query("ROLLBACK");
       console.error("SCHEDULE CELL UPDATE ERROR:", e);
       res.status(500).json({ error: "Update failed" });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+/* ------------------------------------------------ */
+/* POST /api/schedules/:month/change-shifts         */
+/* Atomically updates one employee on one or more   */
+/* selected days and records every changed cell.    */
+/* ------------------------------------------------ */
+router.post(
+  "/:month/change-shifts",
+  requireAuth,
+  requirePageAccess("shiftplan", "write"),
+  async (req, res) => {
+    const month = String(req.params.month || "").trim();
+    const employeeName = String(req.body?.employeeName || "").trim();
+    const shiftCode = String(req.body?.shiftCode || "").trim().toUpperCase();
+    const days = Array.from(new Set(
+      (Array.isArray(req.body?.days) ? req.body.days : [])
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value >= 1 && value <= 31)
+    )).sort((a, b) => a - b);
+
+    if (!month || !employeeName || !shiftCode || days.length === 0) {
+      return res.status(400).json({ error: "month, employeeName, days and shiftCode are required" });
+    }
+
+    const parsedMonth = parseMonthLabel(month);
+    if (!parsedMonth) {
+      return res.status(400).json({ error: "Invalid month label" });
+    }
+    const daysInMonth = new Date(parsedMonth.year, parsedMonth.month, 0).getDate();
+    if (days.some((day) => day > daysInMonth)) {
+      return res.status(400).json({ error: "One or more selected days do not exist in this month" });
+    }
+
+    const client = await db.connect();
+    try {
+      await client.query("BEGIN");
+      const existing = await client.query(
+        `SELECT day, shift_code
+           FROM shifts
+          WHERE month = $1
+            AND employee_name = $2
+            AND day = ANY($3::int[])
+          FOR UPDATE`,
+        [month, employeeName, days]
+      );
+      const oldCodes = new Map(existing.rows.map((row) => [Number(row.day), String(row.shift_code || "")]));
+      const changes = days
+        .map((day) => ({ day, oldShift: oldCodes.get(day) || null, newShift: shiftCode }))
+        .filter((change) => change.oldShift !== change.newShift);
+
+      if (changes.length === 0) {
+        await client.query("ROLLBACK");
+        return res.json({ success: true, changes: [] });
+      }
+
+      const manualEmployeeRes = await client.query(
+        `SELECT 1 FROM manual_shiftplan_employees WHERE month = $1 AND employee_name = $2 LIMIT 1`,
+        [month, employeeName]
+      );
+      const source = manualEmployeeRes.rowCount > 0 ? "manual" : "import";
+      const changedBy = req.user?.displayName || req.user?.email || req.user?.loginName || "Unknown";
+
+      for (const change of changes) {
+        await client.query(
+          `INSERT INTO shifts (month, employee_name, day, shift_code, source)
+           VALUES ($1,$2,$3,$4,$5)
+           ON CONFLICT (month, employee_name, day)
+           DO UPDATE SET shift_code = EXCLUDED.shift_code, source = EXCLUDED.source`,
+          [month, employeeName, change.day, shiftCode, source]
+        );
+        const date = `${parsedMonth.year}-${String(parsedMonth.month).padStart(2, "0")}-${String(change.day).padStart(2, "0")}`;
+        await client.query(
+          `INSERT INTO shift_change_log (employee_name, date, old_value, new_value, changed_by, source)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [employeeName, date, change.oldShift, shiftCode, changedBy, "MANUAL_SHIFT_CHANGE"]
+        );
+      }
+
+      await client.query("COMMIT");
+      recomputeConstraintsInternal(month).catch((error) => console.error("Constraint recompute after manual change failed:", error));
+      res.json({ success: true, changes });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.error("BULK SCHEDULE CHANGE ERROR:", error);
+      res.status(500).json({ error: "Shift changes could not be saved" });
     } finally {
       client.release();
     }
@@ -1134,52 +1284,6 @@ router.post(
 );
 
 
-
-/* ------------------------------------------------ */
-/* GET /api/schedules/history                       */
-/* ------------------------------------------------ */
-router.get(
-  "/history",
-  requireAuth,
-  async (req, res) => {
-    try {
-      const { year, month, employee_name, limit = 100 } = req.query;
-
-      let query = `SELECT * FROM shift_change_log`;
-      const params = [];
-      const conditions = [];
-
-      if (year && month) {
-        const parsedM = Number(month);
-        const start = `${year}-${String(parsedM).padStart(2, '0')}-01`;
-        const end = `${year}-${String(parsedM).padStart(2, '0')}-31`;
-        conditions.push(`date >= $${params.length + 1}`);
-        params.push(start);
-        conditions.push(`date <= $${params.length + 1}`);
-        params.push(end);
-      }
-
-      if (employee_name) {
-        conditions.push(`employee_name = $${params.length + 1}`);
-        params.push(employee_name);
-      }
-
-      if (conditions.length > 0) {
-        query += " WHERE " + conditions.join(" AND ");
-      }
-
-      query += ` ORDER BY changed_at DESC LIMIT $${params.length + 1}`;
-      params.push(limit);
-
-      const { rows } = await db.query(query, params);
-      res.json(rows);
-
-    } catch (err) {
-      console.error("HISTORY ERROR:", err);
-      res.status(500).json({ error: "Failed to fetch history" });
-    }
-  }
-);
 
 /* ------------------------------------------------ */
 /* GET /api/schedules/last-import                   */
