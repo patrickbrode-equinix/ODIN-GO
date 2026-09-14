@@ -356,15 +356,6 @@ export function AssignmentExplanationCard({ explanation }: Props) {
                       tooltipWidth="w-80"
                     />
                   )}
-                  {(candidate.colleagueScore || 0) > 0 && (
-                    <AssignmentMetricBadge
-                      label={formatAssignmentMetricLabel('colleague-proximity', candidate.colleagueScore, glossaryLanguage)}
-                      glossaryKey="colleague-proximity"
-                      language={glossaryLanguage}
-                      className="rounded-full border border-border/30 bg-background/60 px-2 py-0.5"
-                      tooltipWidth="w-80"
-                    />
-                  )}
                 </div>
                 {(candidate.rankingFactors || []).length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-2">

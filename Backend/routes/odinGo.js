@@ -1,10 +1,13 @@
 import express from "express";
 import { isIP } from "node:net";
 import db from "../db.js";
-import { requireAuth, requireVerifiedIdentity } from "../middleware/authMiddleware.js";
+import { requireApplicationKey, requireAuth, requireVerifiedIdentity } from "../middleware/authMiddleware.js";
 import { parseMonthLabel } from "../lib/monthParser.js";
 
 const router = express.Router();
+// Header weather is low-risk and should remain usable while the Jarvis profile
+// is still loading. The installation key is still mandatory in production.
+router.get("/weather", requireApplicationKey, serveWeather);
 router.use(requireAuth);
 
 const WEATHER_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -226,7 +229,7 @@ router.get("/overview", async (req, res) => {
   }
 });
 
-router.get("/weather", async (req, res) => {
+async function serveWeather(req, res) {
   const location = await resolveWeatherLocation(req);
   const cacheKey = `${location.latitude.toFixed(2)}:${location.longitude.toFixed(2)}`;
   const cached = weatherCache.get(cacheKey);
@@ -250,7 +253,7 @@ router.get("/weather", async (req, res) => {
     if (cached) return res.json({ ...cached.data, cached: true, stale: true });
     return res.json({ available: false, location: { city: location.city, region: location.region, country: location.country, source: location.source }, current: null, source: "open-meteo", cached: false });
   }
-});
+}
 
 router.use(requireVerifiedIdentity);
 

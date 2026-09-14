@@ -16,7 +16,6 @@ export const WEEKPLAN_ROLES = [
   { key: "cc", label: "CC", symbol: "CC", icon: "check", shortText: "Commit Compliance", color: "border-emerald-400 bg-emerald-500/20 text-emerald-100" },
   { key: "projekt", label: "Projekt", symbol: "PR", icon: "folder", shortText: "Projektarbeit", color: "border-amber-400 bg-amber-500/20 text-amber-100" },
   { key: "dbs_project", label: "DBS", symbol: "DBS", icon: "database", shortText: "DBS-Einsatz", color: "border-violet-400 bg-violet-500/20 text-violet-100" },
-  { key: "colo", label: "COLO", symbol: "CO", icon: "building", shortText: "Colocation-Einsatz", color: "border-cyan-400 bg-cyan-500/20 text-cyan-100" },
 ] as const;
 
 export type WeekplanRoleKey = typeof WEEKPLAN_ROLES[number]["key"];
@@ -40,7 +39,6 @@ export function getRoleVisualStyle(key?: string) {
     dbs_project: { accent: "#c084fc", border: "rgba(192,132,252,0.55)", background: "rgba(88,28,135,0.28)", badge: "rgba(147,51,234,0.28)" },
     dp: { accent: "#f472b6", border: "rgba(244,114,182,0.55)", background: "rgba(131,24,67,0.27)", badge: "rgba(219,39,119,0.26)" },
     projekt: { accent: "#fbbf24", border: "rgba(251,191,36,0.55)", background: "rgba(120,53,15,0.27)", badge: "rgba(217,119,6,0.27)" },
-    colo: { accent: "#22d3ee", border: "rgba(34,211,238,0.50)", background: "rgba(14,116,144,0.23)", badge: "rgba(8,145,178,0.25)" },
   };
   return key ? styles[key] : undefined;
 }

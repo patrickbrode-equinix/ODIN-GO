@@ -67,6 +67,27 @@ describe('shiftplan target hours planning', () => {
     assert.ok(planned.every((entry) => entry.planned_slots <= entry.max_staff));
   });
 
+  it('uses the increased regular-shift capacity needed by a 43-person team with 174-hour targets', () => {
+    const planned = buildDailyShiftSlots({
+      shiftDefinitions: [
+        { code: 'E1', shift_type: 'early', min_staff: 5, max_staff: 8, duration_hours: 8, applicable_days: [1, 2, 3, 4, 5] },
+        { code: 'E2', shift_type: 'early', min_staff: 5, max_staff: 8, duration_hours: 8, applicable_days: [1, 2, 3, 4, 5] },
+        { code: 'L1', shift_type: 'late', min_staff: 5, max_staff: 8, duration_hours: 8, applicable_days: [1, 2, 3, 4, 5] },
+        { code: 'L2', shift_type: 'late', min_staff: 5, max_staff: 8, duration_hours: 8, applicable_days: [1, 2, 3, 4, 5] },
+        { code: 'N', shift_type: 'night', min_staff: 3, max_staff: 3, duration_hours: 8, applicable_days: [0, 1, 2, 3, 4, 5, 6] },
+      ],
+      activeEmployees: Array.from({ length: 43 }, (_, index) => `Emp ${index + 1}`),
+      employeeHours: {},
+      monthlyTargetHours: 174,
+      day: 1,
+      numDays: 31,
+      dayOfWeek: 5,
+    });
+
+    assert.equal(planned.reduce((sum, entry) => sum + entry.planned_slots, 0), 31);
+    assert.ok(planned.every((entry) => entry.planned_slots <= entry.max_staff));
+  });
+
   it('sizes Monday starts by full block hours instead of isolated day hours', () => {
     const employees = Array.from({ length: 44 }, (_, index) => `Emp ${index + 1}`);
     const planned = buildDailyShiftSlots({

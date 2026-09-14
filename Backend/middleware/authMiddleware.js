@@ -12,6 +12,27 @@ import { config } from "../config/index.js";
 const LAST_SEEN_TOUCH_INTERVAL_MS = 60 * 1000;
 const lastSeenTouchCache = new Map();
 
+/**
+ * Protect low-risk operational data that does not need a named employee
+ * session (weather and market data). Production requests still need the VM
+ * application key, so rotating that key invalidates access immediately.
+ */
+export function requireApplicationKey(req, res, next) {
+  if (!config.isShiftplannerMode) return next();
+
+  const suppliedKey = String(req.headers["x-shiftplanner-key"] || "");
+  const expectedKey = config.SHIFTPLANNER_API_KEY;
+  const localDevelopmentRequest = !config.isProd && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress || "");
+  const keyMatches = suppliedKey.length === expectedKey.length
+    && suppliedKey.length > 0
+    && crypto.timingSafeEqual(Buffer.from(suppliedKey), Buffer.from(expectedKey));
+
+  if (!keyMatches && !localDevelopmentRequest) {
+    return res.status(401).json({ message: "Invalid local application key" });
+  }
+  return next();
+}
+
 function isPatrickBrode(identity, user) {
   const normalize = (value) => String(value || "").trim().toLocaleLowerCase("de-DE").replace(/\s+/g, " ");
   const identityName = normalize(identity?.displayName);
@@ -255,7 +276,10 @@ export async function requireAuth(req, res, next) {
 }
 
 export function requireVerifiedIdentity(req, res, next) {
-  if (req.identityVerified) return next();
+  // The standalone password login is an administrator session and therefore
+  // is sufficient for operational pages as well. Employee sessions still
+  // require their Jarvis identity, preventing anonymous handover entries.
+  if (req.identityVerified || req.isRoot === true) return next();
   return res.status(401).json({
     code: "JARVIS_IDENTITY_REQUIRED",
     message: "Bitte dein Jarvis-Profil öffnen, damit die angemeldete SSO-Identität verifiziert werden kann.",

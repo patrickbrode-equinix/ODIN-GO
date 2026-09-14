@@ -102,7 +102,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const normalizedEmployeeName = extensionContext.employeeName.trim().toLocaleLowerCase("de-DE").replace(/\s+/g, " ");
     const patrickBypass = normalizedEmployeeName === "patrick brode";
     const adminUnlocked = Boolean(adminToken || extensionContext.adminUnlocked || patrickBypass);
-    const webLoginRequired = !extensionContext.embedded && !adminUnlocked;
+    const webHasApplicationKey = Boolean(
+      sessionStorage.getItem("shiftplanner_api_key") || localStorage.getItem("shiftplanner_vm_key"),
+    );
+    const webLoginRequired = !extensionContext.embedded && (!adminUnlocked || !webHasApplicationKey);
 
     const user: User = {
       id: 0,

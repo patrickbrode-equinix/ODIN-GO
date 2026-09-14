@@ -18,6 +18,7 @@ import { AssignmentSettingsPanel } from "../assignment/AssignmentSettingsPanel";
 import { OdinAutomationControlPanel } from "../assignment/OdinAutomationControlPanel";
 import AssignmentRulesEditor from "./AssignmentRulesEditor";
 import { ShiftPlanningSettingsPanel } from "./ShiftAdminSettings";
+import WellbeingStatistics from "./WellbeingStatistics";
 import { TeamsCommunicationCenterPanel } from "./TeamsCommunicationCenter";
 import AccessDenied from "./AccessDenied";
 import OdinExclusions from "../odinlogic/OdinExclusions";
@@ -39,13 +40,14 @@ import {
   Tv, Settings, Zap, MessageSquare, Shield, Clock, Save,
   ToggleLeft, ToggleRight, Loader2,
   History, GripVertical, Brain, Trash2, CalendarClock,
-  Scale, Shuffle, BarChart3, CheckCircle2, CircleDot, KeyRound,
+  Scale, Shuffle, BarChart3, CheckCircle2, CircleDot, KeyRound, HeartPulse,
 } from "lucide-react";
 
-type TabId = "shiftplan" | "teams" | "tv" | "thresholds" | "toggles" | "feedback" | "odin" | "maintenance" | "audit" | "security";
+type TabId = "shiftplan" | "wellbeing" | "teams" | "tv" | "thresholds" | "toggles" | "feedback" | "odin" | "maintenance" | "audit" | "security";
 
 const TAB_SPECS: { id: TabId; icon: ElementType; accent: string }[] = [
   { id: "shiftplan", icon: CalendarClock, accent: "from-sky-500/25 via-cyan-500/10 to-transparent" },
+  { id: "wellbeing", icon: HeartPulse, accent: "from-violet-500/25 via-fuchsia-500/10 to-transparent" },
   { id: "security", icon: KeyRound, accent: "from-slate-500/25 via-zinc-500/10 to-transparent" },
   { id: "audit", icon: History, accent: "from-zinc-500/25 via-slate-500/10 to-transparent" },
 ];
@@ -56,6 +58,8 @@ function getTabs(t: (key: any) => string, language: string) {
     switch (tab.id) {
       case "shiftplan":
         return { ...tab, label: t('admin.tabShiftplan'), description: t('admin.tabShiftplanDesc') };
+      case "wellbeing":
+        return { ...tab, label: "Wellbeing", description: isGerman ? "Belastung und Erholung im Team" : "Team workload and recovery" };
       case "teams":
         return { ...tab, label: "Teams", description: t('admin.tabTeamsDesc') };
       case "tv":
@@ -82,6 +86,7 @@ function getTabs(t: (key: any) => string, language: string) {
 
 const TAB_ACCESS: Record<TabId, Array<{ pageKey: string; min?: "view" | "write" }>> = {
   shiftplan: [{ pageKey: "shiftplan_control", min: "view" }],
+  wellbeing: [{ pageKey: "admin_settings", min: "view" }],
   teams: [{ pageKey: "teams_center", min: "view" }],
   tv: [{ pageKey: "admin_settings", min: "view" }],
   thresholds: [{ pageKey: "admin_settings", min: "view" }],
@@ -390,6 +395,7 @@ export default function AdminSettings() {
       </div>
 
       {activeTab === "shiftplan" && <ShiftPlanningSettingsPanel embedded />}
+      {activeTab === "wellbeing" && <WellbeingStatistics embedded />}
       {activeTab === "teams" && <TeamsCommunicationCenterPanel embedded initialTab="settings" />}
       {activeTab === "tv" && <TVSettingsTab />}
       {activeTab === "thresholds" && <ThresholdsTab />}
@@ -1055,19 +1061,13 @@ function TogglesTab() {
   const { language, t } = useLanguage();
   const isGerman = language === "de";
   const [toggles, setToggles] = useState<{ key: string; enabled: boolean; label: string }[]>([]);
-  const [colleaguePreferencesEnabled, setColleaguePreferencesEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [toggleResponse, settingsResponse] = await Promise.all([
-        api.get("/dashboard/feature-toggles").catch(() => ({ data: [] })),
-        api.get('/app-settings').catch(() => ({ data: {} })),
-      ]);
+      const toggleResponse = await api.get("/dashboard/feature-toggles").catch(() => ({ data: [] }));
       setToggles(Array.isArray(toggleResponse.data) ? toggleResponse.data : []);
-      const value = settingsResponse.data?.['shiftplan.colleague_preferences_enabled'];
-      setColleaguePreferencesEnabled(value === undefined || !['false', '0', 'off'].includes(String(value).toLowerCase()));
     } catch (e) { console.error(e); }
     setLoading(false);
   }, []);
@@ -1083,14 +1083,6 @@ function TogglesTab() {
     } catch (err) { console.error(err); }
   };
 
-  const toggleColleaguePreferences = async () => {
-    const next = !colleaguePreferencesEnabled;
-    try {
-      await api.put('/app-settings', { 'shiftplan.colleague_preferences_enabled': next });
-      setColleaguePreferencesEnabled(next);
-    } catch (err) { console.error(err); }
-  };
-
   if (loading) return <LoadingSpinner />;
 
   return (
@@ -1100,15 +1092,6 @@ function TogglesTab() {
         <InfoTooltip title={isGerman ? "Funktionsschalter" : "Feature toggles"} side="right" align="start"><p>{isGerman ? "Funktionsschalter schalten Funktionen kurzfristig frei oder aus, ohne dass dafür Code geändert werden muss." : "Feature toggles enable or disable functions quickly without changing code."}</p></InfoTooltip>
       </div>
       <div className="space-y-3">
-        <div className="flex items-center justify-between rounded bg-gray-50 px-3 py-2 dark:bg-gray-800/50">
-          <div>
-            <div className="text-sm font-medium">{isGerman ? 'Wunschkollegen in Mitarbeitereinstellungen anzeigen' : 'Show preferred colleagues in employee settings'}</div>
-            <div className="text-xs text-gray-400">{isGerman ? 'Blendet den gesamten Bereich Wunschkollegen für Mitarbeiter ein oder aus.' : 'Shows or hides the complete preferred-colleagues section for employees.'}</div>
-          </div>
-          <button onClick={toggleColleaguePreferences} className="focus:outline-none" aria-label={isGerman ? 'Wunschkollegen-Sichtbarkeit umschalten' : 'Toggle preferred colleague visibility'}>
-            {colleaguePreferencesEnabled ? <ToggleRight className="h-7 w-7 text-green-500" /> : <ToggleLeft className="h-7 w-7 text-gray-400" />}
-          </button>
-        </div>
         {toggles.map(t => (
           <div key={t.key} className="flex items-center justify-between py-2 px-3 rounded bg-gray-50 dark:bg-gray-800/50">
             <div>

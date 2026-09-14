@@ -3,13 +3,11 @@
 /* Full self-service preference management          */
 /* ================================================ */
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { api } from '../../api/api';
 import { EnterpriseCard } from '../layout/EnterpriseLayout';
-import { getEligibleColleagues, type EligibleColleague } from '../../api/userPreferences';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
 import { formatAbsoluteDateTime, formatRelativeTime } from '../../utils/loginStatus';
-import { dedupeEmployeeNames } from '../../utils/employeeNames';
 import { getHessenHolidayMap } from '../../utils/deHolidays';
 import {
   Heart, Moon, Sun, CalendarDays, Users,
@@ -19,11 +17,8 @@ import {
 const COPY = {
   de: {
     help: 'Hilfe',
-    conflictResolved: 'Konflikt bereinigt: Wunschkollegen wurden aus der Ausschlussliste entfernt.',
-    colleagueConflict: 'Konflikt in den Kollegenlisten',
     saved: 'Wünsche gespeichert',
     saveFailed: 'Fehler beim Speichern',
-    alreadyPreferredSuffix: 'ist bereits als Wunschkollege ausgewählt.',
     preferredShifts: 'Bevorzugte Schichten',
     preferredShiftsHelp: 'Wähle die Schichten, die du bevorzugst. Die Planung versucht, dich diesen Schichten zuzuordnen. COLO gilt für Vorbereitung, Installation und Troubleshooting innerhalb des administrativ gepflegten Kompetenzpools.',
     unwantedShifts: 'Unerwünschte Schichten',
@@ -40,10 +35,15 @@ const COPY = {
     nightModel: 'Nachtschicht-Modell',
     sevenDayNight: '7 Tage am Stück',
     shortNight: 'Kurze Nachtblöcke',
+    sevenDayNightInfo: 'Ein Block umfasst sieben aufeinanderfolgende Nachtschichten. Dieses Modell bündelt die Nächte in einer vollen Woche.',
+    shortNightInfo: 'Ein Block umfasst zwei bis drei aufeinanderfolgende Nachtschichten. Nach jedem Block plant ODIN die hinterlegten Erholungstage.',
+    nightBlockDefinition: 'Ein Nachtblock ist eine zusammenhängende Periode von Nachtschichten, nicht nur eine einzelne Nachtschicht. Bei kurzen Blöcken können daher pro Monat mehr Blöcke gewählt werden als beim 7-Tage-Modell.',
+    nightHealthInfo: 'Arbeitsmedizinischer Hinweis: Kürzere Nachtfolgen begrenzen die Ansammlung von Schlafdefizit. Die BAuA empfiehlt möglichst wenige, in der Regel höchstens drei aufeinanderfolgende Nachtschichten sowie ausreichende Erholung danach.',
     nightModelDisabled: 'Nachtschicht ist als unerwünscht markiert. Das Nachtmodell wird nicht für die Planung verwendet.',
-    maxNights: 'Nachtschicht-Blöcke pro Monat',
-    maxWeekends: 'Wochenenddienste pro Monat',
-    noLimit: 'Unbegrenzt',
+    maxNights: 'Häufigkeit von Nachtblöcken',
+    maxWeekends: 'Häufigkeit von Wochenenddiensten',
+    weekendDefinition: 'Ein Wochenende zählt einmal, sobald du am Samstag oder Sonntag eingeplant bist. Arbeit an beiden Tagen bleibt ein Wochenendblock.',
+    low: 'Niedrig', medium: 'Mittel', high: 'Hoch', noLimit: 'Keine persönliche Begrenzung',
     weekDays: 'Tage, an denen du nicht arbeiten kannst',
     weekDaysHelp: 'Ausgewählte Wochentage sind verbindlich gesperrt. Die automatische Planung darf dich an diesen Tagen niemals einteilen.',
     weekDayLegend: 'Ausgewählte Tage sind ein absolutes Tabu für die Planung.',
@@ -55,11 +55,8 @@ const COPY = {
   },
   en: {
     help: 'Help',
-    conflictResolved: 'Conflict resolved: preferred colleagues were removed from the exclusion list.',
-    colleagueConflict: 'Conflict in colleague lists',
     saved: 'Preferences saved',
     saveFailed: 'Failed to save',
-    alreadyPreferredSuffix: 'is already selected as a preferred colleague.',
     preferredShifts: 'Preferred shifts',
     preferredShiftsHelp: 'Choose the shifts you prefer. Planning will try to assign you to these shifts. COLO covers preparation, installation, and troubleshooting within the administrator-managed competence pool.',
     unwantedShifts: 'Unwanted shifts',
@@ -76,10 +73,15 @@ const COPY = {
     nightModel: 'Night-shift model',
     sevenDayNight: '7 consecutive days',
     shortNight: 'Short night blocks',
+    sevenDayNightInfo: 'One block contains seven consecutive night shifts. This model groups nights into one full week.',
+    shortNightInfo: 'One block contains two to three consecutive night shifts. ODIN schedules the configured recovery days after each block.',
+    nightBlockDefinition: 'A night block is a continuous period of night shifts, not just one individual night shift. Short blocks can therefore be selected more often per month than seven-day blocks.',
+    nightHealthInfo: 'Occupational-health note: Shorter night sequences limit the accumulation of sleep deficit. BAuA recommends as few consecutive night shifts as possible, generally no more than three, followed by adequate recovery.',
     nightModelDisabled: 'Night shift is marked as unwanted. The night model is not used for planning.',
-    maxNights: 'Night-shift blocks per month',
-    maxWeekends: 'Weekend duties per month',
-    noLimit: 'Unlimited',
+    maxNights: 'Night-block frequency',
+    maxWeekends: 'Weekend-duty frequency',
+    weekendDefinition: 'A weekend counts once when you are scheduled on Saturday or Sunday. Working both days remains one weekend block.',
+    low: 'Low', medium: 'Medium', high: 'High', noLimit: 'No personal limit',
     weekDays: 'Days you cannot work',
     weekDaysHelp: 'Selected weekdays are binding exclusions. Automatic planning must never assign you on those days.',
     weekDayLegend: 'Selected days are absolute exclusions for planning.',
@@ -120,7 +122,6 @@ interface Preferences {
   max_weekends_per_month: number | null;
   preferred_days: number[];
   blocked_days: number[];
-  avoid_colleagues: string[];
 }
 
 const SHIFT_CODES = ['E1', 'E2', 'L1', 'L2', 'N'];
@@ -190,7 +191,7 @@ const HOLIDAY_DATE_NAMES: Record<string, string> = {
 const DEFAULTS: Preferences = {
   preferred_shifts: [], unwanted_shifts: [], preferred_holidays: [], max_nights_per_month: null, night_model: 'SEVEN_DAY',
   monthly_preferences: {},
-  preferred_days: [], blocked_days: [], avoid_colleagues: [],
+  preferred_days: [], blocked_days: [],
   max_weekends_per_month: null,
 };
 
@@ -218,11 +219,6 @@ function applyEmployeeSelectableShiftDefinitions(
   setNames(configuredNames);
 }
 
-function normalizeNameList(values: unknown): string[] {
-  if (!Array.isArray(values)) return [];
-  return dedupeEmployeeNames(values);
-}
-
 function isSameList(left: string[], right: string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -230,7 +226,23 @@ function isSameList(left: string[], right: string[]) {
 function normalizeNightBlockLimit(value: unknown): number | null {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isInteger(parsed) || parsed <= 0) return null;
-  return Math.min(parsed, 4);
+  return Math.min(parsed, 21);
+}
+
+type FrequencyLevel = '' | 'low' | 'medium' | 'high';
+
+const NIGHT_BLOCK_LIMITS: Record<Preferences['night_model'], Record<Exclude<FrequencyLevel, ''>, number>> = {
+  SEVEN_DAY: { low: 7, medium: 14, high: 21 },
+  SHORT: { low: 6, medium: 12, high: 18 },
+};
+
+const WEEKEND_LIMITS: Record<Exclude<FrequencyLevel, ''>, number> = { low: 1, medium: 2, high: 3 };
+
+function getFrequencyLevel(value: number | null, limits: Record<Exclude<FrequencyLevel, ''>, number>): FrequencyLevel {
+  if (!value || value <= 0) return '';
+  return (Object.entries(limits) as Array<[Exclude<FrequencyLevel, ''>, number]>).reduce((closest, entry) => (
+    Math.abs(entry[1] - value) < Math.abs(limits[closest] - value) ? entry[0] : closest
+  ), 'low');
 }
 
 function formatHolidayDates(value: string, locale: string): string {
@@ -256,9 +268,6 @@ export default function EmployeePreferences() {
     ? [...HOLIDAY_OPTIONS_DE, ...ISLAMIC_HOLIDAY_OPTIONS_DE]
     : [...HOLIDAY_OPTIONS_EN, ...ISLAMIC_HOLIDAY_OPTIONS_EN];
   const [prefs, setPrefs] = useState<Preferences>(DEFAULTS);
-  const [colleagues, setColleagues] = useState<EligibleColleague[]>([]);
-  const [preferredColleagues, setPreferredColleagues] = useState<string[]>([]);
-  const [colleagueSearch, setColleagueSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
@@ -286,10 +295,8 @@ export default function EmployeePreferences() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [prefRes, collRes, preferredRes, definitionsRes] = await Promise.all([
+      const [prefRes, definitionsRes] = await Promise.all([
         api.get('/shift-config/employee-preferences'),
-        getEligibleColleagues().catch(() => []),
-        api.get('/user/preferred-colleagues').catch(() => ({ data: [] })),
         api.get('/shift-config/definitions').catch(() => ({ data: { definitions: [] } })),
       ]);
       applyEmployeeSelectableShiftDefinitions(definitionsRes.data?.definitions || [], setShiftOptions, setShiftNameMap);
@@ -303,14 +310,11 @@ export default function EmployeePreferences() {
         const monthly = Object.fromEntries(Object.entries(stored.monthly_preferences || {}).map(([key, value]: [string, any]) => [key, { ...value, preferred_shifts: allowed(value?.preferred_shifts), unwanted_shifts: allowed(value?.unwanted_shifts) }]));
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
-          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), night_model: stored.night_model === 'SHORT' ? 'SHORT' : 'SEVEN_DAY', max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [], avoid_colleagues: normalizeNameList(stored.avoid_colleagues || []),
+          preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), night_model: stored.night_model === 'SHORT' ? 'SHORT' : 'SEVEN_DAY', max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [],
         });
       } else {
         setPrefs(DEFAULTS);
       }
-      const normalizedPreferred = normalizeNameList(preferredRes.data);
-      setPreferredColleagues(normalizedPreferred);
-      setColleagues(collRes);
     } catch (e: any) {
       showToast(e?.response?.data?.error || e.message, 'err');
     } finally {
@@ -332,16 +336,10 @@ export default function EmployeePreferences() {
     };
   }, [refreshShiftOptions]);
 
-  const filteredColleagues = useMemo(() => {
-    const query = colleagueSearch.trim().toLowerCase();
-    if (!query) return colleagues;
-    return colleagues.filter((entry) => entry.name.toLowerCase().includes(query));
-  }, [colleagues, colleagueSearch]);
-
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.put('/shift-config/employee-preferences', { ...prefs, preferred_days: [], avoid_colleagues: [] });
+      await api.put('/shift-config/employee-preferences', { ...prefs, preferred_days: [] });
       showToast(copy.saved);
       setDirty(false);
     } catch (e: any) {
@@ -356,7 +354,7 @@ export default function EmployeePreferences() {
     setDirty(true);
   };
 
-  const toggleInArray = (field: 'preferred_shifts' | 'unwanted_shifts' | 'preferred_holidays' | 'preferred_days' | 'blocked_days' | 'avoid_colleagues', value: any) => {
+  const toggleInArray = (field: 'preferred_shifts' | 'unwanted_shifts' | 'preferred_holidays' | 'preferred_days' | 'blocked_days', value: any) => {
     setPrefs(prev => {
       const arr = (prev[field] as any[]) || [];
       const next = arr.includes(value) ? arr.filter((v: any) => v !== value) : [...arr, value];
@@ -367,6 +365,19 @@ export default function EmployeePreferences() {
 
   const selectedMonthKey = `${preferenceYear}-${String(preferenceMonth).padStart(2, '0')}`;
   const selectedMonthPreferences = prefs.monthly_preferences[selectedMonthKey] || { preferred_shifts: [], unwanted_shifts: [] };
+  const nightFrequency = getFrequencyLevel(prefs.max_nights_per_month, NIGHT_BLOCK_LIMITS[prefs.night_model]);
+  const weekendFrequency = getFrequencyLevel(prefs.max_weekends_per_month, WEEKEND_LIMITS);
+  const updateNightModel = (nightModel: Preferences['night_model']) => {
+    setPrefs((current) => {
+      const currentFrequency = getFrequencyLevel(current.max_nights_per_month, NIGHT_BLOCK_LIMITS[current.night_model]);
+      return {
+        ...current,
+        night_model: nightModel,
+        max_nights_per_month: currentFrequency ? NIGHT_BLOCK_LIMITS[nightModel][currentFrequency] : null,
+      };
+    });
+    setDirty(true);
+  };
   const monthsWithPreferences = Object.entries(prefs.monthly_preferences)
     .filter(([, value]) => value.preferred_shifts.length > 0 || value.unwanted_shifts.length > 0)
     .sort(([left], [right]) => left.localeCompare(right));
@@ -546,7 +557,7 @@ export default function EmployeePreferences() {
                   key={value}
                   type="button"
                   disabled={prefs.unwanted_shifts.includes('N')}
-                  onClick={() => update('night_model', value)}
+                  onClick={() => updateNightModel(value)}
                   className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${prefs.night_model === value
                     ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300'
                     : 'border-border/30 bg-background/40 text-muted-foreground hover:border-indigo-500/30'} disabled:cursor-not-allowed disabled:opacity-50`}
@@ -555,23 +566,46 @@ export default function EmployeePreferences() {
                 </button>
               ))}
             </div>
+            <div className="mt-3 space-y-2 text-[11px] leading-5 text-muted-foreground">
+              <p>{prefs.night_model === 'SEVEN_DAY' ? copy.sevenDayNightInfo : copy.shortNightInfo}</p>
+              <p>{copy.nightBlockDefinition}</p>
+            </div>
             {prefs.unwanted_shifts.includes('N') && <p className="mt-2 text-[11px] text-muted-foreground">{copy.nightModelDisabled}</p>}
           </div>
           <div>
             <label className="text-xs text-muted-foreground">{copy.maxNights}</label>
-            <select
-              value={prefs.max_nights_per_month ?? ''}
-              onChange={(event) => update('max_nights_per_month', event.target.value ? Number(event.target.value) : null)}
-              className="mt-1 w-full rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-sm text-foreground"
-            >
-              <option value="">{copy.noLimit}</option>
-              {[1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}
-            </select>
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {(['low', 'medium', 'high'] as const).map((level) => (
+                <button key={level} type="button" disabled={prefs.unwanted_shifts.includes('N')}
+                  onClick={() => update('max_nights_per_month', NIGHT_BLOCK_LIMITS[prefs.night_model][level])}
+                  className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${nightFrequency === level ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300' : 'border-border/30 bg-background/40 text-muted-foreground hover:border-indigo-500/30'} disabled:cursor-not-allowed disabled:opacity-50`}>
+                  {copy[level]}
+                </button>
+              ))}
+              <button type="button" disabled={prefs.unwanted_shifts.includes('N')} onClick={() => update('max_nights_per_month', null)}
+                className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${nightFrequency === '' ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300' : 'border-border/30 bg-background/40 text-muted-foreground hover:border-indigo-500/30'} disabled:cursor-not-allowed disabled:opacity-50`}>
+                {copy.noLimit}
+              </button>
+            </div>
+          </div>
+          <div className="md:col-span-2 rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            {copy.nightHealthInfo}
           </div>
           <div>
             <label className="text-xs text-muted-foreground">{copy.maxWeekends}</label>
-            <input type="number" value={prefs.max_weekends_per_month ?? ''} onChange={e => update('max_weekends_per_month', e.target.value ? parseInt(e.target.value) : null)}
-              className="w-full mt-1 px-3 py-2 text-sm rounded-lg border border-border/30 bg-background/40 text-foreground" min="0" max="8" placeholder={copy.noLimit} />
+            <div className="mt-1 grid grid-cols-2 gap-2">
+              {(['low', 'medium', 'high'] as const).map((level) => (
+                <button key={level} type="button" onClick={() => update('max_weekends_per_month', WEEKEND_LIMITS[level])}
+                  className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${weekendFrequency === level ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300' : 'border-border/30 bg-background/40 text-muted-foreground hover:border-indigo-500/30'}`}>
+                  {copy[level]}
+                </button>
+              ))}
+              <button type="button" onClick={() => update('max_weekends_per_month', null)}
+                className={`rounded-lg border px-3 py-2 text-xs font-medium transition ${weekendFrequency === '' ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-300' : 'border-border/30 bg-background/40 text-muted-foreground hover:border-indigo-500/30'}`}>
+                {copy.noLimit}
+              </button>
+            </div>
+            <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{copy.weekendDefinition}</p>
           </div>
         </div>
       </EnterpriseCard>

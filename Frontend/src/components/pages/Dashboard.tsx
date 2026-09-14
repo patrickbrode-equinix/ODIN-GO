@@ -387,7 +387,7 @@ function getShiftCardAccent(shiftCode: string, isLight: boolean) {
       : "border-amber-300/20 bg-[linear-gradient(165deg,rgba(250,204,21,0.20),rgba(66,48,4,0.18)_22%,rgba(8,17,37,0.88)_58%,rgba(5,12,28,0.94))] shadow-[0_24px_70px_rgba(250,204,21,0.14)] hover:shadow-[0_0_34px_rgba(250,204,21,0.20)]";
   }
 
-  if (normalized === "N") {
+  if (/^N/.test(normalized)) {
     return isLight
       ? "border-sky-200/85 bg-[linear-gradient(165deg,rgba(56,189,248,0.16),rgba(255,255,255,0.97)_54%,rgba(240,249,255,0.99))] shadow-[0_18px_42px_rgba(56,189,248,0.10)] hover:shadow-[0_24px_56px_rgba(56,189,248,0.16)]"
       : "border-sky-300/20 bg-[linear-gradient(165deg,rgba(56,189,248,0.20),rgba(6,30,56,0.20)_22%,rgba(8,17,37,0.88)_58%,rgba(5,12,28,0.94))] shadow-[0_24px_70px_rgba(56,189,248,0.14)] hover:shadow-[0_0_34px_rgba(56,189,248,0.20)]";
@@ -832,7 +832,7 @@ export default function Dashboard() {
       const shiftInfo = shiftTypes[sc.key];
       const startHour = shiftInfo ? parseInt(shiftInfo.time.split(":")[0] || "0", 10) : 0;
       const endHour = shiftInfo ? parseInt((shiftInfo.time.split("-")[1] || "").split(":")[0] || "23", 10) : 23;
-      const isActive = sc.key === "N"
+      const isActive = /^N/.test(sc.key)
         ? currentHour >= 21 || currentHour < 7
         : currentHour >= startHour && currentHour < endHour;
 

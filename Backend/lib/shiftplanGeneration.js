@@ -104,7 +104,14 @@ export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOf
   }));
 }
 
-export function getShiftDurationHours(definition) {
+export function getShiftDurationHours(definition, weekday = null) {
+  const normalizedWeekday = Number.parseInt(String(weekday), 10);
+  if (Number.isInteger(normalizedWeekday) && normalizedWeekday >= 0 && normalizedWeekday <= 6) {
+    const override = (Array.isArray(definition?.day_overrides) ? definition.day_overrides : [])
+      .find((entry) => Number(entry?.weekday) === normalizedWeekday);
+    const overrideDuration = Number.parseFloat(String(override?.duration_hours ?? ''));
+    if (Number.isFinite(overrideDuration) && overrideDuration > 0) return overrideDuration;
+  }
   const parsed = Number.parseFloat(String(definition?.duration_hours ?? 8));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 8;
 }
@@ -256,6 +263,18 @@ export function isShiftUnwantedByEmployeePreference(preferences, shiftCode) {
   return unwanted.has(getPreferenceShiftCode(shiftCode));
 }
 
+// A preferred shift remains a soft wish, but must win over an equally safe
+// alternative. Weekend variants intentionally map back to their base code.
+export function isShiftPreferredByEmployeePreference(preferences, shiftCode) {
+  if (!preferences) return false;
+  const preferred = new Set(
+    (Array.isArray(preferences.preferred_shifts) ? preferences.preferred_shifts : [])
+      .map(getPreferenceShiftCode)
+      .filter(Boolean)
+  );
+  return preferred.has(getPreferenceShiftCode(shiftCode));
+}
+
 function getPreferenceShiftType(code) {
   const normalized = getPreferenceShiftCode(code);
   if (normalized === 'E1' || normalized === 'E2' || normalized === 'EARLY' || normalized === 'FRUEH') return 'early';
@@ -385,6 +404,30 @@ export function getShiftContinuityAdjustment({
   return { score: -50, reason: `Schichtwechsel gegenüber dem letzten Block (${previousType} -> ${nextType})` };
 }
 
+// Target-hour corrections must not create a lone shift of a different type
+// inside an otherwise coherent roster. A change is still possible at a real
+// block boundary; this guard only rejects isolated bridge days.
+export function keepsShiftTypeCohesion({ assignmentsByDay = {}, day, shiftType, getShiftType, lookaroundDays = 3 } = {}) {
+  if (typeof getShiftType !== 'function') return true;
+  const normalizedType = normalizePlanningShiftTypeKey(shiftType);
+  let nearbyDifferentType = false;
+  let nearbySameType = false;
+  const maximumGap = Math.max(Number.parseInt(String(lookaroundDays), 10) || 0, 1);
+
+  for (let offset = 1; offset <= maximumGap; offset++) {
+    for (const candidateDay of [Number(day) - offset, Number(day) + offset]) {
+      const code = assignmentsByDay?.[candidateDay];
+      if (!code) continue;
+      const nearbyType = normalizePlanningShiftTypeKey(getShiftType(code));
+      if (!nearbyType) continue;
+      if (nearbyType === normalizedType) nearbySameType = true;
+      else nearbyDifferentType = true;
+    }
+  }
+
+  return !nearbyDifferentType || nearbySameType;
+}
+
 export function buildDailyShiftSlots({
   shiftDefinitions = [],
   staffingRules = {},
@@ -399,7 +442,7 @@ export function buildDailyShiftSlots({
   const baseSlots = buildShiftSlots(shiftDefinitions, staffingRules, dayOfWeek);
   const baselineTotalSlots = baseSlots.reduce((sum, definition) => sum + (definition.planned_slots || 0), 0);
   const avgShiftHours = baseSlots.length > 0
-    ? baseSlots.reduce((sum, definition) => sum + getShiftDurationHours(definition), 0) / baseSlots.length
+    ? baseSlots.reduce((sum, definition) => sum + getShiftDurationHours(definition, dayOfWeek), 0) / baseSlots.length
     : 8;
 
   const targetHoursPerEmployee = Number.parseFloat(String(monthlyTargetHours ?? 174));
@@ -440,7 +483,11 @@ export function buildDailyShiftSlots({
           if (!applicableDays.has(seriesDayOfWeek)) break;
           effectiveSeriesDays += 1;
         }
-        return getShiftDurationHours(definition) * Math.max(effectiveSeriesDays, 1);
+        let seriesHours = 0;
+        for (let seriesOffset = 0; seriesOffset < Math.max(effectiveSeriesDays, 1); seriesOffset++) {
+          seriesHours += getShiftDurationHours(definition, (startDayOfWeek + seriesOffset) % 7);
+        }
+        return seriesHours;
       });
       const averageHours = definitionHours.reduce((sum, hours) => sum + hours, 0) / Math.max(definitionHours.length, 1);
       return {

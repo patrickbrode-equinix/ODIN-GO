@@ -282,10 +282,6 @@ function buildCandidateRankingEntry(entry, finalRank, selected, selectionBlocked
   rankingFactors.push(entry.purityPure ? 'Queue purity preserved' : 'Queue purity neutral');
   rankingFactors.push(`Current workload ${entry.workload}`);
 
-  if (entry.colleagueScore > 0) {
-    rankingFactors.push(`Colleague proximity ${entry.colleagueScore}`);
-  }
-
   return {
     employeeId: entry.candidate.id,
     employeeName: entry.candidate.name,
@@ -298,7 +294,6 @@ function buildCandidateRankingEntry(entry, finalRank, selected, selectionBlocked
     workload: entry.workload,
     groupingScore: entry.groupingScore,
     queuePure: entry.purityPure,
-    colleagueScore: entry.colleagueScore,
     selectionBlocked,
     blockingReason: selectionBlocked ? (entry._groupingReason || 'Selection blocked by system grouping policy') : null,
     rankingFactors,
@@ -306,7 +301,6 @@ function buildCandidateRankingEntry(entry, finalRank, selected, selectionBlocked
       groupingScore: entry.groupingScore,
       queuePure: entry.purityPure,
       workload: entry.workload,
-      colleagueScore: entry.colleagueScore,
     },
     finalRank,
     selected,
@@ -392,44 +386,6 @@ async function resolveConfiguredFinalTie(tiedEntries, ticket, settings) {
 }
 
 /**
- * Load the preferred-colleague graph relevant to a set of candidate workers.
- * Returns a Map<workerId, Set<workerId>> where each entry lists the candidate IDs
- * that the worker has nominated as Wunschkollegen.
- * Only mutual or one-directional links within the candidate pool are returned.
- *
- * @param {object[]} candidates - array of worker objects with id
- * @returns {Promise<Map<number, Set<number>>>}
- */
-async function loadColleaguePreferences(candidates) {
-  const prefMap = new Map();
-  if (!candidates || candidates.length === 0) return prefMap;
-
-  try {
-    const candidateIds = candidates.map(c => c.id);
-    const nameToId = new Map();
-    for (const c of candidates) {
-      if (c.name) nameToId.set(c.name.trim(), c.id);
-    }
-
-    const { rows } = await pool.query(
-      `SELECT user_id, preferred_employee_name FROM preferred_colleagues WHERE user_id = ANY($1)`,
-      [candidateIds]
-    );
-
-    for (const r of rows) {
-      const preferredId = nameToId.get(r.preferred_employee_name?.trim());
-      if (preferredId != null && preferredId !== r.user_id) {
-        if (!prefMap.has(r.user_id)) prefMap.set(r.user_id, new Set());
-        prefMap.get(r.user_id).add(preferredId);
-      }
-    }
-  } catch {
-    // Table may not exist yet — ignore, preferences are purely soft
-  }
-
-  return prefMap;
-}
-
 /**
  * Select the best worker from eligible candidates deterministically.
  *
@@ -437,8 +393,7 @@ async function loadColleaguePreferences(candidates) {
  *   1. Least active workload (fewest current tickets)
  *   2. Existing grouped system name (worker already has tickets for this system)
  *   3. Queue purity (worker's queue matches ticket type)
- *   4. Preferred colleague bonus (soft — Wunschkollegen)
- *   5. Configured final tie-breaker: round-robin rotation, random, or stable worker ID
+ *   4. Configured final tie-breaker: round-robin rotation, random, or stable worker ID
  *
  * @param {object[]} candidates        - Eligible worker objects
  * @param {object}   ticket            - Normalized ticket
@@ -466,19 +421,9 @@ export async function selectWorker(candidates, ticket, settings, workerTicketsMa
         groupingBlocked: false,
         purityPure: true,
         workload: (workerTicketsMap.get(candidates[0].id) || []).length,
-        colleagueScore: 0,
         _groupingReason: null,
       }, 1, true, false)],
     };
-  }
-
-  // Load preferred-colleague graph for soft tie-breaking
-  const prefMap = await loadColleaguePreferences(candidates);
-
-  // Build a set of already-assigned worker IDs (from workerTicketsMap) for colleague proximity
-  const assignedWorkerIds = new Set();
-  for (const [wId, tickets] of workerTicketsMap.entries()) {
-    if (tickets && tickets.length > 0) assignedWorkerIds.add(wId);
   }
 
   // Score each candidate on the tie-breaking criteria
@@ -494,23 +439,6 @@ export async function selectWorker(candidates, ticket, settings, workerTicketsMa
     // 3. Workload (negative: fewer = better)
     const workload = currentTickets.length;
 
-    // 4. Preferred colleague score (soft)
-    //    Count how many of this worker's preferred colleagues are actively assigned.
-    //    Higher = slight preference (but never overrides hard rules above).
-    let colleagueScore = 0;
-    const myPrefs = prefMap.get(c.id);
-    if (myPrefs) {
-      for (const prefId of myPrefs) {
-        if (assignedWorkerIds.has(prefId)) colleagueScore++;
-      }
-    }
-    // Also count reverse: how many other assigned workers nominated this candidate
-    for (const [otherId, otherPrefs] of prefMap.entries()) {
-      if (otherId !== c.id && otherPrefs.has(c.id) && assignedWorkerIds.has(otherId)) {
-        colleagueScore++;
-      }
-    }
-
     return {
       candidate: c,
       groupingScore: grouping.score,
@@ -518,7 +446,6 @@ export async function selectWorker(candidates, ticket, settings, workerTicketsMa
       groupingBlocked: grouping.blocked || false,
       purityPure: purity.pure,
       workload,
-      colleagueScore,
       // For debugging
       _groupingReason: grouping.reason,
       _purityReason: purity.reason,
@@ -542,10 +469,7 @@ export async function selectWorker(candidates, ticket, settings, workerTicketsMa
     // 3. Queue purity (pure before impure)
     if (a.purityPure !== b.purityPure) return a.purityPure ? -1 : 1;
 
-    // 4. Preferred colleague bonus (higher = better, soft tiebreaker)
-    if (a.colleagueScore !== b.colleagueScore) return b.colleagueScore - a.colleagueScore;
-
-    // 5. Worker ID (deterministic)
+    // 4. Worker ID (deterministic)
     return a.candidate.id - b.candidate.id;
   });
 
@@ -569,12 +493,6 @@ export async function selectWorker(candidates, ticket, settings, workerTicketsMa
     const prefersPureQueue = finalists.some(entry => entry.purityPure);
     finalists = finalists.filter(entry => entry.purityPure === prefersPureQueue);
     if (finalists.length === 1) tieBreaker = 'queue-purity';
-  }
-
-  if (finalists.length > 1) {
-    const strongestColleagueScore = Math.max(...finalists.map(entry => entry.colleagueScore));
-    finalists = finalists.filter(entry => entry.colleagueScore === strongestColleagueScore);
-    if (finalists.length === 1) tieBreaker = 'colleague-preference';
   }
 
   let winner = finalists[0];
@@ -607,9 +525,6 @@ export async function selectWorker(candidates, ticket, settings, workerTicketsMa
     reasons.push('queue purity maintained');
   }
   reasons.push(`workload: ${winner.workload} tickets`);
-  if (winner.colleagueScore > 0) {
-    reasons.push(`colleague preference: ${winner.colleagueScore}`);
-  }
   if (finalTieReason) reasons.push(finalTieReason);
   reasons.push(`worker ID: ${winner.candidate.id}`);
 

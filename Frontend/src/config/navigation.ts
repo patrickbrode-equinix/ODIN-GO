@@ -20,7 +20,6 @@ import {
   Shield,
   BarChart3,
   ClipboardList,
-  HeartPulse,
 } from "lucide-react";
 import { isPageEnabledInCurrentMode } from "./appMode";
 
@@ -65,7 +64,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard", section: "top", pageKey: "dashboard" },
   { to: "/shiftplan", icon: Calendar, label: "Schichtplan", section: "top", pageKey: "shiftplan" },
   { to: "/drafts", icon: ClipboardList, label: "Drafts", section: "top", pageKey: "shiftplan_drafts" },
-  { to: "/wellbeing", icon: HeartPulse, label: "Wellbeing", section: "top", pageKey: "wellbeing" },
   { to: "/handover", icon: FileText, label: "Handover", section: "top", pageKey: "handover" },
   { to: "/tickets", icon: Ticket, label: "Tickets", section: "top", pageKey: "tickets" },
   { to: "/odin-logic", icon: Brain, label: "ODIN-Logik", section: "top", pageKey: "odin_logic" },
@@ -91,7 +89,6 @@ const ALL_PAGE_DEFS = [
   { key: "dashboard", label: "Dashboard" },
   { key: "shiftplan", label: "Shiftplan" },
   { key: "shiftplan_drafts", label: "Drafts" },
-  { key: "wellbeing", label: "Wellbeing" },
   { key: "handover", label: "Handover" },
   { key: "tickets", label: "Tickets" },
 
@@ -115,7 +112,6 @@ const PAGE_LABEL_KEYS: Record<PageKey, TranslationKey> = {
   dashboard: "nav.dashboard",
   shiftplan: "nav.shiftplan",
   shiftplan_drafts: "nav.shiftplan",
-  wellbeing: "nav.shiftplan",
   handover: "nav.handover",
   tickets: "nav.tickets",
   tv_dashboard: "nav.tvDashboard",

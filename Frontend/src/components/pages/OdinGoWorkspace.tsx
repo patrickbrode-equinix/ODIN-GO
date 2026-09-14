@@ -8,6 +8,7 @@ import {
   CalendarDays,
   CalendarRange,
   ChevronDown,
+  ClipboardList,
   Cloud,
   CloudLightning,
   CloudRain,
@@ -16,7 +17,7 @@ import {
   Expand,
   FileText,
   FolderKanban,
-  HeartPulse,
+  HelpCircle,
   LockKeyhole,
   MessageSquare,
   MapPin,
@@ -39,12 +40,12 @@ import { FlagIcon } from "../FlagIcon";
 import { useTheme } from "../ThemeProvider";
 import { PageGuard } from "../../router/PageGuard";
 import HeaderWorldClock from "../HeaderWorldClock";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 const Shiftplan = lazy(() => import("./Shiftplan"));
 const ShiftplanDrafts = lazy(() => import("./ShiftplanDrafts"));
 const Weekplan = lazy(() => import("./Weekplan"));
 const TagesplanungPage = lazy(() => import("./TagesplanungPage"));
-const WellbeingStatistics = lazy(() => import("./WellbeingStatistics"));
 const UserPreferencesPage = lazy(() => import("./UserPreferencesPage"));
 const AdminSettings = lazy(() => import("./AdminSettings"));
 const ShiftplanControlCenter = lazy(() => import("./ShiftplanControlCenter"));
@@ -53,6 +54,7 @@ const ProjectsPage = lazy(() => import("./ProjectsPage"));
 const JarvisNotifications = lazy(() => import("./JarvisNotifications"));
 const FeedbackPage = lazy(() => import("./FeedbackPage"));
 const ShiftHandover = lazy(() => import("./ShiftHandover"));
+const TeamHandovers = lazy(() => import("./TeamHandovers"));
 const PollsPanel = lazy(() => import("../PollsPanel").then((module) => ({ default: module.PollsPanel })));
 const EqixHistoryPanel = lazy(() => import("../EqixHistoryPanel"));
 
@@ -98,7 +100,7 @@ const PRIMARY_TABS: WorkspaceTab[] = [
   { id: "week", label: { de: "Wochenplan", en: "Weekly Plan" }, path: "/week", icon: CalendarRange, group: "primary" },
   { id: "day", label: { de: "Tagesplan", en: "Daily Plan" }, path: "/day", icon: CalendarClock, group: "primary" },
   { id: "handover", label: { de: "Schichtübergabe", en: "Shift Handover" }, path: "/handover", icon: ArrowRightLeft, group: "primary" },
-  { id: "wellbeing", label: { de: "Wellbeing", en: "Wellbeing" }, path: "/wellbeing", icon: HeartPulse, group: "primary" },
+  { id: "team-handovers", label: { de: "Fremdteam-Tickets", en: "Other Team Tickets" }, path: "/team-handovers", icon: ClipboardList, group: "primary" },
   { id: "projects", label: { de: "Projekte", en: "Projects" }, path: "/projects", icon: FolderKanban, group: "primary" },
   { id: "notifications", label: { de: "Notifications", en: "Notifications" }, path: "/notifications", icon: Bell, group: "primary" },
   { id: "feedback", label: { de: "Feedback", en: "Feedback" }, path: "/feedback", icon: MessageSquare, group: "primary" },
@@ -115,6 +117,22 @@ const ADMIN_TABS: WorkspaceTab[] = [
   { id: "generator", label: { de: "Generator", en: "Generator" }, path: "/generator", icon: LockKeyhole, group: "admin", admin: true },
   { id: "users", label: { de: "Benutzerverwaltung", en: "User Management" }, path: "/users", icon: LockKeyhole, group: "admin", admin: true },
 ];
+
+const TAB_HELP: Record<string, { de: string; en: string }> = {
+  shiftplan: { de: "Monatsansicht des Dienstplans. Hier siehst du alle Schichten, die Schichtzeiten, Warnungen, Feiertage und den Stand des letzten Excel-Uploads.", en: "Monthly shift-plan view. See all shifts, shift times, warnings, holidays, and the most recent Excel upload." },
+  week: { de: "Wochenansicht für die operative Planung. Du kannst die Besetzung pro Tag prüfen, Rollen sehen und berechtigte Änderungen direkt für die Woche durchführen.", en: "Weekly operational planning view. Review daily coverage, see roles, and make authorised changes for the week." },
+  day: { de: "Tagesansicht für den laufenden Betrieb. Sie zeigt die aktuelle Früh-, Spät- und Nachtschicht sowie deren Status und Besetzung.", en: "Daily operations view. It shows the current early, late, and night shifts along with their status and staffing." },
+  handover: { de: "Schichtübergaben für wichtige Informationen zwischen Teams und Schichten. Einträge können nach Erstellungsdatum eingesehen und verwaltet werden.", en: "Shift handovers for important information between teams and shifts. Entries can be reviewed and managed by creation date." },
+  projects: { de: "Übersicht laufender Projekte, Zuständigkeiten und Fortschritte. Nutze diesen Bereich für Projektinformationen außerhalb der täglichen Schichtplanung.", en: "Overview of ongoing projects, responsibilities, and progress. Use this area for project information outside daily shift planning." },
+  notifications: { de: "Erstelle und verwalte Benachrichtigungen für Mitarbeiter. Empfänger, Wiederholung und Status werden hier gepflegt.", en: "Create and manage employee notifications. Recipients, recurrence, and status are maintained here." },
+  feedback: { de: "Melde Bugs oder Verbesserungsvorschläge, bei Bedarf mit Screenshot. Der Bearbeitungsstatus wird von der Administration nachverfolgt.", en: "Report bugs or improvement ideas, optionally with a screenshot. Administration tracks the processing status." },
+  polls: { de: "Erstelle und beantworte Umfragen. Die Ansicht zeigt außerdem die Beteiligung aller berechtigten Mitarbeiter.", en: "Create and answer surveys. The view also shows participation among all eligible employees." },
+  drafts: { de: "Prüfe erzeugte Planentwürfe vor der Übernahme. Sichtbar sind Wochentage, Schichtzeiten, Soll-/Ist-Stunden, Kommentare und Freigaben.", en: "Review generated schedule drafts before activation. Weekdays, shift times, target/actual hours, comments, and approvals are shown." },
+  preferences: { de: "Persönliche Einstellungen und Schichtpräferenzen. Harte Ausschlüsse und nicht verfügbare Tage werden bei der Planung berücksichtigt.", en: "Personal settings and shift preferences. Hard exclusions and unavailable days are respected during planning." },
+  admin: { de: "Zentrale Administration für Schichtregeln, Sicherheit, Wellbeing, Systemoptionen und Protokolle.", en: "Central administration for shift rules, security, wellbeing, system options, and audit logs." },
+  generator: { de: "Erstelle, prüfe und übernimm Schichtplanentwürfe. Der Generator berücksichtigt Arbeitszeit, harte Ausschlüsse und die hinterlegten Planungsregeln.", en: "Create, review, and activate schedule drafts. The generator considers working hours, hard exclusions, and configured planning rules." },
+  users: { de: "Verwalte Mitarbeiter, Zugriffe, Namen und E-Mail-Adressen. Hier werden auch Einstellungen ausgewählter Mitarbeiter gepflegt.", en: "Manage employees, access, names, and email addresses. Settings for selected employees are maintained here as well." },
+};
 
 function PageLoader() {
   return <div className="flex min-h-64 items-center justify-center"><div className="h-6 w-6 animate-spin rounded-full border-2 border-blue-400 border-t-transparent" /></div>;
@@ -193,6 +211,7 @@ export default function OdinGoWorkspace() {
   const [marketHistoryLoading, setMarketHistoryLoading] = useState(false);
   const [marketHistoryError, setMarketHistoryError] = useState("");
   const [languagePending, setLanguagePending] = useState(false);
+  const [helpTabId, setHelpTabId] = useState<string | null>(null);
   const weatherPanelRef = useRef<HTMLDivElement>(null);
   const marketPanelRef = useRef<HTMLDivElement>(null);
 
@@ -330,21 +349,40 @@ export default function OdinGoWorkspace() {
       : active
         ? "border-blue-400/60 bg-blue-500/20 text-white shadow-[0_0_20px_rgba(59,130,246,0.16),inset_0_1px_0_rgba(255,255,255,0.08)]"
         : "border-slate-700 bg-slate-950/45 text-slate-300 hover:border-slate-500 hover:bg-slate-800 hover:text-white";
+    const help = TAB_HELP[tab.id];
 
     return (
-      <button
-        key={tab.id}
-        type="button"
-        onClick={() => openTab(tab)}
-        aria-current={active ? "page" : undefined}
-        title={tab.admin ? `${label} · ${language === "de" ? "Geschützter Adminbereich" : "Protected admin area"}` : label}
-        className={`group flex h-9 shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-semibold transition-all duration-200 ${buttonClass}`}
-      >
-        <span className={`flex h-6 w-6 items-center justify-center rounded-md border transition ${tab.admin ? "border-red-400/25 bg-red-500/10 text-red-300 group-hover:bg-red-500/20" : active ? "border-blue-300/30 bg-blue-400/15 text-blue-200" : "border-slate-700 bg-slate-900 text-slate-400 group-hover:text-blue-200"}`}>
-          <Icon className="h-3.5 w-3.5" />
-        </span>
-        <span>{label}</span>
-      </button>
+      <div key={tab.id} className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => openTab(tab)}
+          aria-current={active ? "page" : undefined}
+          title={tab.admin ? `${label} · ${language === "de" ? "Geschützter Adminbereich" : "Protected admin area"}` : label}
+          className={`group flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-semibold transition-all duration-200 ${buttonClass}`}
+        >
+          <span className={`flex h-6 w-6 items-center justify-center rounded-md border transition ${tab.admin ? "border-red-400/25 bg-red-500/10 text-red-300 group-hover:bg-red-500/20" : active ? "border-blue-300/30 bg-blue-400/15 text-blue-200" : "border-slate-700 bg-slate-900 text-slate-400 group-hover:text-blue-200"}`}>
+            <Icon className="h-3.5 w-3.5" />
+          </span>
+          <span>{label}</span>
+        </button>
+        {help ? (
+          <Popover open={helpTabId === tab.id} onOpenChange={(open) => setHelpTabId(open ? tab.id : null)}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label={language === "de" ? `Hilfe zu ${label}` : `Help for ${label}`}
+                className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-600 bg-slate-900 text-slate-400 transition hover:border-sky-400 hover:bg-sky-500/15 hover:text-sky-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
+              >
+                <HelpCircle className="h-3 w-3" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent side="bottom" align="start" className="z-[120] w-80 border-slate-600 bg-slate-950 p-3 text-slate-100 shadow-2xl shadow-black/60">
+              <div className="text-xs font-bold text-sky-200">{label}</div>
+              <p className="mt-1.5 text-xs leading-relaxed text-slate-300">{help[language] || help.de}</p>
+            </PopoverContent>
+          </Popover>
+        ) : null}
+      </div>
     );
   };
 
@@ -524,7 +562,7 @@ export default function OdinGoWorkspace() {
             <Route path="week" element={<PageGuard pageKey="shiftplan"><div className="h-full min-h-0 overflow-hidden"><Weekplan /></div></PageGuard>} />
             <Route path="day" element={<PageGuard pageKey="shiftplan"><div className="h-full min-h-0 overflow-hidden"><TagesplanungPage /></div></PageGuard>} />
             <Route path="handover" element={<ShiftHandover />} />
-            <Route path="wellbeing" element={<PageGuard pageKey="wellbeing"><WellbeingStatistics /></PageGuard>} />
+            <Route path="team-handovers" element={<TeamHandovers />} />
             <Route path="preferences" element={<PageGuard pageKey="settings"><UserPreferencesPage /></PageGuard>} />
             <Route path="admin-settings" element={<PageGuard pageKey="admin_settings" min="write"><AdminSettings /></PageGuard>} />
             <Route path="generator" element={<PageGuard pageKey="shiftplan_control" min="write"><ShiftplanControlCenter /></PageGuard>} />

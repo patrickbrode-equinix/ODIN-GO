@@ -1115,14 +1115,6 @@ export default function AssignmentControlCenter({ runs }: Props) {
                                             className="rounded-full border border-white/10 bg-white/5 px-2 py-1"
                                           />
                                         ) : null}
-                                        {(candidate.colleagueScore || 0) > 0 ? (
-                                          <AssignmentMetricBadge
-                                            label={formatAssignmentMetricLabel('colleague-proximity', candidate.colleagueScore, glossaryLanguage)}
-                                            glossaryKey="colleague-proximity"
-                                            language={glossaryLanguage}
-                                            className="rounded-full border border-white/10 bg-white/5 px-2 py-1"
-                                          />
-                                        ) : null}
                                       </div>
                                     </div>
 

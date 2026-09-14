@@ -3,7 +3,7 @@
 /* Reusable panel for Admin Settings + legacy page  */
 /* ================================================ */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/api';
 import { EnterpriseFeatureHero, EnterpriseHeader, EnterprisePageShell } from '../layout/EnterpriseLayout';
 import {
@@ -18,22 +18,21 @@ import {
   Clock,
   HelpCircle,
   Plus,
-  Route,
   RotateCcw,
   Save,
   Scale,
   Search,
+  ShieldAlert,
   Settings2,
   Sliders,
-  Star,
   Timer,
   Trash2,
   UserX,
   Users,
 } from 'lucide-react';
-import { EmployeeSkills, fetchSkills, updateSkills } from '../../api/coverage';
 import type { TranslationKey } from '../../context/LanguageContext';
 import { useLanguage } from '../../context/LanguageContext';
+import { useAuth } from '../../context/AuthContext';
 import { dedupeEmployeeNames } from '../../utils/employeeNames';
 
 /* ── locale helpers ── */
@@ -68,6 +67,15 @@ interface ShiftMode {
   free_days_after: number;
 }
 
+interface ShiftDayOverride {
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  start_day_offset: number;
+  end_day_offset: number;
+  duration_hours: number;
+}
+
 interface ShiftDefinition {
   id: number;
   code: string;
@@ -87,11 +95,124 @@ interface ShiftDefinition {
   sort_order: number;
   applicable_days: number[];
   modes?: ShiftMode[];
+  day_overrides?: ShiftDayOverride[];
+}
+
+type PlanningAuditLevel = 'error' | 'warning';
+
+interface PlanningAuditIssue {
+  id: string;
+  level: PlanningAuditLevel;
+  messageDe: string;
+  messageEn: string;
 }
 
 function normalizeShiftModes(definition: ShiftDefinition): ShiftMode[] {
   if (Array.isArray(definition.modes) && definition.modes.length > 0) return definition.modes;
   return [{ id: 1, label: 'Standard', start_time: definition.start_time || '00:00', end_time: definition.end_time || '00:00', duration_hours: definition.duration_hours || 0, free_days_after: 0 }];
+}
+
+function getPlanningAuditIssues({
+  definitions,
+  rotation,
+  planConfig,
+  exclusions,
+  employees,
+  dbsPool,
+  dbsConfig,
+  coloConfig,
+  overtimeConfig,
+  advancedSettings,
+}: {
+  definitions: ShiftDefinition[];
+  rotation: RotationRules | null;
+  planConfig: PlanningConfig | null;
+  exclusions: ShiftplanExclusion[];
+  employees: string[];
+  dbsPool: SpecialPoolEntry[];
+  dbsConfig: DbsConfig;
+  coloConfig: ColoConfig;
+  overtimeConfig: OvertimeConfig;
+  advancedSettings: AdvancedPlanningSettings;
+}): PlanningAuditIssue[] {
+  const issues: PlanningAuditIssue[] = [];
+  const activeDefinitions = definitions.filter((definition) => definition.is_active);
+  const activeByType = new Set(activeDefinitions.map((definition) => definition.shift_type));
+  const add = (id: string, level: PlanningAuditLevel, messageDe: string, messageEn: string) => issues.push({ id, level, messageDe, messageEn });
+
+  if (activeDefinitions.length === 0) {
+    add('no-active-shifts', 'error', 'Es ist keine aktive Schicht definiert. Der Generator kann keinen Dienstplan erstellen.', 'No active shift is defined. The generator cannot create a schedule.');
+  }
+
+  if (!activeByType.has('early') || !activeByType.has('late')) {
+    add('missing-core-shift-type', 'warning', 'Mindestens eine Früh- oder Spätschicht fehlt. Prüfe, ob die gewünschte Grundversorgung damit noch möglich ist.', 'At least one early or late shift is missing. Check whether the intended base coverage is still possible.');
+  }
+
+  const codes = new Set<string>();
+  for (const definition of activeDefinitions) {
+    const code = String(definition.code || '').trim().toUpperCase();
+    if (!code) add(`empty-code-${definition.id}`, 'error', 'Eine aktive Schicht hat keinen Code.', 'An active shift has no code.');
+    if (code && codes.has(code)) add(`duplicate-code-${code}`, 'error', `Der Schichtcode „${code}" ist mehrfach aktiv.`, `The shift code "${code}" is active more than once.`);
+    codes.add(code);
+    if (Number(definition.duration_hours) <= 0) add(`invalid-duration-${definition.id}`, 'error', `Die Schicht „${definition.code}" hat keine gültige Dauer.`, `Shift "${definition.code}" has no valid duration.`);
+    if (Number(definition.min_staff) > Number(definition.max_staff)) add(`invalid-staffing-${definition.id}`, 'error', `Bei „${definition.code}" ist die Mindestbesetzung höher als die Maximalbesetzung.`, `For "${definition.code}", minimum staffing is higher than maximum staffing.`);
+    if (normalizeApplicableDays(definition.applicable_days).length === 0) add(`no-days-${definition.id}`, 'error', `Die aktive Schicht „${definition.code}" ist keinem Wochentag zugeordnet.`, `The active shift "${definition.code}" is not assigned to any weekday.`);
+    if (overtimeConfig.dailyMode === 'block' && Number(overtimeConfig.maxDailyHours) > 0 && Number(definition.duration_hours) > Number(overtimeConfig.maxDailyHours)) {
+      add(`daily-limit-${definition.id}`, 'error', `„${definition.code}" dauert länger als die als harte Grenze gesetzte tägliche Höchstarbeitszeit.`, `"${definition.code}" is longer than the hard daily maximum working-time limit.`);
+    }
+  }
+
+  if (rotation) {
+    const longestSeries = Math.max(1, ...activeDefinitions.map((definition) => normalizeSeriesDays(definition.series_days, 1)));
+    const longestNightSeries = Math.max(0, ...activeDefinitions.filter((definition) => definition.shift_type === 'night').map((definition) => normalizeSeriesDays(definition.series_days, 1)));
+    if (rotation.max_consecutive_workdays > 0 && rotation.max_consecutive_workdays < longestSeries) {
+      add('workday-series-conflict', 'error', `Maximale Arbeitstage am Stück (${rotation.max_consecutive_workdays}) sind kürzer als ein aktiver Schichtblock (${longestSeries} Tage).`, `Maximum consecutive workdays (${rotation.max_consecutive_workdays}) are shorter than an active shift block (${longestSeries} days).`);
+    }
+    if (rotation.max_consecutive_same > 0 && rotation.max_consecutive_same < longestSeries) {
+      add('same-shift-series-conflict', 'error', `Die Grenze für gleiche Schichten (${rotation.max_consecutive_same}) ist kürzer als ein aktiver Schichtblock (${longestSeries} Tage).`, `The consecutive same-shift limit (${rotation.max_consecutive_same}) is shorter than an active shift block (${longestSeries} days).`);
+    }
+    if (longestNightSeries > 0 && rotation.max_nights_per_month > 0 && rotation.max_nights_per_month < longestNightSeries) {
+      add('night-limit-series-conflict', 'error', `Das Nachtlimit pro Monat (${rotation.max_nights_per_month}) ist kleiner als ein Nachtblock (${longestNightSeries} Tage).`, `The monthly night limit (${rotation.max_nights_per_month}) is shorter than a night block (${longestNightSeries} days).`);
+    }
+  }
+
+  if (planConfig && planConfig.monthly_target_hours <= 0) {
+    add('missing-target-hours', 'warning', 'Die monatliche Sollzeit ist 0. Eine verlässliche Stundenplanung ist damit nicht möglich.', 'Monthly target hours are 0. Reliable hour planning is not possible.');
+  }
+
+  for (const exclusion of exclusions.filter((entry) => entry.fixed_shift_type)) {
+    if (!activeByType.has(String(exclusion.fixed_shift_type))) {
+      add(`fixed-shift-missing-${exclusion.id}`, 'error', `${exclusion.employee_name} ist fest für „${formatFixedShiftType(exclusion.fixed_shift_type, true)}" vorgesehen, aber es gibt keine aktive Schicht dieses Typs.`, `${exclusion.employee_name} is fixed to "${formatFixedShiftType(exclusion.fixed_shift_type, false)}", but there is no active shift of that type.`);
+    }
+  }
+
+  if (dbsConfig.enabled) {
+    if (!activeDefinitions.some((definition) => definition.code === dbsConfig.shiftCode)) {
+      add('dbs-shift-missing', 'error', `Die DBS-Schicht „${dbsConfig.shiftCode}" ist nicht aktiv definiert.`, `The DBS shift "${dbsConfig.shiftCode}" is not actively defined.`);
+    }
+    if (dbsPool.length === 0) {
+      add('dbs-pool-empty', 'error', 'DBS ist aktiv und benötigt Personal, aber der DBS-Pool ist leer.', 'DBS is active and requires staffing, but the DBS pool is empty.');
+    }
+    if (dbsPool.some((entry) => !employees.includes(entry.employee_name))) {
+      add('dbs-pool-unknown-employee', 'warning', 'Der DBS-Pool enthält Mitarbeitende, die nicht mehr in der aktuellen Mitarbeiterliste stehen.', 'The DBS pool contains employees who are no longer in the current employee list.');
+    }
+  }
+
+  if (coloConfig.enabled) {
+    const requiredPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendInstallationStaff + coloConfig.weekendTroubleshootingStaff);
+    if (requiredPoolSize > coloConfig.employeePool.length) {
+      add('colo-pool-too-small', 'error', `Für die aktivierte Colo-Planung werden gleichzeitig bis zu ${requiredPoolSize} Mitarbeitende benötigt, im Pool sind aber nur ${coloConfig.employeePool.length}.`, `Enabled Colo planning needs up to ${requiredPoolSize} employees at the same time, but the pool only has ${coloConfig.employeePool.length}.`);
+    }
+    if (coloConfig.employeePool.some((employee) => !employees.includes(employee))) {
+      add('colo-pool-unknown-employee', 'warning', 'Der Colo-Pool enthält Mitarbeitende, die nicht mehr in der aktuellen Mitarbeiterliste stehen.', 'The Colo pool contains employees who are no longer in the current employee list.');
+    }
+  }
+
+  if (advancedSettings.blockedWeekdayEmployees.some((employee) => !employees.includes(employee))) {
+    add('weekday-access-unknown-employee', 'warning', 'Die Freigabe für nicht verfügbare Wochentage enthält Mitarbeitende, die nicht mehr in der aktuellen Mitarbeiterliste stehen.', 'The unavailable-weekday access list contains employees who are no longer in the current employee list.');
+  }
+
+  return issues;
 }
 
 interface RotationRules {
@@ -113,6 +234,16 @@ interface RotationRules {
   max_shift_type_changes_per_month: number;
   min_free_weekends_per_month: number;
   min_recovery_days_after_shift_change: number;
+  short_night_mode_enabled?: boolean;
+  short_night_free_days_after?: number;
+}
+
+interface ShortNightOptions {
+  enabled: boolean;
+  start_time: string;
+  end_time: string;
+  free_days_after: number;
+  duration_hours?: number;
 }
 
 interface FairnessRules {
@@ -151,33 +282,31 @@ interface SpecialPoolEntry {
   monthly_max_assignments: number;
   sort_order: number;
   is_active: boolean;
+  working_weekdays?: number[];
+  free_days_after_block?: number;
+}
+
+interface AdminEmployeeFlag {
+  id: number;
+  employee_name: string;
+  note: string | null;
+  is_active: boolean;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface AdvancedPlanningSettings {
   issuePanelEnabled: boolean;
-  issueAutoRefresh: boolean;
   issueShowSolutions: boolean;
   issuePriorityMode: 'staffing_first' | 'balanced' | 'fairness_first';
-  illnessAutoSwapEnabled: boolean;
-  illnessMinSourceBuffer: number;
-  illnessMinRestHours: number;
-  illnessRequireSkillMatch: boolean;
-  illnessProtectWorklifeBalance: boolean;
-  weekendVolumeEnabled: boolean;
-  weekendBufferPercent: number;
-  weekendMinDispatchers: number;
-  colleaguePreferencesEnabled: boolean;
   blockedWeekdayEmployees: string[];
+  adminFlagsEnabled: boolean;
 }
 
 interface DbsConfig {
   enabled: boolean;
-  rhythmWeeks: number;
-  referenceDate: string;
-  weekdays: number[];
   shiftCode: string;
-  requiredStaff: number;
-  defaultMonthlyTarget: number;
   freeDaysAfterBlock: number;
 }
 
@@ -205,52 +334,19 @@ type HolidayStaffingLimit = {
 
 type HolidayStaffingConfig = Record<string, HolidayStaffingLimit>;
 
-interface SkillMatrixProfile extends EmployeeSkills {
-  rated_skills: Record<string, number>;
-}
-
 /* ── defaults & constants ── */
-
-const DEFAULT_SKILL_CATALOG = [
-  'Cross Connect',
-  'Metro Connect',
-  'Panel Installation',
-  'Deinstalls',
-  'Power',
-  'Migration',
-  'Provide Access',
-  'LOS',
-  'Colo Planung',
-  'Colo Ausfuhrung',
-  'Antenne',
-  'Begleitung',
-] as const;
 
 const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   issuePanelEnabled: true,
-  issueAutoRefresh: true,
   issueShowSolutions: true,
   issuePriorityMode: 'balanced',
-  illnessAutoSwapEnabled: false,
-  illnessMinSourceBuffer: 1,
-  illnessMinRestHours: 11,
-  illnessRequireSkillMatch: true,
-  illnessProtectWorklifeBalance: true,
-  weekendVolumeEnabled: false,
-  weekendBufferPercent: 15,
-  weekendMinDispatchers: 1,
-  colleaguePreferencesEnabled: true,
   blockedWeekdayEmployees: [],
+  adminFlagsEnabled: false,
 };
 
 const DEFAULT_DBS_CONFIG: DbsConfig = {
   enabled: true,
-  rhythmWeeks: 2,
-  referenceDate: '',
-  weekdays: [1, 2, 3, 4, 5, 6, 0],
   shiftCode: 'DBS',
-  requiredStaff: 1,
-  defaultMonthlyTarget: 4,
   freeDaysAfterBlock: 2,
 };
 
@@ -261,8 +357,6 @@ const DEFAULT_COLO_CONFIG: ColoConfig = {
   weekendInstallationStaff: 1,
   weekendTroubleshootingStaff: 1,
 };
-type DispatcherConfig = { enabled: boolean; priorities: string[] };
-const DEFAULT_DISPATCHER_CONFIG: DispatcherConfig = { enabled: true, priorities: [] };
 
 const DEFAULT_OVERTIME_CONFIG: OvertimeConfig = {
   maxOvertimeHours: 0,
@@ -328,31 +422,17 @@ function parseNumberSetting(value: unknown, fallback: number) {
 function extractAdvancedPlanningSettings(settings: Record<string, string>): AdvancedPlanningSettings {
   return {
     issuePanelEnabled: parseBooleanSetting(settings['shiftplan.issue_panel_enabled'], DEFAULT_ADVANCED_SETTINGS.issuePanelEnabled),
-    issueAutoRefresh: parseBooleanSetting(settings['shiftplan.issue_auto_refresh'], DEFAULT_ADVANCED_SETTINGS.issueAutoRefresh),
     issueShowSolutions: parseBooleanSetting(settings['shiftplan.issue_show_solutions'], DEFAULT_ADVANCED_SETTINGS.issueShowSolutions),
     issuePriorityMode: (settings['shiftplan.issue_priority_mode'] as AdvancedPlanningSettings['issuePriorityMode']) || DEFAULT_ADVANCED_SETTINGS.issuePriorityMode,
-    illnessAutoSwapEnabled: parseBooleanSetting(settings['shiftplan.illness_auto_swap_enabled'], DEFAULT_ADVANCED_SETTINGS.illnessAutoSwapEnabled),
-    illnessMinSourceBuffer: parseNumberSetting(settings['shiftplan.illness_min_source_buffer'], DEFAULT_ADVANCED_SETTINGS.illnessMinSourceBuffer),
-    illnessMinRestHours: parseNumberSetting(settings['shiftplan.illness_min_rest_hours'], DEFAULT_ADVANCED_SETTINGS.illnessMinRestHours),
-    illnessRequireSkillMatch: parseBooleanSetting(settings['shiftplan.illness_require_skill_match'], DEFAULT_ADVANCED_SETTINGS.illnessRequireSkillMatch),
-    illnessProtectWorklifeBalance: parseBooleanSetting(settings['shiftplan.illness_protect_worklife_balance'], DEFAULT_ADVANCED_SETTINGS.illnessProtectWorklifeBalance),
-    weekendVolumeEnabled: parseBooleanSetting(settings['shiftplan.weekend_volume_enabled'], DEFAULT_ADVANCED_SETTINGS.weekendVolumeEnabled),
-    weekendBufferPercent: parseNumberSetting(settings['shiftplan.weekend_buffer_percent'], DEFAULT_ADVANCED_SETTINGS.weekendBufferPercent),
-    weekendMinDispatchers: parseNumberSetting(settings['shiftplan.weekend_min_dispatchers'], DEFAULT_ADVANCED_SETTINGS.weekendMinDispatchers),
-    colleaguePreferencesEnabled: parseBooleanSetting(settings['shiftplan.colleague_preferences_enabled'], DEFAULT_ADVANCED_SETTINGS.colleaguePreferencesEnabled),
     blockedWeekdayEmployees: parseEmployeePoolSetting(settings['shiftplan.blocked_weekday_employee_pool']),
+    adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
   };
 }
 
 function extractDbsConfig(settings: Record<string, string>): DbsConfig {
   return {
     enabled: parseBooleanSetting(settings['shiftplan.dbs_enabled'], DEFAULT_DBS_CONFIG.enabled),
-    rhythmWeeks: parseNumberSetting(settings['shiftplan.dbs_rhythm_weeks'], DEFAULT_DBS_CONFIG.rhythmWeeks),
-    referenceDate: settings['shiftplan.dbs_reference_date'] ?? DEFAULT_DBS_CONFIG.referenceDate,
-    weekdays: [1, 2, 3, 4, 5, 6, 0],
     shiftCode: settings['shiftplan.dbs_shift_code'] || DEFAULT_DBS_CONFIG.shiftCode,
-    requiredStaff: parseNumberSetting(settings['shiftplan.dbs_required_staff'], DEFAULT_DBS_CONFIG.requiredStaff),
-    defaultMonthlyTarget: parseNumberSetting(settings['shiftplan.dbs_default_monthly_target'], DEFAULT_DBS_CONFIG.defaultMonthlyTarget),
     freeDaysAfterBlock: parseNumberSetting(settings['shiftplan.dbs_free_days_after_block'], DEFAULT_DBS_CONFIG.freeDaysAfterBlock),
   };
 }
@@ -380,12 +460,6 @@ function extractColoConfig(settings: Record<string, string>): ColoConfig {
   };
 }
 
-function extractDispatcherConfig(settings: Record<string, string>): DispatcherConfig {
-  return {
-    enabled: parseBooleanSetting(settings['shiftplan.dispatcher_enabled'], DEFAULT_DISPATCHER_CONFIG.enabled),
-    priorities: parseEmployeePoolSetting(settings['shiftplan.dispatcher_pool']),
-  };
-}
 
 function extractOvertimeConfig(settings: Record<string, string>): OvertimeConfig {
   return {
@@ -466,51 +540,6 @@ function normalizeSeriesDays(value: unknown, fallback = 1) {
 
 function isHalfDayShiftCode(code: string) {
   return /^H[EL]\d+$/i.test(String(code || '').trim());
-}
-
-function normalizeSkillCatalog(value: unknown): string[] {
-  if (Array.isArray(value)) {
-    return [...new Set(value.map((entry) => String(entry || '').trim()).filter(Boolean))];
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    try {
-      return normalizeSkillCatalog(JSON.parse(value));
-    } catch {
-      return [...new Set(value.split(',').map((entry) => entry.trim()).filter(Boolean))];
-    }
-  }
-
-  return [...DEFAULT_SKILL_CATALOG];
-}
-
-function normalizeRatedSkills(value: unknown): Record<string, number> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-
-  return Object.fromEntries(
-    Object.entries(value)
-      .map(([skill, rating]) => {
-        const normalizedSkill = String(skill || '').trim();
-        const normalizedRating = Number.parseInt(String(rating ?? ''), 10);
-
-        if (!normalizedSkill) return null;
-        if (!Number.isInteger(normalizedRating) || normalizedRating < 1 || normalizedRating > 5) return null;
-
-        return [normalizedSkill, normalizedRating];
-      })
-      .filter(Boolean) as Array<[string, number]>
-  );
-}
-
-function buildSkillProfile(employeeName: string, existing?: EmployeeSkills): SkillMatrixProfile {
-  return {
-    employee_name: employeeName,
-    can_sh: existing?.can_sh ?? false,
-    can_tt: existing?.can_tt ?? false,
-    can_cc: existing?.can_cc ?? false,
-    updated_at: existing?.updated_at ?? '',
-    rated_skills: normalizeRatedSkills(existing?.rated_skills),
-  };
 }
 
 function formatShiftSpanPreview(definition: ShiftDefinition, shiftDayOffsetOptions: ReadonlyArray<{ value: number; label: string }>, isGerman: boolean) {
@@ -608,15 +637,37 @@ function Section({
   );
 }
 
+function getShiftDurationPreview(startTime: string, endTime: string, startOffset = 0, endOffset = 0) {
+  const toMinutes = (value: string) => {
+    const [hours, minutes] = String(value || '00:00').slice(0, 5).split(':').map(Number);
+    return hours * 60 + minutes;
+  };
+  const start = toMinutes(startTime) + startOffset * 1440;
+  let end = toMinutes(endTime) + endOffset * 1440;
+  if (end <= start) end += 1440;
+  return (end - start) / 60;
+}
+
+function SettingsGroup({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="flex flex-col gap-1 border-b border-border/60 px-1 pb-3 pt-4 sm:flex-row sm:items-end sm:justify-between">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-foreground">{title}</h2>
+      <p className="text-xs text-muted-foreground">{description}</p>
+    </div>
+  );
+}
+
 /* ── main panel ── */
 
 export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: boolean }) {
   const { language, t } = useLanguage();
+  const { user } = useAuth();
   const isGerman = language === 'de';
   const weekdayOptions = getWeekdayOptions(isGerman);
   const shiftDayOffsetOptions = getShiftDayOffsetOptions(isGerman);
   const [definitions, setDefinitions] = useState<ShiftDefinition[]>([]);
   const [rotation, setRotation] = useState<RotationRules | null>(null);
+  const [shortNightOptions, setShortNightOptions] = useState<ShortNightOptions>({ enabled: false, start_time: '21:45', end_time: '06:45', free_days_after: 2 });
   const [fairness, setFairness] = useState<FairnessRules | null>(null);
   const [planConfig, setPlanConfig] = useState<PlanningConfig | null>(null);
   const [exclusions, setExclusions] = useState<ShiftplanExclusion[]>([]);
@@ -625,24 +676,25 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [dbsConfig, setDbsConfig] = useState<DbsConfig>(DEFAULT_DBS_CONFIG);
   const [coloConfig, setColoConfig] = useState<ColoConfig>(DEFAULT_COLO_CONFIG);
   const [coloSearch, setColoSearch] = useState('');
-  const [dispatcherConfig, setDispatcherConfig] = useState<DispatcherConfig>(DEFAULT_DISPATCHER_CONFIG);
-  const [dispatcherSearch, setDispatcherSearch] = useState('');
   const [blockedWeekdaySearch, setBlockedWeekdaySearch] = useState('');
   const [overtimeConfig, setOvertimeConfig] = useState<OvertimeConfig>(DEFAULT_OVERTIME_CONFIG);
   const [holidayStaffingConfig, setHolidayStaffingConfig] = useState<HolidayStaffingConfig>(extractHolidayStaffingConfig({}));
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedPlanningSettings>(DEFAULT_ADVANCED_SETTINGS);
-  const [skillsEnabled, setSkillsEnabled] = useState(false);
-  const [skillCatalog, setSkillCatalog] = useState<string[]>([...DEFAULT_SKILL_CATALOG]);
-  const [skillProfiles, setSkillProfiles] = useState<SkillMatrixProfile[]>([]);
+  const [adminFlags, setAdminFlags] = useState<AdminEmployeeFlag[]>([]);
+  const [newAdminFlagName, setNewAdminFlagName] = useState('');
+  const [newAdminFlagNote, setNewAdminFlagNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState('');
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [newExclusionName, setNewExclusionName] = useState('');
   const [newExclusionFixedShiftType, setNewExclusionFixedShiftType] = useState<FixedShiftTypeValue>('');
   const [newDbsEmployee, setNewDbsEmployee] = useState('');
-  const [newSkillName, setNewSkillName] = useState('');
   const [newDefinition, setNewDefinition] = useState({ code: '', name: '', shift_type: 'early', start_time: '06:30', end_time: '15:00', duration_hours: 8, min_staff: 1, max_staff: 5 });
   const [activeShiftModes, setActiveShiftModes] = useState<Record<string, number>>({});
+  const normalNightStaffCap = useMemo(
+    () => Math.max(0, Number(definitions.find((definition) => String(definition.code || '').toUpperCase() === 'N')?.max_staff || 0)),
+    [definitions]
+  );
 
   const showToast = useCallback((msg: string, type: 'ok' | 'err' = 'ok') => {
     setToast({ msg, type });
@@ -654,7 +706,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [defRes, rotRes, fairRes, planRes, exclRes, basisRes, appSettingsRes, skillsRes] = await Promise.all([
+      const [defRes, rotRes, fairRes, planRes, exclRes, basisRes, appSettingsRes, usersRes, flagRes, shortNightRes] = await Promise.all([
         api.get('/shift-config/definitions'),
         api.get('/shift-config/rotation-rules'),
         api.get('/shift-config/fairness-rules'),
@@ -662,24 +714,27 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         api.get('/shift-config/exclusions'),
         api.get('/shiftplan-control/planning-basis?month=' + new Date().toISOString().slice(0, 7)).catch(() => ({ data: { basis: { employees: [] } } })),
         api.get('/app-settings').catch(() => ({ data: {} })),
-        fetchSkills().catch(() => []),
+        api.get('/admin/users').catch(() => ({ data: [] })),
+        api.get('/shift-config/admin-flags').catch(() => ({ data: { flags: [] } })),
+        api.get('/shift-config/short-night-options').catch(() => ({ data: { options: null } })),
       ]);
 
-      const loadedEmployees = dedupeEmployeeNames(basisRes.data.basis?.employees || []);
+      const userEmployees = (Array.isArray(usersRes.data) ? usersRes.data : [])
+        .map((user: { provisionedEmployeeName?: string | null; firstName?: string | null; lastName?: string | null; approved?: boolean }) => {
+          if (user.approved === false) return '';
+          return user.provisionedEmployeeName || `${user.firstName || ''} ${user.lastName || ''}`.trim();
+        })
+        .filter(Boolean);
+      const loadedEmployees = dedupeEmployeeNames([
+        ...(basisRes.data.basis?.employees || []),
+        ...userEmployees,
+      ]);
       const nextDbsConfig = extractDbsConfig(appSettingsRes.data || {});
       const nextColoConfig = extractColoConfig(appSettingsRes.data || {});
-      const nextDispatcherConfig = extractDispatcherConfig(appSettingsRes.data || {});
       const poolRes = await api.get(`/shift-config/special-pools/${encodeURIComponent(nextDbsConfig.shiftCode)}`).catch(() => ({ data: { assignments: [] } }));
-      const configuredSkillCatalog = normalizeSkillCatalog(appSettingsRes.data?.['shiftplan.skill_catalog']);
-      const allSkillProfiles = Array.isArray(skillsRes) ? skillsRes : [];
-      const knownEmployees = [...new Set([
-        ...loadedEmployees,
-        ...allSkillProfiles.map((entry) => String(entry.employee_name || '').trim()).filter(Boolean),
-      ])].sort((left, right) => left.localeCompare(right, 'de'));
-      const skillsByEmployee = new Map(allSkillProfiles.map((entry) => [entry.employee_name, entry]));
 
       setDefinitions((defRes.data.definitions || [])
-        .filter((definition: ShiftDefinition) => !isHalfDayShiftCode(definition.code))
+        .filter((definition: ShiftDefinition) => !isHalfDayShiftCode(definition.code) && String(definition.code || '').toUpperCase() !== 'NK')
         .map((definition: ShiftDefinition) => ({
           ...definition,
           applicable_days: normalizeApplicableDays(definition.applicable_days),
@@ -688,30 +743,29 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           series_days: normalizeSeriesDays(definition.series_days, 1),
         })));
       setRotation(rotRes.data.rules || null);
+      if (shortNightRes.data?.options) setShortNightOptions(shortNightRes.data.options);
       setFairness(fairRes.data.rules || null);
       setPlanConfig(planRes.data.config || null);
       setExclusions((exclRes.data.exclusions || []).filter((entry: ShiftplanExclusion) => entry.is_active));
       setEmployees(loadedEmployees);
-      setDbsPool(poolRes.data.assignments || []);
+      setDbsPool((poolRes.data.assignments || []).map((entry: SpecialPoolEntry) => ({
+        ...entry,
+        working_weekdays: normalizeApplicableDays(entry.working_weekdays || [1, 2, 3, 4, 5]),
+        free_days_after_block: Number(entry.free_days_after_block ?? nextDbsConfig.freeDaysAfterBlock),
+      })));
       setDbsConfig(nextDbsConfig);
       setColoConfig({
         ...nextColoConfig,
         employeePool: nextColoConfig.employeePool.filter((employee) => loadedEmployees.includes(employee)),
       });
-      setDispatcherConfig({
-        ...nextDispatcherConfig,
-        priorities: nextDispatcherConfig.priorities.filter((employee) => loadedEmployees.includes(employee)),
-      });
       setOvertimeConfig(extractOvertimeConfig(appSettingsRes.data || {}));
       setHolidayStaffingConfig(extractHolidayStaffingConfig(appSettingsRes.data || {}));
       setAdvancedSettings(extractAdvancedPlanningSettings(appSettingsRes.data || {}));
-      setSkillsEnabled(parseBooleanSetting(appSettingsRes.data?.['shiftplan.skills_enabled'], false));
+      setAdminFlags(flagRes.data.flags || []);
       try {
         const rawModes = appSettingsRes.data?.['shiftplan.active_shift_modes'];
         setActiveShiftModes(typeof rawModes === 'string' ? JSON.parse(rawModes) : (rawModes || {}));
       } catch { setActiveShiftModes({}); }
-      setSkillCatalog(configuredSkillCatalog);
-      setSkillProfiles(knownEmployees.map((employee) => buildSkillProfile(employee, skillsByEmployee.get(employee))));
     } catch (error: any) {
       showToast(error?.response?.data?.error || error.message, 'err');
     } finally {
@@ -806,19 +860,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     try {
       await api.put('/app-settings', {
         'shiftplan.issue_panel_enabled': advancedSettings.issuePanelEnabled,
-        'shiftplan.issue_auto_refresh': advancedSettings.issueAutoRefresh,
         'shiftplan.issue_show_solutions': advancedSettings.issueShowSolutions,
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
-        'shiftplan.illness_auto_swap_enabled': advancedSettings.illnessAutoSwapEnabled,
-        'shiftplan.illness_min_source_buffer': advancedSettings.illnessMinSourceBuffer,
-        'shiftplan.illness_min_rest_hours': advancedSettings.illnessMinRestHours,
-        'shiftplan.illness_require_skill_match': advancedSettings.illnessRequireSkillMatch,
-        'shiftplan.illness_protect_worklife_balance': advancedSettings.illnessProtectWorklifeBalance,
-        'shiftplan.weekend_volume_enabled': advancedSettings.weekendVolumeEnabled,
-        'shiftplan.weekend_buffer_percent': advancedSettings.weekendBufferPercent,
-        'shiftplan.weekend_min_dispatchers': advancedSettings.weekendMinDispatchers,
-        'shiftplan.colleague_preferences_enabled': advancedSettings.colleaguePreferencesEnabled,
         'shiftplan.blocked_weekday_employee_pool': JSON.stringify(advancedSettings.blockedWeekdayEmployees),
+        'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
     } catch (error: any) {
@@ -833,12 +878,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     try {
       await api.put('/app-settings', {
         'shiftplan.dbs_enabled': dbsConfig.enabled,
-        'shiftplan.dbs_rhythm_weeks': dbsConfig.rhythmWeeks,
-        'shiftplan.dbs_reference_date': dbsConfig.referenceDate,
         'shiftplan.dbs_weekdays': JSON.stringify([1, 2, 3, 4, 5, 6, 0]),
         'shiftplan.dbs_shift_code': dbsConfig.shiftCode,
-        'shiftplan.dbs_required_staff': dbsConfig.requiredStaff,
-        'shiftplan.dbs_default_monthly_target': dbsConfig.defaultMonthlyTarget,
+        'shiftplan.dbs_required_staff': 1,
         'shiftplan.dbs_free_days_after_block': dbsConfig.freeDaysAfterBlock,
       });
       await loadAll();
@@ -856,14 +898,131 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       const shiftCode = String(dbsConfig.shiftCode || 'DBS').trim().toUpperCase() || 'DBS';
       const payload = dbsPool.map((entry, index) => ({
         employee_name: entry.employee_name,
-        monthly_max_assignments: Math.max(Number.parseInt(String(entry.monthly_max_assignments ?? 0), 10) || 0, 0),
+        // DBS remains a single-person rotation; each profile controls its own working days and recovery.
+        monthly_max_assignments: 31,
         sort_order: index,
+        working_weekdays: normalizeApplicableDays(entry.working_weekdays),
+        free_days_after_block: Math.max(0, Math.min(14, Number(entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock) || 0)),
       }));
       const { data } = await api.put(`/shift-config/special-pools/${shiftCode}`, { assignments: payload });
       setDbsPool(data.assignments || []);
       showToast(t("shiftAdmin.toastDbsPoolSaved"));
     } catch (error: any) {
       showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const saveShortNightOptions = async () => {
+    setSaving('short-night');
+    try {
+      const { data } = await api.put('/shift-config/short-night-options', shortNightOptions);
+      const next = data.options as ShortNightOptions;
+      setShortNightOptions(next);
+      setRotation((current) => current ? {
+        ...current,
+        short_night_mode_enabled: next.enabled,
+        short_night_free_days_after: next.free_days_after,
+      } : current);
+      showToast(isGerman ? 'Kurze Nachtschicht gespeichert' : 'Short night shift saved');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const updateDayOverride = (definitionId: number, weekday: number, field: keyof ShiftDayOverride, value: string | number) => {
+    setDefinitions((current) => current.map((definition) => {
+      if (definition.id !== definitionId) return definition;
+      const existing = (definition.day_overrides || []).find((entry) => Number(entry.weekday) === weekday);
+      const fallback: ShiftDayOverride = {
+        weekday,
+        start_time: String(definition.start_time || '00:00').slice(0, 5),
+        end_time: String(definition.end_time || '00:00').slice(0, 5),
+        start_day_offset: normalizeShiftDayOffset(definition.start_day_offset),
+        end_day_offset: normalizeShiftDayOffset(definition.end_day_offset, definition.shift_type === 'night' ? 1 : 0),
+        duration_hours: Number(definition.duration_hours) || 0,
+      };
+      const nextOverride = { ...(existing || fallback), [field]: value } as ShiftDayOverride;
+      return {
+        ...definition,
+        day_overrides: [...(definition.day_overrides || []).filter((entry) => Number(entry.weekday) !== weekday), nextOverride]
+          .sort((left, right) => Number(left.weekday) - Number(right.weekday)),
+      };
+    }));
+  };
+
+  const saveDayOverride = async (definition: ShiftDefinition, weekday: number) => {
+    const override = (definition.day_overrides || []).find((entry) => Number(entry.weekday) === weekday);
+    if (!override) return;
+    setSaving(`override-${definition.id}-${weekday}`);
+    try {
+      const { data } = await api.put(`/shift-config/definitions/${definition.id}/day-overrides/${weekday}`, {
+        ...override,
+        start_time: String(override.start_time).slice(0, 5),
+        end_time: String(override.end_time).slice(0, 5),
+      });
+      setDefinitions((current) => current.map((item) => item.id !== definition.id ? item : ({
+        ...item,
+        day_overrides: [...(item.day_overrides || []).filter((entry) => Number(entry.weekday) !== weekday), data.override],
+      })));
+      showToast(isGerman ? 'Tageszeit gespeichert.' : 'Day-specific time saved.');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const removeDayOverride = async (definition: ShiftDefinition, weekday: number) => {
+    setSaving(`override-${definition.id}-${weekday}`);
+    try {
+      await api.delete(`/shift-config/definitions/${definition.id}/day-overrides/${weekday}`);
+      setDefinitions((current) => current.map((item) => item.id !== definition.id ? item : ({
+        ...item,
+        day_overrides: (item.day_overrides || []).filter((entry) => Number(entry.weekday) !== weekday),
+      })));
+      showToast(isGerman ? 'Tageszeit auf Standard zurückgesetzt.' : 'Day-specific time reset to default.');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const saveAdminFlag = async () => {
+    if (!newAdminFlagName.trim()) return;
+    setSaving('admin-flag');
+    try {
+      const { data } = await api.put('/shift-config/admin-flags', {
+        employee_name: newAdminFlagName.trim(),
+        note: newAdminFlagNote.trim(),
+        is_active: true,
+      });
+      setAdminFlags((current) => {
+        const withoutCurrent = current.filter((entry) => entry.employee_name !== data.flag.employee_name);
+        return [...withoutCurrent, data.flag].sort((left, right) => left.employee_name.localeCompare(right.employee_name, 'de'));
+      });
+      setNewAdminFlagName('');
+      setNewAdminFlagNote('');
+      showToast(isGerman ? 'Interner Admin-Hinweis gespeichert.' : 'Internal admin note saved.');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const removeAdminFlag = async (id: number) => {
+    setSaving(`admin-flag-${id}`);
+    try {
+      await api.delete(`/shift-config/admin-flags/${id}`);
+      setAdminFlags((current) => current.filter((entry) => entry.id !== id));
+      showToast(isGerman ? 'Interner Admin-Hinweis entfernt.' : 'Internal admin note removed.');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
     } finally {
       setSaving('');
     }
@@ -915,19 +1074,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     } finally {
       setSaving('');
     }
-  };
-
-  const saveDispatcherConfig = async () => {
-    setSaving('dispatcher-config');
-    try {
-      await api.put('/app-settings', {
-        'shiftplan.dispatcher_enabled': dispatcherConfig.enabled,
-        'shiftplan.dispatcher_pool': JSON.stringify(dispatcherConfig.priorities),
-      });
-      showToast(isGerman ? 'Dispatcher-Konfiguration gespeichert.' : 'Dispatcher configuration saved.');
-    } catch (error: any) {
-      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
-    } finally { setSaving(''); }
   };
 
   const addExclusion = async () => {
@@ -1003,15 +1149,13 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     setDbsPool((current) => [...current, {
       shift_code: 'DBS',
       employee_name: employeeName,
-      monthly_max_assignments: dbsConfig.defaultMonthlyTarget,
+      monthly_max_assignments: 31,
       sort_order: current.length,
       is_active: true,
+      working_weekdays: [1, 2, 3, 4, 5],
+      free_days_after_block: dbsConfig.freeDaysAfterBlock,
     }]);
     setNewDbsEmployee('');
-  };
-
-  const updateDbsPoolEntry = (employeeName: string, field: keyof SpecialPoolEntry, value: unknown) => {
-    setDbsPool((current) => current.map((entry) => entry.employee_name === employeeName ? { ...entry, [field]: value } : entry));
   };
 
   const removeDbsEmployee = (employeeName: string) => {
@@ -1027,63 +1171,18 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     setColoConfig((current) => ({ ...current, employeePool: current.employeePool.filter((entry) => entry !== employeeName) }));
   };
 
-  const addSkillToCatalog = () => {
-    const skillName = newSkillName.trim();
-    if (!skillName) return;
-
-    if (skillCatalog.some((entry) => entry.toLowerCase() === skillName.toLowerCase())) {
-      showToast(t("shiftAdmin.toastSkillExists"), 'err');
-      return;
-    }
-
-    setSkillCatalog((current) => [...current, skillName]);
-    setNewSkillName('');
-  };
-
-  const removeSkillFromCatalog = (skillName: string) => {
-    setSkillCatalog((current) => current.filter((entry) => entry !== skillName));
-    setSkillProfiles((current) => current.map((profile) => {
-      const nextRatedSkills = { ...profile.rated_skills };
-      delete nextRatedSkills[skillName];
-      return { ...profile, rated_skills: nextRatedSkills };
-    }));
-  };
-
-  const setSkillRating = (employeeName: string, skillName: string, rating: number) => {
-    setSkillProfiles((current) => current.map((profile) => {
-      if (profile.employee_name !== employeeName) return profile;
-
-      const nextRatedSkills = { ...profile.rated_skills };
-      if (rating <= 0) delete nextRatedSkills[skillName];
-      else nextRatedSkills[skillName] = rating;
-
-      return { ...profile, rated_skills: nextRatedSkills };
-    }));
-  };
-
-  const saveSkillProfiles = async () => {
-    setSaving('skills');
-    try {
-      await api.put('/app-settings', {
-        'shiftplan.skills_enabled': skillsEnabled,
-        'shiftplan.skill_catalog': JSON.stringify(skillCatalog),
-      });
-
-      await Promise.all(skillProfiles.map((profile) => updateSkills({
-        employee_name: profile.employee_name,
-        can_sh: profile.can_sh,
-        can_tt: profile.can_tt,
-        can_cc: profile.can_cc,
-        rated_skills: profile.rated_skills,
-      })));
-
-      showToast(t("shiftAdmin.toastSkillSaved"));
-    } catch (error: any) {
-      showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
-    } finally {
-      setSaving('');
-    }
-  };
+  const planningAuditIssues = useMemo(() => getPlanningAuditIssues({
+    definitions,
+    rotation,
+    planConfig,
+    exclusions,
+    employees,
+    dbsPool,
+    dbsConfig,
+    coloConfig,
+    overtimeConfig,
+    advancedSettings,
+  }), [advancedSettings, coloConfig, dbsConfig, dbsPool, definitions, employees, exclusions, overtimeConfig, planConfig, rotation]);
 
   /* ── loading state ── */
 
@@ -1126,6 +1225,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     !normalizedBlockedWeekdaySearch || employee.toLocaleLowerCase('de').includes(normalizedBlockedWeekdaySearch)
   ));
   const minimumWeekendPoolSize = coloConfig.weekendInstallationStaff + coloConfig.weekendTroubleshootingStaff;
+  const planningAuditErrors = planningAuditIssues.filter((issue) => issue.level === 'error');
+  const planningAuditWarnings = planningAuditIssues.filter((issue) => issue.level === 'warning');
 
   /* ── render ── */
 
@@ -1161,6 +1262,42 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           <div className="mt-2 text-sm text-muted-foreground">{t("shiftAdmin.cardExclusionsDesc")}</div>
         </div>
       </div>
+
+      <section className={`rounded-3xl border p-5 ${planningAuditErrors.length > 0 ? 'border-red-400/30 bg-red-500/10' : planningAuditWarnings.length > 0 ? 'border-amber-400/30 bg-amber-500/10' : 'border-emerald-400/30 bg-emerald-500/10'}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${planningAuditErrors.length > 0 ? 'bg-red-500/20 text-red-200' : planningAuditWarnings.length > 0 ? 'bg-amber-500/20 text-amber-100' : 'bg-emerald-500/20 text-emerald-100'}`}>
+              {planningAuditErrors.length > 0 || planningAuditWarnings.length > 0 ? <ShieldAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-foreground">{isGerman ? 'Planungsprüfung' : 'Planning check'}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {planningAuditIssues.length === 0
+                  ? (isGerman ? 'Die aktuell geladenen Einstellungen sind logisch miteinander vereinbar.' : 'The currently loaded settings are logically consistent.')
+                  : (isGerman ? 'Diese Einstellungen sollten vor der nächsten Generierung geprüft werden.' : 'Review these settings before the next generation.')}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 text-xs font-medium">
+            <span className="rounded-full border border-red-400/30 bg-red-500/10 px-3 py-1 text-red-200">{planningAuditErrors.length} {isGerman ? 'kritisch' : 'critical'}</span>
+            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-amber-100">{planningAuditWarnings.length} {isGerman ? 'Hinweise' : 'notes'}</span>
+          </div>
+        </div>
+        {planningAuditIssues.length > 0 ? (
+          <div className="mt-4 grid gap-2 lg:grid-cols-2">
+            {planningAuditIssues.map((issue) => (
+              <div key={issue.id} className={`rounded-2xl border px-4 py-3 text-sm ${issue.level === 'error' ? 'border-red-400/25 bg-red-950/20 text-red-100' : 'border-amber-400/25 bg-amber-950/15 text-amber-100'}`}>
+                {isGerman ? issue.messageDe : issue.messageEn}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <SettingsGroup
+        title={isGerman ? '1. Schichtmodell und Kapazität' : '1. Shift model and capacity'}
+        description={isGerman ? 'Grundlage für Zeiten, Besetzung und verfügbare Schichten.' : 'Foundation for times, staffing, and available shifts.'}
+      />
 
       {/* ── Shift definitions ── */}
       <Section title={t("shiftAdmin.sectionDefinitions")} icon={Clock} helpKey="shiftAdmin.helpSectionDefinitions" t={t}>
@@ -1257,6 +1394,44 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   </div>
                 ) : null}
 
+                <div className="mt-4 rounded-2xl border border-violet-400/20 bg-violet-500/5 p-3">
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-violet-200">
+                    {isGerman ? 'Abweichende Zeiten nach Wochentag' : 'Weekday-specific time exceptions'}
+                  </div>
+                  <p className="mb-3 text-xs leading-relaxed text-slate-400">
+                    {isGerman
+                      ? 'Der Standard oben bleibt die Basis. Lege hier nur gezielt abweichende Zeiten fest, zum Beispiel Samstag von 06:30 bis 18:30. Die Dauer wird aus den Zeiten berechnet und bei neuen Drafts berücksichtigt.'
+                      : 'The standard time above remains the baseline. Define exceptions only where needed, for example Saturday from 06:30 to 18:30. Duration is calculated from the times and used for new drafts.'}
+                  </p>
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+                    {weekdayOptions.filter((option) => applicableDays.includes(option.value)).map((option) => {
+                      const override = (definition.day_overrides || []).find((entry) => Number(entry.weekday) === option.value);
+                      const fieldValue = override || null;
+                      const busy = saving === `override-${definition.id}-${option.value}`;
+                      return (
+                        <div key={`${definition.id}-override-${option.value}`} className="rounded-xl border border-white/10 bg-slate-950/55 p-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-slate-200">{option.label}</span>
+                            {override ? <span className="rounded-full bg-violet-400/15 px-2 py-0.5 text-[10px] text-violet-200">{isGerman ? 'Individuell' : 'Custom'}</span> : <span className="text-[10px] text-slate-500">{isGerman ? 'Standard' : 'Default'}</span>}
+                          </div>
+                          {fieldValue ? (
+                            <>
+                              <div className="grid grid-cols-2 gap-2">
+                                <label className="text-[10px] text-slate-400">{isGerman ? 'Von' : 'From'}<input type="time" value={String(fieldValue.start_time).slice(0, 5)} onChange={(event) => updateDayOverride(definition.id, option.value, 'start_time', event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100" /></label>
+                                <label className="text-[10px] text-slate-400">{isGerman ? 'Bis' : 'To'}<input type="time" value={String(fieldValue.end_time).slice(0, 5)} onChange={(event) => updateDayOverride(definition.id, option.value, 'end_time', event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100" /></label>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400"><span>{isGerman ? 'Dauer' : 'Duration'}: {getShiftDurationPreview(String(fieldValue.start_time), String(fieldValue.end_time), Number(fieldValue.start_day_offset || 0), Number(fieldValue.end_day_offset || 0)).toFixed(1)}h</span><span>{isGerman ? 'wird berechnet' : 'calculated'}</span></div>
+                              <div className="mt-2 flex gap-2"><button type="button" onClick={() => void saveDayOverride(definition, option.value)} disabled={busy} className="rounded-lg bg-violet-400 px-2 py-1 text-xs font-medium text-slate-950 disabled:opacity-50">{busy ? '…' : (isGerman ? 'Speichern' : 'Save')}</button><button type="button" onClick={() => void removeDayOverride(definition, option.value)} disabled={busy} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50">{isGerman ? 'Standard' : 'Default'}</button></div>
+                            </>
+                          ) : (
+                            <button type="button" onClick={() => updateDayOverride(definition.id, option.value, 'weekday', option.value)} className="w-full rounded-lg border border-violet-300/25 px-2 py-2 text-xs text-violet-200 hover:bg-violet-400/10">{isGerman ? 'Zeit anpassen' : 'Adjust time'}</button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="mt-4 rounded-2xl border border-sky-400/15 bg-slate-950/35 p-3">
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div>
@@ -1344,6 +1519,11 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
+      <SettingsGroup
+        title={isGerman ? '2. Spezialdienste und Rollen' : '2. Special duties and roles'}
+        description={isGerman ? 'DBS und Colo-Pools mit ihrer tatsächlichen Kapazität.' : 'DBS and Colo pools with their actual capacity.'}
+      />
+
       {/* ── DBS Configuration ── */}
       <Section title={t("shiftAdmin.sectionDbs")} icon={Users} helpKey="shiftAdmin.helpSectionDbs" t={t}>
         <div className="mb-4 rounded-2xl border border-fuchsia-400/15 bg-fuchsia-500/10 px-4 py-3 text-sm text-slate-200">
@@ -1368,32 +1548,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             </span>
           </label>
 
-          {/* Row 2: Rhythm, Reference date, Required staff */}
-          <div className="grid gap-4 md:grid-cols-3">
-            <div>
-              <label className="flex items-center text-xs text-slate-400">
-                {t("shiftAdmin.dbsRhythm")}
-                <HelpTooltip textKey="shiftAdmin.helpDbsRhythm" t={t} />
-              </label>
-              <input type="number" min="1" max="8" value={dbsConfig.rhythmWeeks} onChange={(event) => setDbsConfig({ ...dbsConfig, rhythmWeeks: Math.max(1, Number.parseInt(event.target.value, 10) || 1) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-            </div>
-            <div>
-              <label className="flex items-center text-xs text-slate-400">
-                {t("shiftAdmin.dbsReferenceDate")}
-                <HelpTooltip textKey="shiftAdmin.helpDbsReferenceDate" t={t} />
-              </label>
-              <input type="date" value={dbsConfig.referenceDate} onChange={(event) => setDbsConfig({ ...dbsConfig, referenceDate: event.target.value })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-            </div>
-            <div>
-              <label className="flex items-center text-xs text-slate-400">
-                {t("shiftAdmin.dbsRequiredStaff")}
-                <HelpTooltip textKey="shiftAdmin.helpDbsRequiredStaff" t={t} />
-              </label>
-              <input type="number" min="0" max="10" value={dbsConfig.requiredStaff} onChange={(event) => setDbsConfig({ ...dbsConfig, requiredStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-            </div>
-          </div>
-
-          {/* Row 3: Shift code, Default monthly target */}
           <div className="grid gap-4 md:grid-cols-2">
             <div>
               <label className="flex items-center text-xs text-slate-400">
@@ -1404,12 +1558,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 {shiftCodeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
               </select>
             </div>
-            <div>
-              <label className="flex items-center text-xs text-slate-400">
-                {t("shiftAdmin.dbsDefaultTarget")}
-                <HelpTooltip textKey="shiftAdmin.helpDbsDefaultTarget" t={t} />
-              </label>
-              <input type="number" min="0" max="31" value={dbsConfig.defaultMonthlyTarget} onChange={(event) => setDbsConfig({ ...dbsConfig, defaultMonthlyTarget: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+            <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 px-4 py-3 text-sm text-slate-200">
+              <div className="font-medium">{isGerman ? 'Eine Person pro Kalenderwoche' : 'One person per calendar week'}</div>
+              <div className="mt-1 text-xs text-slate-400">{isGerman ? 'Der Generator rotiert die DBS-Blöcke im Pool. Rhythmus, Referenzdatum und Mehrfachbesetzung sind bewusst nicht konfigurierbar.' : 'The generator rotates DBS blocks through the pool. Rhythm, reference date, and multiple staffing are deliberately not configurable.'}</div>
             </div>
           </div>
 
@@ -1454,22 +1605,24 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           {dbsPool.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-400">{t("shiftAdmin.dbsEmptyPool")}</div>
           ) : dbsPool.map((entry) => (
-            <div key={entry.employee_name} className="grid gap-3 rounded-2xl border border-white/10 bg-slate-900/55 p-4 xl:grid-cols-[minmax(0,1fr)_220px_auto] xl:items-end">
+            <div key={entry.employee_name} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-900/55 p-4">
               <div>
                 <label className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Mitarbeiter' : 'Employee'}</label>
                 <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">{entry.employee_name}</div>
               </div>
               <div>
-                <label className="mb-1 flex items-center text-[10px] uppercase tracking-[0.18em] text-slate-400">
-                  {t("shiftAdmin.dbsMonthlyDays")}
-                  <HelpTooltip textKey="shiftAdmin.helpDbsMonthlyDays" t={t} />
-                </label>
-                <input type="number" min="0" value={entry.monthly_max_assignments} onChange={(event) => updateDbsPoolEntry(entry.employee_name, 'monthly_max_assignments', Number.parseInt(event.target.value, 10) || 0)} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                <div className="mb-2 flex items-center justify-between gap-3"><label className="text-xs text-slate-400">{isGerman ? 'Tatsächliche DBS-Arbeitstage' : 'Actual DBS working days'}</label><span className="text-xs text-fuchsia-200">{normalizeApplicableDays(entry.working_weekdays).length} {isGerman ? 'Tage pro Woche' : 'days per week'}</span></div>
+                <div className="flex flex-wrap gap-2">
+                  {weekdayOptions.map((option) => {
+                    const active = normalizeApplicableDays(entry.working_weekdays).includes(option.value);
+                    return <button key={`${entry.employee_name}-${option.value}`} type="button" onClick={() => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, working_weekdays: active ? normalizeApplicableDays(item.working_weekdays).filter((day) => day !== option.value) : [...normalizeApplicableDays(item.working_weekdays), option.value] })))} className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? 'bg-fuchsia-400/20 text-fuchsia-100 ring-1 ring-fuchsia-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>{option.label}</button>;
+                  })}
+                </div>
               </div>
-              <button onClick={() => removeDbsEmployee(entry.employee_name)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20">
-                <Trash2 className="h-4 w-4" />
-                {t("shiftAdmin.dbsRemove")}
-              </button>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                <div className="w-full sm:max-w-xs"><label className="text-xs text-slate-400">{isGerman ? 'Freie Tage nach dem DBS-Block' : 'Days off after DBS block'}</label><input type="number" min="0" max="14" value={entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock} onChange={(event) => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, free_days_after_block: Math.max(0, Math.min(14, Number.parseInt(event.target.value, 10) || 0)) })))} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" /></div>
+                <button onClick={() => removeDbsEmployee(entry.employee_name)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20"><Trash2 className="h-4 w-4" />{t("shiftAdmin.dbsRemove")}</button>
+              </div>
             </div>
           ))}
         </div>
@@ -1570,26 +1723,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
-      {/* ── Dispatcher assignment ── */}
-      <Section title={isGerman ? 'Dispatcher-Zuweisung' : 'Dispatcher assignment'} icon={Route} defaultOpen={false}>
-        <div className="space-y-4">
-          <label className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3">
-            <span><span className="block text-sm font-medium text-slate-100">{isGerman ? 'Dispatcherplanung aktivieren' : 'Enable dispatcher planning'}</span><span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Bei mehreren geeigneten Frühschicht-Mitarbeitern wird nur die höchste Priorität als DP markiert.' : 'When several eligible early-shift employees are scheduled, only the highest priority is marked DP.'}</span></span>
-            <input type="checkbox" checked={dispatcherConfig.enabled} onChange={(event) => setDispatcherConfig((current) => ({ ...current, enabled: event.target.checked }))} className="h-5 w-5 rounded border-white/20 bg-slate-950 text-pink-500" />
-          </label>
-          <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" /><input value={dispatcherSearch} onChange={(event) => setDispatcherSearch(event.target.value)} placeholder={isGerman ? 'Dispatcherfähige Mitarbeiter suchen…' : 'Search dispatcher-capable employees…'} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 py-2 pl-10 pr-3 text-sm text-slate-100" /></div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="max-h-72 overflow-y-auto rounded-2xl border border-white/10 bg-slate-950/45 p-2">
-              {employees.filter((employee) => !dispatcherConfig.priorities.includes(employee) && employee.toLocaleLowerCase().includes(dispatcherSearch.toLocaleLowerCase())).map((employee) => <button key={employee} type="button" onClick={() => setDispatcherConfig((current) => ({ ...current, priorities: [...current.priorities, employee] }))} className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm text-slate-200 hover:bg-pink-500/10"><span>{employee}</span><span className="text-xs text-pink-300">{isGerman ? 'Hinzufügen' : 'Add'}</span></button>)}
-            </div>
-            <div className="max-h-72 overflow-y-auto rounded-2xl border border-pink-400/25 bg-pink-500/5 p-2">
-              {dispatcherConfig.priorities.map((employee, index) => <div key={employee} className="flex items-center justify-between rounded-xl border border-pink-400/15 px-3 py-2 text-sm text-pink-50"><span><span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-pink-500/20 text-xs font-bold">{index + 1}</span>{employee}</span><button type="button" onClick={() => setDispatcherConfig((current) => ({ ...current, priorities: current.priorities.filter((entry) => entry !== employee) }))} className="text-xs text-slate-400 hover:text-red-300">{isGerman ? 'Entfernen' : 'Remove'}</button></div>)}
-              {dispatcherConfig.priorities.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Noch niemand ausgewählt' : 'No one selected yet'}</div> : null}
-            </div>
-          </div>
-          <div className="flex justify-end"><button onClick={saveDispatcherConfig} disabled={saving === 'dispatcher-config'} className="inline-flex items-center gap-2 rounded-2xl bg-pink-500 px-4 py-2 text-sm font-medium text-white hover:bg-pink-400 disabled:opacity-50"><Save className="h-4 w-4" />{saving === 'dispatcher-config' ? (isGerman ? 'Speichert…' : 'Saving…') : (isGerman ? 'Dispatcher speichern' : 'Save dispatchers')}</button></div>
-        </div>
-      </Section>
+      <SettingsGroup
+        title={isGerman ? '3. Planungsregeln und Sollzeit' : '3. Planning rules and target time'}
+        description={isGerman ? 'Erholung, Reihenfolgen, Feiertage, Fairness und Stundensteuerung.' : 'Recovery, sequences, holidays, fairness, and hour controls.'}
+      />
 
       {/* ── Rotation rules & overtime ── */}
       <Section title={t("shiftAdmin.sectionRotation")} icon={RotateCcw} helpKey="shiftAdmin.helpSectionRotation" t={t}>
@@ -1654,6 +1791,19 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <input type="checkbox" checked={rotation.late_to_early_forbidden} onChange={(event) => setRotation({ ...rotation, late_to_early_forbidden: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
                 <span className="flex items-center">{t("shiftAdmin.rotLateToEarlyForbidden")} <HelpTooltip textKey="shiftAdmin.helpRotLateToEarlyForbidden" t={t} /></span>
               </label>
+              <div className="rounded-2xl border border-violet-300/25 bg-violet-500/10 px-4 py-3 text-sm text-slate-100">
+                <div className="flex items-start gap-2">
+                  <input type="checkbox" checked={shortNightOptions.enabled} onChange={(event) => setShortNightOptions({ ...shortNightOptions, enabled: event.target.checked })} className="mt-0.5 rounded border-white/20 bg-slate-950" />
+                  <span><span className="block font-medium">{isGerman ? 'Kurze Nachtschicht (NK)' : 'Short night shift (NK)'}</span><span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Erstellt bis zu drei Nachtdienste als NK. NK wird im Draft und in allen Planansichten sichtbar ausgewiesen.' : 'Creates up to three night duties as NK. NK is shown in drafts and every schedule view.'}</span></span>
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Start' : 'Start'}<input type="time" value={shortNightOptions.start_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, start_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Ende' : 'End'}<input type="time" value={shortNightOptions.end_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, end_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Frei danach' : 'Days off'}<input type="number" min="0" max="14" value={shortNightOptions.free_days_after} onChange={(event) => setShortNightOptions({ ...shortNightOptions, free_days_after: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                </div>
+                <p className="mt-2 text-[10px] leading-4 text-violet-100/75">{isGerman ? `N und NK teilen sich dieselbe Obergrenze: maximal ${normalNightStaffCap || '—'} Personen pro Nacht. Die Grenze änderst du bei der normalen Nachtschicht N.` : `N and NK share one cap: at most ${normalNightStaffCap || '—'} people per night. Change the cap on the regular N shift.`}</p>
+                <button type="button" onClick={() => void saveShortNightOptions()} disabled={saving === 'short-night'} className="mt-3 rounded-lg border border-violet-300/30 px-3 py-1.5 text-xs font-semibold text-violet-100 transition hover:bg-violet-300/10 disabled:opacity-50">{saving === 'short-night' ? '…' : (isGerman ? 'NK speichern' : 'Save NK')}</button>
+              </div>
             </div>
 
             {/* ── Overtime sub-section ── */}
@@ -1950,20 +2100,21 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         ) : null}
       </Section>
 
+      <SettingsGroup
+        title={isGerman ? '4. Eingriffe und Mitarbeiterrechte' : '4. Interventions and employee access'}
+        description={isGerman ? 'Vertretungen, Warnungen und verbindliche Mitarbeiterregeln.' : 'Coverage changes, warnings, and binding employee rules.'}
+      />
+
       {/* ── Issues / control panel ── */}
       <Section title={t("shiftAdmin.sectionIssues")} icon={AlertTriangle} helpKey="shiftAdmin.helpSectionIssues" t={t}>
         <div className="mb-4 rounded-2xl border border-amber-400/15 bg-amber-500/10 px-4 py-3 text-sm text-slate-200">
           {t("shiftAdmin.sectionIssuesInfo")}
         </div>
 
-        <div className="grid gap-3 lg:grid-cols-3">
+        <div className="grid gap-3 lg:grid-cols-2">
           <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
             <input type="checkbox" checked={advancedSettings.issuePanelEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issuePanelEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
             {t("shiftAdmin.issuePanel")}
-          </label>
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.issueAutoRefresh} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issueAutoRefresh: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.issueAutoRefresh")}
           </label>
           <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
             <input type="checkbox" checked={advancedSettings.issueShowSolutions} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issueShowSolutions: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
@@ -1981,43 +2132,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
-      {/* ── Illness / replacement ── */}
-      <Section title={t("shiftAdmin.sectionIllness")} icon={Settings2} helpKey="shiftAdmin.helpSectionIllness" t={t}>
-        <div className="mb-4 rounded-2xl border border-sky-400/15 bg-sky-500/10 px-4 py-3 text-sm text-slate-200">
-          {t("shiftAdmin.sectionIllnessInfo")}
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.illnessAutoSwapEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, illnessAutoSwapEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.illnessAutoSwap")}
-          </label>
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.illnessRequireSkillMatch} onChange={(event) => setAdvancedSettings({ ...advancedSettings, illnessRequireSkillMatch: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.illnessSkillMatch")}
-          </label>
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200 lg:col-span-2">
-            <input type="checkbox" checked={advancedSettings.illnessProtectWorklifeBalance} onChange={(event) => setAdvancedSettings({ ...advancedSettings, illnessProtectWorklifeBalance: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.illnessProtectWLB")}
-          </label>
-        </div>
-
-        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <div>
-            <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.illnessBuffer")} <HelpTooltip textKey="shiftAdmin.helpIllnessBuffer" t={t} /></label>
-            <input type="number" min="0" value={advancedSettings.illnessMinSourceBuffer} onChange={(event) => setAdvancedSettings({ ...advancedSettings, illnessMinSourceBuffer: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400">{t("shiftAdmin.illnessRestHours")}</label>
-            <input type="number" min="8" value={advancedSettings.illnessMinRestHours} onChange={(event) => setAdvancedSettings({ ...advancedSettings, illnessMinRestHours: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-          </div>
-        </div>
-        <label className="mt-4 flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-          <input type="checkbox" checked={advancedSettings.colleaguePreferencesEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, colleaguePreferencesEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-          Kollegenpräferenzen für Mitarbeiter freigeben
-        </label>
-      </Section>
-
       {/* ── Access to hard weekday exclusions ── */}
       <Section title={isGerman ? 'Freigabe: Nicht verfügbare Wochentage' : 'Access: unavailable weekdays'} icon={Users} defaultOpen={false}>
         <div className="space-y-4">
@@ -2026,6 +2140,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               ? 'Nur ausgewählte Mitarbeitende sehen in ihren Einstellungen „Tage, an denen du nicht arbeiten kannst“. Diese Angaben sind für die Planung ein festes Tabu.'
               : 'Only selected employees can see “Days you cannot work” in their settings. These selections are hard exclusions for scheduling.'}
           </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{isGerman ? 'Mitarbeiterliste aus Benutzerverwaltung und aktueller Planungsbasis' : 'Employee list from user management and the current planning basis'}</span>
+            <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-1 font-semibold text-foreground">{employees.length} {isGerman ? 'Mitarbeitende' : 'employees'}</span>
+          </div>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
             <input value={blockedWeekdaySearch} onChange={(event) => setBlockedWeekdaySearch(event.target.value)} placeholder={isGerman ? 'Mitarbeiter suchen…' : 'Search employees…'} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 py-2 pl-10 pr-3 text-sm text-slate-100" />
@@ -2033,7 +2151,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-950/45">
               <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{isGerman ? 'Alle Mitarbeitenden' : 'All employees'}</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{isGerman ? 'Noch nicht freigegeben' : 'Not enabled yet'}</span>
                 <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{availableBlockedWeekdayEmployees.length}</span>
               </div>
               <div className="max-h-72 space-y-1 overflow-y-auto p-2">
@@ -2046,7 +2164,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             </div>
             <div className="overflow-hidden rounded-2xl border border-amber-400/25 bg-amber-500/5">
               <div className="flex items-center justify-between border-b border-amber-400/15 px-4 py-3">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-100">{isGerman ? 'Freigegeben' : 'Allowed'}</span>
+                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-100">{isGerman ? 'Für nicht verfügbare Wochentage freigegeben' : 'Enabled for unavailable weekdays'}</span>
                 <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-100">{advancedSettings.blockedWeekdayEmployees.length}</span>
               </div>
               <div className="max-h-72 space-y-1 overflow-y-auto p-2">
@@ -2061,147 +2179,37 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
-      {/* ── Weekend planning ── */}
-      <Section title={t("shiftAdmin.sectionWeekend")} icon={CalendarDays} helpKey="shiftAdmin.helpSectionWeekend" t={t}>
-        <div className="mb-4 rounded-2xl border border-fuchsia-400/15 bg-fuchsia-500/10 px-4 py-3 text-sm text-slate-200">
-          {t("shiftAdmin.sectionWeekendInfo")}
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.weekendVolumeEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, weekendVolumeEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.weekendVolume")}
-          </label>
-        </div>
-
-        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <div>
-            <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.weekendBuffer")} <HelpTooltip textKey="shiftAdmin.helpWeekendBuffer" t={t} /></label>
-            <input type="number" min="0" max="100" value={advancedSettings.weekendBufferPercent} onChange={(event) => setAdvancedSettings({ ...advancedSettings, weekendBufferPercent: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+      {user.isRoot ? (
+        <Section title={isGerman ? 'Interne Admin-Hinweise' : 'Internal admin notes'} icon={ShieldAlert} defaultOpen={false}>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+              {isGerman
+                ? 'Dieser Bereich ist ausschließlich für den Admin sichtbar. Die Hinweise sind nicht Teil der Mitarbeiteransicht und beeinflussen die automatische Planung nicht.'
+                : 'This area is visible to the administrator only. Notes are not shown to employees and do not affect automated planning.'}
+            </div>
+            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <input type="checkbox" checked={advancedSettings.adminFlagsEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, adminFlagsEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+              <span>{isGerman ? 'Hervorhebung in dieser Admin-Liste aktivieren' : 'Enable highlighting in this admin list'}</span>
+            </label>
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
+              <select value={newAdminFlagName} onChange={(event) => setNewAdminFlagName(event.target.value)} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"><option value="">{isGerman ? 'Mitarbeiter auswählen' : 'Select employee'}</option>{employees.filter((employee) => !adminFlags.some((flag) => flag.employee_name === employee)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}</select>
+              <input value={newAdminFlagNote} onChange={(event) => setNewAdminFlagNote(event.target.value)} placeholder={isGerman ? 'Interne Notiz (optional)' : 'Internal note (optional)'} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
+              <button type="button" onClick={() => void saveAdminFlag()} disabled={!newAdminFlagName || saving === 'admin-flag'} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-400 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50"><Save className="h-4 w-4" />{saving === 'admin-flag' ? '…' : (isGerman ? 'Hinweis speichern' : 'Save note')}</button>
+            </div>
+            <div className="space-y-2">
+              {adminFlags.length === 0 ? <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-500">{isGerman ? 'Keine internen Hinweise vorhanden.' : 'No internal notes recorded.'}</div> : adminFlags.map((flag) => <div key={flag.id} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${advancedSettings.adminFlagsEnabled && flag.is_active ? 'border-red-400/40 bg-red-500/10' : 'border-white/10 bg-slate-900/55'}`}><div><div className="font-medium text-slate-100">{flag.employee_name}</div>{flag.note ? <div className="mt-1 text-sm text-slate-400">{flag.note}</div> : null}<div className="mt-1 text-xs text-slate-500">{isGerman ? 'Zuletzt geändert' : 'Last updated'}: {new Date(flag.updated_at).toLocaleDateString(isGerman ? 'de-DE' : 'en-US')}</div></div><button type="button" onClick={() => void removeAdminFlag(flag.id)} disabled={saving === `admin-flag-${flag.id}`} className="rounded-2xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm text-red-200 hover:bg-red-500/20 disabled:opacity-50">{isGerman ? 'Entfernen' : 'Remove'}</button></div>)}
+            </div>
           </div>
-          <div>
-            <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.weekendMinDispatchers")} <HelpTooltip textKey="shiftAdmin.helpWeekendMinDispatchers" t={t} /></label>
-            <input type="number" min="0" value={advancedSettings.weekendMinDispatchers} onChange={(event) => setAdvancedSettings({ ...advancedSettings, weekendMinDispatchers: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-          </div>
-        </div>
-      </Section>
+        </Section>
+      ) : null}
 
-      {/* Save button for advanced settings (issues + illness + weekend) */}
+      {/* Save button for advanced settings */}
       <div className="flex justify-end">
         <button onClick={saveAdvancedSettings} disabled={saving === 'advanced'} className="inline-flex items-center gap-2 rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50">
           <Save className="h-4 w-4" />
           {saving === 'advanced' ? t("shiftAdmin.advancedSaving") : t("shiftAdmin.advancedSave")}
         </button>
       </div>
-
-      {/* ── Skills & competency matrix ── */}
-      <Section title={t("shiftAdmin.sectionSkills")} icon={Star} defaultOpen={false} helpKey="shiftAdmin.helpSectionSkills" t={t}>
-        <div className="mb-4 rounded-2xl border border-amber-400/15 bg-amber-500/10 px-4 py-3 text-sm text-slate-200">
-          {t("shiftAdmin.sectionSkillsInfo")}
-        </div>
-
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-          <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={skillsEnabled} onChange={(event) => setSkillsEnabled(event.target.checked)} className="mt-0.5 rounded border-white/20 bg-slate-950" />
-            <span className="flex items-center">
-              {t("shiftAdmin.skillsEnabled")}
-              <HelpTooltip textKey="shiftAdmin.helpSkillsEnabled" t={t} />
-            </span>
-          </label>
-
-          <div className="rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-xs text-slate-400">
-            {t("shiftAdmin.skillsEmployeeCount")}: <span className="font-semibold text-slate-100">{skillProfiles.length}</span><br />
-            {t("shiftAdmin.skillsCatalogCount")}: <span className="font-semibold text-slate-100">{skillCatalog.length}</span>
-          </div>
-        </div>
-
-        <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${skillsEnabled ? 'border-emerald-400/20 bg-emerald-500/10 text-emerald-100' : 'border-slate-500/20 bg-slate-900/45 text-slate-300'}`}>
-          {skillsEnabled ? t("shiftAdmin.skillsActive") : t("shiftAdmin.skillsInactive")}
-        </div>
-
-        <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/45 p-4">
-          <div className="mb-3 flex items-center text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
-            {t("shiftAdmin.skillCatalog")}
-            <HelpTooltip textKey="shiftAdmin.helpSkillCatalog" t={t} />
-          </div>
-          <div className="mb-3 flex flex-col gap-3 xl:flex-row">
-            <input value={newSkillName} onChange={(event) => setNewSkillName(event.target.value)} placeholder={t("shiftAdmin.skillAddPlaceholder")} className="flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-            <button onClick={addSkillToCatalog} disabled={!newSkillName.trim()} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-amber-300/30 bg-amber-400/15 px-4 py-2 text-sm font-medium text-amber-100 transition hover:bg-amber-400/25 disabled:opacity-50">
-              <Plus className="h-4 w-4" />
-              {t("shiftAdmin.skillAdd")}
-            </button>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
-            {skillCatalog.map((skill) => (
-              <span key={skill} className="inline-flex items-center gap-2 rounded-full border border-amber-300/20 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-100">
-                {skill}
-                <button type="button" onClick={() => removeSkillFromCatalog(skill)} className="text-amber-200/80 transition hover:text-white" aria-label={`${skill} ${isGerman ? 'entfernen' : 'remove'}`}>
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-
-        <div className="mt-4 space-y-3">
-          {skillProfiles.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-400">{isGerman ? 'Keine Mitarbeiter für die Skill-Matrix gefunden.' : 'No employees found for the skill matrix.'}</div>
-          ) : skillProfiles.map((profile) => (
-            <div key={profile.employee_name} className="rounded-2xl border border-white/10 bg-slate-900/55 p-4 shadow-[0_10px_30px_rgba(2,6,23,0.2)]">
-              <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-100">{profile.employee_name}</div>
-                  <div className="text-xs text-slate-400">{t("shiftAdmin.skillRateInfo")}</div>
-                </div>
-                <div className="rounded-full border border-white/10 bg-slate-950/60 px-3 py-1 text-xs text-slate-300">
-                  {t("shiftAdmin.skillRatedCount")}: {Object.keys(profile.rated_skills || {}).length}
-                </div>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
-                {skillCatalog.map((skill) => {
-                  const rating = profile.rated_skills?.[skill] ?? 0;
-
-                  return (
-                    <div key={`${profile.employee_name}-${skill}`} className="rounded-2xl border border-white/10 bg-slate-950/60 px-3 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="text-sm font-medium text-slate-100">{skill}</div>
-                        <div className="text-xs text-slate-400">{rating}/5</div>
-                      </div>
-                      <div className="mt-3 flex items-center gap-1">
-                        {[1, 2, 3, 4, 5].map((star) => {
-                          const active = rating >= star;
-                          const nextRating = rating === star ? 0 : star;
-
-                          return (
-                            <button
-                              key={`${profile.employee_name}-${skill}-${star}`}
-                              type="button"
-                              onClick={() => setSkillRating(profile.employee_name, skill, nextRating)}
-                              className={`rounded-full p-1 transition ${active ? 'text-amber-300 hover:text-amber-200' : 'text-slate-600 hover:text-amber-200'}`}
-                              aria-label={`${skill} ${star} ${isGerman ? 'Sterne' : 'stars'}`}
-                            >
-                              <Star className={`h-4 w-4 ${active ? 'fill-current' : ''}`} />
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4 flex justify-end">
-          <button onClick={saveSkillProfiles} disabled={saving === 'skills'} className="inline-flex items-center gap-2 rounded-2xl bg-amber-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-amber-300 disabled:opacity-50">
-            <Save className="h-4 w-4" />
-            {saving === 'skills' ? t("shiftAdmin.skillSaving") : t("shiftAdmin.skillSave")}
-          </button>
-        </div>
-      </Section>
 
       {/* ── Employee exclusions ── */}
       <Section title={t("shiftAdmin.sectionExclusions")} icon={UserX} helpKey="shiftAdmin.helpSectionExclusions" t={t}>

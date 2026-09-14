@@ -8,15 +8,18 @@ import {
   buildStaffingRulesByShiftType,
   canStartShiftSeries,
   getShiftContinuityAdjustment,
+  getShiftDurationHours,
   getDeterministicRotationRank,
   getExclusivePreferredShiftType,
   getMonthBoundarySeriesRemaining,
   getNightSeriesDaysForModel,
   getPreferenceShiftCode,
+  isShiftPreferredByEmployeePreference,
   getTargetHoursScore,
   isDayBlockedByEmployeePreference,
   isShiftUnwantedByEmployeePreference,
   isNightShiftRefused,
+  keepsShiftTypeCohesion,
   NIGHT_MODELS,
   normalizeNightModel,
   normalizePreferenceDayValues,
@@ -125,6 +128,12 @@ describe('shiftplanGeneration helpers', () => {
     assert.equal(getPreferenceShiftCode('N'), 'N');
   });
 
+  it('keeps preferred weekend variants attached to their selectable base shift', () => {
+    assert.equal(isShiftPreferredByEmployeePreference({ preferred_shifts: ['E1'] }, 'E1WE'), true);
+    assert.equal(isShiftPreferredByEmployeePreference({ preferred_shifts: ['L1'] }, 'L1WE'), true);
+    assert.equal(isShiftPreferredByEmployeePreference({ preferred_shifts: ['E1'] }, 'L1'), false);
+  });
+
   it('recognizes an exclusive preferred shift type only when all alternatives are unwanted', () => {
     assert.equal(getExclusivePreferredShiftType({ preferred_shifts: ['N'], unwanted_shifts: ['E1', 'E2', 'L1', 'L2'] }), 'night');
     assert.equal(getExclusivePreferredShiftType({ preferred_shifts: ['E1', 'E2'], unwanted_shifts: ['L1', 'L2', 'N'] }), 'early');
@@ -137,6 +146,31 @@ describe('shiftplanGeneration helpers', () => {
     const nextWeek = getDeterministicRotationRank({ employee: 'Alpha', year: 2027, month: 1, weekKey: '2027-01-11', shiftCode: 'N' });
     assert.equal(first, repeated);
     assert.notEqual(first, nextWeek);
+  });
+
+  it('uses a weekday-specific shift duration when an administrator configures one', () => {
+    const definition = {
+      duration_hours: 8.5,
+      day_overrides: [{ weekday: 6, duration_hours: 12 }],
+    };
+    assert.equal(getShiftDurationHours(definition, 6), 12);
+    assert.equal(getShiftDurationHours(definition, 1), 8.5);
+  });
+
+  it('rejects an isolated catch-up shift that would split a coherent shift type', () => {
+    const definitions = { E1: 'early', L2: 'late' };
+    assert.equal(keepsShiftTypeCohesion({
+      assignmentsByDay: { 11: 'E1', 16: 'E1' },
+      day: 14,
+      shiftType: 'late',
+      getShiftType: (code) => definitions[code],
+    }), false);
+    assert.equal(keepsShiftTypeCohesion({
+      assignmentsByDay: { 11: 'E1', 16: 'E1' },
+      day: 14,
+      shiftType: 'early',
+      getShiftType: (code) => definitions[code],
+    }), true);
   });
 
   it('enforces the fixed Monday-to-weekend series patterns', () => {

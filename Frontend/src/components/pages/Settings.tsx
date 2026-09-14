@@ -21,7 +21,6 @@ import { api } from "../../api/api";
 import { useLanguage, type LanguageCode, getLanguageLocale } from "../../context/LanguageContext";
 import { fetchSkills, type EmployeeSkills } from "../../api/coverage";
 import { formatAbsoluteDateTime, formatRelativeTime } from "../../utils/loginStatus";
-import PreferredColleagues from "../settings/PreferredColleagues";
 import EmployeePreferences from "../settings/EmployeePreferences";
 import TicketPreferences from "../settings/TicketPreferences";
 import {
@@ -191,7 +190,6 @@ export default function Settings() {
   const [meta, setMeta] = useState<UserMeta | null>(null);
   const [competenceProfile, setCompetenceProfile] = useState<EmployeeSkills | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showPreferredColleagues, setShowPreferredColleagues] = useState(true);
 
   /* SYSTEM THRESHOLDS */
   type AppSettings = {
@@ -500,13 +498,6 @@ export default function Settings() {
               </div>
             </div>
           </EnterpriseCard>
-
-          {/* PREFERRED COLLEAGUES (Wunschkollegen) */}
-          {showPreferredColleagues && (
-            <EnterpriseCard noPadding={false} className="flex flex-col gap-4">
-              <PreferredColleagues onVisibilityResolved={setShowPreferredColleagues} />
-            </EnterpriseCard>
-          )}
 
           {/* EMPLOYEE PREFERENCES (Schichtplan-Wünsche) */}
           <EnterpriseCard noPadding={false} className="flex flex-col gap-4">

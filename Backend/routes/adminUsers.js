@@ -22,6 +22,7 @@ import { isLoginNameConflictError } from "../lib/loginName.js";
 import { areEquivalentEmployeeNames, chooseCanonicalEmployeeName, generateEmailFromName } from "../lib/employeeIdentity.js";
 
 const router = express.Router();
+const EQUINIX_EMAIL = /^[^\s@]+@(?:[a-z0-9-]+\.)*equinix\.com$/i;
 
 /* ———————————————— */
 /* HELPERS                                          */
@@ -475,11 +476,11 @@ router.patch(
   requirePageAccess("user_management", "write"),
   async (req, res) => {
     const targetUserId = Number(req.params.id);
-    const { group, department, ibx, firstName, lastName, approved, isAdmin } = req.body;
+    const { group, department, ibx, firstName, lastName, email, approved, isAdmin } = req.body;
 
     try {
       const current = await db.query(
-        `SELECT is_root, login_name, email, first_name, last_name FROM users WHERE id = $1`,
+        `SELECT is_root, login_name, email, upn, first_name, last_name FROM users WHERE id = $1`,
         [targetUserId]
       );
 
@@ -523,12 +524,46 @@ router.patch(
         values.push(lastName);
       }
 
-      if (firstName !== undefined || lastName !== undefined) {
+      if (email !== undefined) {
+        const normalizedEmail = normalizeEmail(email);
+        if (!EQUINIX_EMAIL.test(normalizedEmail)) {
+          return res.status(400).json({ message: "Für Jarvis SSO ist eine gültige Equinix-E-Mail-Adresse erforderlich." });
+        }
+
+        const duplicateEmail = await db.query(
+          `SELECT 1
+             FROM users
+            WHERE id <> $1
+              AND (
+                LOWER(COALESCE(email, '')) = LOWER($2)
+                OR LOWER(COALESCE(upn, '')) = LOWER($2)
+                OR LOWER(COALESCE(login_name, '')) = LOWER($2)
+              )`,
+          [targetUserId, normalizedEmail]
+        );
+        if (duplicateEmail.rowCount > 0) {
+          return res.status(409).json({ message: "Diese SSO-E-Mail ist bereits einem Mitarbeiter zugeordnet.", code: "EMAIL_EXISTS" });
+        }
+
+        fields.push(`email = $${idx++}`);
+        values.push(normalizedEmail);
+        fields.push(`login_name = $${idx++}`);
+        values.push(normalizedEmail);
+
+        // Imported users commonly use their previous e-mail as UPN. Keep a
+        // distinct corporate UPN intact, but correct this mirrored identity.
+        const currentEmail = normalizeEmail(current.rows[0].email);
+        const currentUpn = normalizeEmail(current.rows[0].upn);
+        if (!currentUpn || currentUpn === currentEmail) {
+          fields.push(`upn = $${idx++}`);
+          values.push(normalizedEmail);
+        }
+      } else if (firstName !== undefined || lastName !== undefined) {
         const nextFirstName = firstName ?? current.rows[0].first_name;
         const nextLastName = lastName ?? current.rows[0].last_name;
         const normalizedEmail = normalizeEmail(generateEmailFromName(`${nextFirstName} ${nextLastName}`));
-        if (!normalizedEmail) {
-          return res.status(400).json({ message: "Aus dem Namen konnte keine SSO-E-Mail erzeugt werden." });
+        if (!EQUINIX_EMAIL.test(normalizedEmail)) {
+          return res.status(400).json({ message: "Aus dem Namen konnte keine gültige SSO-E-Mail erzeugt werden." });
         }
         const duplicateEmail = await db.query(
           `SELECT 1 FROM users WHERE id <> $1 AND LOWER(email) = LOWER($2)`,
@@ -560,12 +595,15 @@ router.patch(
 
       values.push(targetUserId);
 
-      await db.query(
-        `UPDATE users SET ${fields.join(", ")} WHERE id = $${idx}`,
+      const updated = await db.query(
+        `UPDATE users
+            SET ${fields.join(", ")}
+          WHERE id = $${idx}
+        RETURNING id, email, login_name AS "loginName"`,
         values
       );
 
-      res.json({ success: true });
+      res.json({ success: true, user: updated.rows[0] });
     } catch (err) {
       if (isLoginNameConflictError(err)) {
         const response = buildLoginNameErrorResponse("LOGIN_NAME_EXISTS");

@@ -16,7 +16,6 @@ router.use(requireAuth);
 const VALID_ROLES = [
   "dispatcher",
   "dbs_project",
-  "colo",
   "largeorder",
   "projekt",
   "lead",
@@ -36,7 +35,6 @@ function currentLocalDateKey(base = new Date()) {
 export const ROLE_LABELS = {
   dispatcher: "Dispatcher",
   dbs_project: "DBS Project",
-  colo: "COLO",
   largeorder: "Largeorder",
   projekt: "Projekt",
   lead: "Lead",

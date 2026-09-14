@@ -279,8 +279,7 @@ const LOGIC_TREE: TreeNode[] = [
           },
           { id: "tb-purity", label: "2. Queue-Reinheit", description: "Mitarbeiter mit einer „reinen“ Queue werden vor gemischten Queues bevorzugt. Wenn nur gemischte Kandidaten übrig sind, wird trotzdem weiter entschieden.", type: "rule" },
           { id: "tb-workload", label: "3. Geringste Auslastung", description: "Bei weiterem Gleichstand wird der Mitarbeiter mit den wenigsten aktiven Tickets bevorzugt. Ziel: möglichst gleichmäßige Lastverteilung über die Schicht.", type: "rule" },
-          { id: "tb-colleague", label: "4. Kollegen-Nähe", description: "Spätes weiches Signal aus Preferred-Colleague- bzw. Buddy-Beziehungen. Es greift nur, wenn stärkere Kriterien identisch sind.", type: "rule" },
-          { id: "tb-id", label: "5. Konfigurierter Schluss-Tie-Breaker", description: "Letzte Lauf-Stufe: Wenn alles andere gleich ist, greift die konfigurierte Schlussstrategie. Je nach Policy kann ODIN dann per Round-Robin verteilen, zufällig auflösen oder reproduzierbar über die Worker-Nummer entscheiden.", detail: <p>Die Policy-Badge „Fallback Tie-Breaker“ zeigt den konfigurierten Schlussmodus. Die tatsächliche Run-Badge zeigt anschließend, ob die Entscheidung am Ende durch Round-Robin, Zufall oder die Worker-Nummer aufgelöst wurde.</p>, type: "rule" },
+          { id: "tb-id", label: "4. Konfigurierter Schluss-Tie-Breaker", description: "Letzte Lauf-Stufe: Wenn alles andere gleich ist, greift die konfigurierte Schlussstrategie. Je nach Policy kann ODIN dann per Round-Robin verteilen, zufällig auflösen oder reproduzierbar über die Worker-Nummer entscheiden.", detail: <p>Die Policy-Badge „Fallback Tie-Breaker“ zeigt den konfigurierten Schlussmodus. Die tatsächliche Run-Badge zeigt anschließend, ob die Entscheidung am Ende durch Round-Robin, Zufall oder die Worker-Nummer aufgelöst wurde.</p>, type: "rule" },
         ],
       },
       {
@@ -522,8 +521,7 @@ const LOGIC_TREE_EN: Record<string, TreeNodeLocalization> = {
   },
   "tb-purity": { label: "2. Queue purity", description: "Employees with a pure queue are preferred over mixed queues, but ODIN still assigns the best remaining worker if only mixed candidates are left." },
   "tb-workload": { label: "3. Lowest workload", description: "If there is still a tie, the employee with the fewest active tickets is preferred. Goal: even workload distribution across the shift." },
-  "tb-colleague": { label: "4. Colleague proximity", description: "Late soft signal from preferred-colleague or buddy relationships. It matters only if stronger criteria are tied." },
-  "tb-id": { label: "5. Configured final tie-breaker", description: "Final run-level stage: if everything else is still tied, ODIN applies the configured closing policy. Depending on that policy the decision can be resolved by round-robin, random choice, or reproducible worker ID fallback.", detail: <p>The policy badge "Fallback Tie-Breaker" shows the configured closing mode. The actual run badge then shows whether the decision was ultimately resolved by round-robin, random, or worker number.</p> },
+  "tb-id": { label: "4. Configured final tie-breaker", description: "Final run-level stage: if everything else is still tied, ODIN applies the configured closing policy. Depending on that policy the decision can be resolved by round-robin, random choice, or reproducible worker ID fallback.", detail: <p>The policy badge "Fallback Tie-Breaker" shows the configured closing mode. The actual run badge then shows whether the decision was ultimately resolved by round-robin, random, or worker number.</p> },
   "decision-log": {
     label: "Log decision",
     description: "The result of every ticket decision is stored fully in the database, including candidates, exclusion reasons, and scores.",

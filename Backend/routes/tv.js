@@ -146,7 +146,7 @@ const TV_SHIFT_TYPES = {
   E2: { label: "E2", color: "bg-orange-600", name: "Frühschicht",  time: "07:00-16:00" },
   L1: { label: "L1", color: "bg-yellow-500", name: "Spätschicht",  time: "13:00-22:00" },
   L2: { label: "L2", color: "bg-yellow-600", name: "Spätschicht",  time: "15:00-00:00" },
-  N:  { label: "N",  color: "bg-blue-600",   name: "Nachtschicht", time: "21:15-06:45" },
+  N:  { label: "N",  color: "bg-blue-600",   name: "Nachtschicht", time: "21:45-06:45" },
   DBS:    { label: "DBS",    color: "bg-fuchsia-600", name: "DBS",       time: "—" },
   FS:     { label: "FS",     color: "bg-cyan-500",    name: "Freischicht", time: "—" },
   ABW:    { label: "ABW",    color: "bg-gray-500",    name: "Abwesend",   time: "—" },
@@ -827,8 +827,6 @@ router.get("/assignment-trace", async (_req, res) => {
     if (selReason.includes('queue purity')) strategySteps.push({ key: 'queue-purity', label: 'Queue-Reinheit', active: true });
     else strategySteps.push({ key: 'queue-purity', label: 'Queue-Reinheit', active: false });
     strategySteps.push({ key: 'workload', label: 'Geringste Auslastung', active: true });
-    if (selReason.includes('colleague preference')) strategySteps.push({ key: 'colleague-pref', label: 'Wunschkollege', active: true });
-    else strategySteps.push({ key: 'colleague-pref', label: 'Wunschkollege', active: false });
     strategySteps.push({ key: 'worker-id', label: 'Deterministischer Fallback', active: tieBreaker === 'worker-id' || !tieBreaker });
 
     // Build candidate stats

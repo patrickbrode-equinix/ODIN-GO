@@ -12,7 +12,6 @@ import { getRemainingMs, getColorTier, formatRemainingTime } from "../../utils/t
 const TV_WEEKPLAN_ROLE_BADGES: Record<string, { label: string; className: string }> = {
   dispatcher: { label: "Dispatcher", className: "bg-blue-500/20 text-blue-300 border-blue-500/30" },
   dbs_project: { label: "DBS Project", className: "bg-fuchsia-500/20 text-fuchsia-300 border-fuchsia-500/30" },
-  colo: { label: "COLO", className: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30" },
   largeorder: { label: "Largeorder", className: "bg-orange-500/20 text-orange-300 border-orange-500/30" },
   projekt: { label: "Projekt", className: "bg-violet-500/20 text-violet-300 border-violet-500/30" },
   lead: { label: "Lead", className: "bg-amber-500/20 text-amber-300 border-amber-500/30" },
@@ -30,13 +29,13 @@ const SHIFT_WINDOWS: Record<string, { startH: number; startM: number; endH: numb
   E2: { startH: 7, startM: 0, endH: 16, endM: 0 },
   L1: { startH: 13, startM: 0, endH: 22, endM: 0 },
   L2: { startH: 15, startM: 0, endH: 0, endM: 0, overnight: true },
-  N:  { startH: 21, startM: 15, endH: 6, endM: 45, overnight: true },
+  N:  { startH: 21, startM: 45, endH: 6, endM: 45, overnight: true },
 };
 
 const SHIFT_KIND_WINDOWS: Record<"early" | "late" | "night", { startH: number; startM: number; endH: number; endM: number; overnight?: boolean; timeLabel: string }> = {
   early: { startH: 6, startM: 30, endH: 16, endM: 0, timeLabel: "06:30 - 16:00" },
   late: { startH: 13, startM: 0, endH: 0, endM: 0, overnight: true, timeLabel: "13:00 - 00:00" },
-  night: { startH: 21, startM: 15, endH: 6, endM: 45, overnight: true, timeLabel: "21:15 - 06:45" },
+  night: { startH: 21, startM: 45, endH: 6, endM: 45, overnight: true, timeLabel: "21:45 - 06:45" },
 };
 
 function formatShiftDistance(ms: number): string {

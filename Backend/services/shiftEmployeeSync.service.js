@@ -284,7 +284,6 @@ const EMPLOYEE_DELETE_STEPS = [
   { table: "employee_shift_roles", column: "employee_name" },
   { table: "assignment_employee_exclusions", column: "employee_name" },
   { table: "shiftplan_exclusions", column: "employee_name" },
-  { table: "preferred_colleagues", column: "preferred_employee_name" },
 ];
 
 async function loadExistingTables(client) {

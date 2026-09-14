@@ -81,7 +81,7 @@ describe("shift handover routes", () => {
       if (String(sql).includes("UPDATE users")) return { rows: [], rowCount: 1 };
       if (String(sql).includes("INSERT INTO shift_handovers")) {
         insertParams = params;
-        return { rows: [row({ direction: params[1], category: params[2], ticketNumber: params[3], customerName: params[4], notes: params[5], createdByUserId: params[6], createdByName: params[7] })] };
+        return { rows: [row({ direction: params[1], category: params[2], ticketNumber: params[3], customerName: params[4], notes: params[5], status: params[6], createdByUserId: params[7], createdByName: params[8] })] };
       }
       return { rows: [] };
     };
@@ -101,8 +101,8 @@ describe("shift handover routes", () => {
         }),
       });
       assert.equal(response.status, 201);
-      assert.equal(insertParams[6], 7);
-      assert.equal(insertParams[7], "Test User");
+      assert.equal(insertParams[7], 7);
+      assert.equal(insertParams[8], "Test User");
       const body = await response.json();
       assert.equal(body.handover.createdByName, "Test User");
     } finally {
@@ -125,6 +125,43 @@ describe("shift handover routes", () => {
       assert.equal(response.status, 400);
       const body = await response.json();
       assert.equal(body.error, "TICKET_DETAILS_REQUIRED");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("updates a handover and records the verified editor", async () => {
+    let updateParams = null;
+    db.query = async (sql, params = []) => {
+      if (String(sql).includes("FROM users")) return { rows: [{ id: 7, login_name: "test.user", email: "test@example.test", first_name: "Test", last_name: "User", user_group: "Employee", is_root: false }] };
+      if (String(sql).includes("UPDATE users")) return { rows: [], rowCount: 1 };
+      if (String(sql).includes("UPDATE shift_handovers")) {
+        updateParams = params;
+        return { rows: [row({ notes: params[5], status: params[6], updatedByUserId: params[7], updatedByName: params[8], updatedAt: "2026-08-21T14:00:00.000Z" })] };
+      }
+      return { rows: [] };
+    };
+    const server = await startApp();
+    try {
+      const response = await fetch(`${server.baseUrl}/api/shift-handovers/12`, {
+        method: "PUT",
+        headers: headers(),
+        body: JSON.stringify({
+          handoverAt: "2026-08-21T13:00:00.000Z",
+          direction: "late_to_night",
+          category: "trouble_ticket",
+          ticketNumber: "5-2630001",
+          customerName: "Example GmbH",
+          notes: "Aktualisierter Arbeitsstand.",
+        }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(updateParams[7], 7);
+      assert.equal(updateParams[8], "Test User");
+      const body = await response.json();
+      assert.equal(body.handover.notes, "Aktualisierter Arbeitsstand.");
+      assert.equal(body.handover.updatedByName, "Test User");
+      assert.ok(body.handover.updatedAt);
     } finally {
       await server.close();
     }

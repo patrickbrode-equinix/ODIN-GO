@@ -30,10 +30,10 @@ CREATE TABLE IF NOT EXISTS shift_definitions (
 -- Seed default shift definitions
 INSERT INTO shift_definitions (code, name, short_name, shift_type, start_time, end_time, duration_hours, min_staff, max_staff, color_hex, sort_order)
 VALUES
-  ('E1', 'Frühschicht 1', 'E1', 'early', '06:00', '14:00', 8.0, 1, 5, '#3b82f6', 1),
-  ('E2', 'Frühschicht 2', 'E2', 'early', '06:00', '14:00', 8.0, 1, 5, '#60a5fa', 2),
-  ('L1', 'Spätschicht 1', 'L1', 'late', '14:00', '22:00', 8.0, 1, 5, '#f59e0b', 3),
-  ('L2', 'Spätschicht 2', 'L2', 'late', '14:00', '22:00', 8.0, 1, 5, '#fbbf24', 4),
+  ('E1', 'Frühschicht 1', 'E1', 'early', '06:00', '14:00', 8.0, 1, 8, '#3b82f6', 1),
+  ('E2', 'Frühschicht 2', 'E2', 'early', '06:00', '14:00', 8.0, 1, 8, '#60a5fa', 2),
+  ('L1', 'Spätschicht 1', 'L1', 'late', '14:00', '22:00', 8.0, 1, 8, '#f59e0b', 3),
+  ('L2', 'Spätschicht 2', 'L2', 'late', '14:00', '22:00', 8.0, 1, 8, '#fbbf24', 4),
   ('N',  'Nachtschicht',   'N',  'night', '22:00', '06:00', 8.0, 1, 3, '#8b5cf6', 5)
 ON CONFLICT (code) DO NOTHING;
 

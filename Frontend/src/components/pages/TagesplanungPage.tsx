@@ -22,6 +22,7 @@ import { isColoEmployee, parseColoPool } from "../../utils/colo";
 import { api } from "../../api/api";
 import type { EnrichedCommitTicket } from "../commit/commit.types";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
+import { ShiftplanUploadStatus } from "../shiftplan/ShiftplanUploadStatus";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
@@ -89,8 +90,8 @@ const CAT_META: Record<ShiftCat, CategoryMeta> = {
     label:     "NACHTSCHICHT",
     hex:       "#38bdf8",
     bgGrad:    "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(56,189,248,0.17) 0%, rgba(3,9,24,0.98) 65%)",
-    timeLabel: "21:15 – 06:45",
-    window:    { startMin: 21 * 60 + 15, endMin: 6 * 60 + 45, crossesMidnight: true },
+    timeLabel: "21:45 – 06:45",
+    window:    { startMin: 21 * 60 + 45, endMin: 6 * 60 + 45, crossesMidnight: true },
   },
   dbs: {
     label:     "DBS",
@@ -132,6 +133,8 @@ const SHIFT_SUB_GROUPS: Partial<Record<ShiftCat, SubGroup[]>> = {
 
 const CAT_ORDER: ShiftCat[] = ["early", "late", "night", "dbs", "special"];
 
+const NIGHT_SHIFT_END_MINUTES = 6 * 60 + 45;
+
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
 
 function normName(s: string): string {
@@ -142,6 +145,22 @@ function normName(s: string): string {
     .filter(Boolean)
     .sort()
     .join(" ");
+}
+
+function resolveNightSourceDate(date: Date): Date {
+  const source = new Date(date);
+  const minutesSinceMidnight = source.getHours() * 60 + source.getMinutes();
+
+  // The Monday morning night team belongs to the Sunday shift from the
+  // previous planning week and remains active through 06:45.
+  if (source.getDay() === 1 && minutesSinceMidnight < NIGHT_SHIFT_END_MINUTES) {
+    source.setDate(source.getDate() - 1);
+  }
+  return source;
+}
+
+function toDateKey(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function normalizeOwnerKey(value: string): string {
@@ -440,7 +459,6 @@ function EmployeeCard({
             <div className="min-w-0 flex-1">
               <div className="truncate text-[14px] font-bold leading-tight text-slate-100">
                 {employee.name}
-                {employee.isColo ? <span className="ml-1.5 inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1 py-px text-[9px] font-black text-cyan-200">COLO</span> : null}
                 {employee.isDispatcher ? <span className="ml-1.5 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1 py-px text-[9px] font-black text-pink-200">DP</span> : null}
               </div>
               <div className="mt-1 text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: `${hex}70` }}>
@@ -546,12 +564,14 @@ function ShiftBand({
   now,
   bandIndex,
   totalBands,
+  nightCarryover,
 }: {
   cat:        ShiftCat;
   employees:  EmployeeRow[];
   now:        number;
   bandIndex:  number;
   totalBands: number;
+  nightCarryover: boolean;
 }) {
   const { language } = useLanguage();
   const isGerman = language === "de";
@@ -619,16 +639,6 @@ function ShiftBand({
           transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
         />
       )}
-
-      {/* dot-grid watermark */}
-      <svg className="pointer-events-none absolute inset-0 h-full w-full opacity-[0.025]" aria-hidden>
-        <defs>
-          <pattern id={`dots-${cat}`} x="0" y="0" width="16" height="16" patternUnits="userSpaceOnUse">
-            <circle cx="1" cy="1" r="0.8" fill={meta.hex} />
-          </pattern>
-        </defs>
-        <rect width="100%" height="100%" fill={`url(#dots-${cat})`} />
-      </svg>
 
       {/* 4-corner bracket accents */}
       {isActive && (
@@ -701,6 +711,11 @@ function ShiftBand({
         {/* time range + status badge */}
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-medium" style={{ color: isActive ? `${meta.hex}99` : "rgba(100,116,139,0.7)" }}>{meta.timeLabel}</span>
+          {cat === "night" && nightCarryover && (
+            <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] text-sky-200">
+              {isGerman ? "Vorwoche bis 06:45" : "Previous week until 06:45"}
+            </span>
+          )}
           {status !== "unknown" && (
             <motion.span
               className="ml-auto rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em]"
@@ -845,6 +860,7 @@ export default function TagesplanungPage() {
   const [now, setNow]           = useState(() => Date.now());
   const [refreshing, setRefreshing] = useState(false);
   const [schedule, setSchedule] = useState<Record<string, Record<number, string>>>({});
+  const [previousMonthSchedule, setPreviousMonthSchedule] = useState<Record<string, Record<number, string>>>({});
   const [scheduleLoading, setScheduleLoading] = useState(true);
   const [scheduleError, setScheduleError] = useState("");
   const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
@@ -856,7 +872,7 @@ export default function TagesplanungPage() {
   useEffect(() => {
     api.get("/app-settings").then(({ data }) => {
       setColoPool(parseColoPool(data?.["shiftplan.colo_pool"]));
-      setDispatcherConfig({ enabled: data?.["shiftplan.dispatcher_enabled"] !== "false", priorities: parseColoPool(data?.["shiftplan.dispatcher_pool"]) });
+      setDispatcherConfig({ enabled: false, priorities: [] });
     }).catch(() => { setColoPool([]); setDispatcherConfig({ enabled: true, priorities: [] }); });
   }, []);
 
@@ -872,29 +888,42 @@ export default function TagesplanungPage() {
   }, []);
 
   const today = useMemo(() => new Date(now), [now]);
+  const nightSourceDate = useMemo(() => resolveNightSourceDate(today), [today]);
   const scheduleMonth = useMemo(
     () => formatMonthLabel(today.getFullYear(), today.getMonth() + 1, "de-DE"),
     [today],
   );
-  const todayKey = useMemo(() => `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`, [today]);
+  const todayKey = useMemo(() => toDateKey(today), [today]);
+  const nightSourceKey = useMemo(() => toDateKey(nightSourceDate), [nightSourceDate]);
+  const nightSourceMonth = useMemo(
+    () => formatMonthLabel(nightSourceDate.getFullYear(), nightSourceDate.getMonth() + 1, "de-DE"),
+    [nightSourceDate],
+  );
+  const nightCarryover = nightSourceKey !== todayKey;
+  const needsPreviousMonthSchedule = nightSourceMonth !== scheduleMonth;
 
   const loadTodaySchedule = useCallback(async () => {
     setScheduleLoading(true);
     setScheduleError("");
     try {
       const data = await fetchSchedule(scheduleMonth);
+      const previousData = needsPreviousMonthSchedule
+        ? await fetchSchedule(nightSourceMonth)
+        : null;
       setSchedule(data?.schedule || {});
+      setPreviousMonthSchedule(previousData?.schedule || {});
     } catch (error) {
       console.error("DAILY PLAN schedule load failed", error);
       setSchedule({});
+      setPreviousMonthSchedule({});
       setScheduleError(isGerman ? "Die Tagesplanung konnte nicht geladen werden." : "The daily plan could not be loaded.");
     } finally {
       setScheduleLoading(false);
     }
-  }, [isGerman, scheduleMonth]);
+  }, [isGerman, needsPreviousMonthSchedule, nightSourceMonth, scheduleMonth]);
 
   useEffect(() => { void loadTodaySchedule(); }, [loadTodaySchedule]);
-  useEffect(() => { void fetchRoles(todayKey, todayKey); }, [fetchRoles, todayKey]);
+  useEffect(() => { void fetchRoles(nightCarryover ? nightSourceKey : todayKey, todayKey); }, [fetchRoles, nightCarryover, nightSourceKey, todayKey]);
 
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -904,10 +933,11 @@ export default function TagesplanungPage() {
 
   const allEmployees = useMemo((): EmployeeRow[] => {
     const day = today.getDate();
-    return Object.entries(schedule)
+    const nightSchedule = needsPreviousMonthSchedule ? previousMonthSchedule : schedule;
+    const daytimeEmployees = Object.entries(schedule)
       .map(([name, days]) => {
         const shiftCode = String(days?.[day] || "").trim().toUpperCase();
-        if (!shiftCode || ["FS", "ABW", "OFF", "K", "U"].includes(shiftCode)) return null;
+        if (!shiftCode || /^N/.test(shiftCode) || ["FS", "ABW", "OFF", "K", "U"].includes(shiftCode)) return null;
         return {
           name: name.replace(",", "").trim(),
           shiftCode,
@@ -917,9 +947,24 @@ export default function TagesplanungPage() {
           isDispatcher: dispatcherConfig.enabled && dispatcherConfig.priorities[0] ? isColoEmployee(name, [dispatcherConfig.priorities[0]]) && shiftCode.startsWith("E") : false,
         };
       })
-      .filter((employee): employee is EmployeeRow => employee !== null)
+      .filter((employee): employee is EmployeeRow => employee !== null);
+    const nightEmployees = Object.entries(nightSchedule)
+      .map(([name, days]) => {
+        const shiftCode = String(days?.[nightSourceDate.getDate()] || "").trim().toUpperCase();
+        if (!/^N/.test(shiftCode)) return null;
+        return {
+          name: name.replace(",", "").trim(),
+          shiftCode,
+          cat: "night" as const,
+          roleKey: getRole(name, nightSourceKey),
+          isColo: isColoEmployee(name, coloPool),
+          isDispatcher: false,
+        };
+      })
+      .filter((employee): employee is EmployeeRow => employee !== null);
+    return [...daytimeEmployees, ...nightEmployees]
       .sort((left, right) => left.shiftCode.localeCompare(right.shiftCode) || left.name.localeCompare(right.name, "de"));
-  }, [coloPool, dispatcherConfig, schedule, today, todayKey, getRole]);
+  }, [coloPool, dispatcherConfig, getRole, needsPreviousMonthSchedule, nightSourceDate, nightSourceKey, previousMonthSchedule, schedule, today, todayKey]);
 
   const groups = useMemo(() => {
     const map = new Map<ShiftCat, EmployeeRow[]>();
@@ -1044,6 +1089,7 @@ export default function TagesplanungPage() {
                     {nowDate.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" })}
                   </span>
                 </div>
+                <ShiftplanUploadStatus className="mt-2" />
                 <ShiftTimeLegend shiftTimes={shiftTimes} compact className="mt-2" />
               </div>
             </div>
@@ -1181,6 +1227,7 @@ export default function TagesplanungPage() {
                   now={now}
                   bandIndex={i}
                   totalBands={n}
+                  nightCarryover={cat === "night" && nightCarryover}
                 />
               ))}
             </motion.div>

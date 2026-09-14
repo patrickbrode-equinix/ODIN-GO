@@ -8,7 +8,6 @@ export const IS_SHIFTPLANNER_MODE = APP_MODE === "shiftplanner";
 const SHIFTPLANNER_PAGE_KEYS = new Set([
   "shiftplan",
   "shiftplan_drafts",
-  "wellbeing",
   "shiftplan_control",
   "teams_center",
   "tv_dashboard",
@@ -20,6 +19,7 @@ const SHIFTPLANNER_PAGE_KEYS = new Set([
 
 const SHIFTPLANNER_ADMIN_TABS = new Set([
   "shiftplan",
+  "wellbeing",
   "audit",
 ]);
 

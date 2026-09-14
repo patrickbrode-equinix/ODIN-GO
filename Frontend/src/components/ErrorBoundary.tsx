@@ -1,18 +1,21 @@
 import React, { Component, ErrorInfo, ReactNode } from "react";
+import { X } from "lucide-react";
 import { Button } from "./ui/button"; // Adjust path if needed
 
 type ErrorBoundaryLanguage = "de" | "en";
 
-const ERROR_COPY: Record<ErrorBoundaryLanguage, { title: string; description: string; reload: string }> = {
+const ERROR_COPY: Record<ErrorBoundaryLanguage, { title: string; description: string; reload: string; close: string }> = {
     de: {
         title: "Ein unerwarteter Fehler ist aufgetreten",
         description: "Die Anwendung konnte nicht geladen werden. Bitte versuche es erneut oder kontaktiere den Support, falls das Problem bestehen bleibt.",
         reload: "Seite neu laden",
+        close: "ODIN GO schließen",
     },
     en: {
         title: "An unexpected error occurred",
         description: "The application could not be loaded. Please try again or contact support if the problem persists.",
         reload: "Reload page",
+        close: "Close ODIN GO",
     },
 };
 
@@ -49,12 +52,34 @@ export class ErrorBoundary extends Component<Props, State> {
         window.location.reload();
     };
 
+    private handleClose = () => {
+        if (window.parent !== window) {
+            window.parent.postMessage({ type: "ODIN_GO_CLOSE" }, "*");
+            return;
+        }
+
+        // A standalone page cannot reliably close its own browser tab. Return
+        // to the previous page instead, without forcing another app reload.
+        if (window.history.length > 1) window.history.back();
+    };
+
     public render() {
         if (this.state.hasError) {
             const copy = ERROR_COPY[getErrorBoundaryLanguage()];
 
             return (
-                <div className="flex flex-col items-center justify-center min-h-screen bg-background text-foreground p-6 text-center space-y-6">
+                <div className="relative flex min-h-screen flex-col items-center justify-center space-y-6 bg-background p-6 text-center text-foreground">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={this.handleClose}
+                        className="absolute right-5 top-5"
+                        title={copy.close}
+                        aria-label={copy.close}
+                    >
+                        <X />
+                    </Button>
                     <img
                         src="/odin-assets/odin-unavailable.png"
                         alt={copy.title}

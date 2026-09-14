@@ -52,7 +52,7 @@ export const shiftTypes: Record<string, ShiftTypeInfo> = {
   L2: { label: "L2", color: "bg-yellow-600", name: "Spätschicht", time: "15:00-00:00" },
   L1WE: { label: "L1WE", color: "bg-amber-500", name: "Spätschicht mit Wochenende (Sa/So)", time: "14:00-22:00" },
 
-  N: { label: "N", color: "bg-blue-600", name: "Nachtschicht", time: "21:15-06:45" },
+  N: { label: "N", color: "bg-blue-600", name: "Nachtschicht", time: "21:45-06:45" },
 
   /* Halbe Schichten */
   HE1: { label: "HE1", color: "bg-orange-400", name: "Halbe Frühschicht (E1)", time: "06:30-10:30" },

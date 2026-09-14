@@ -4,7 +4,6 @@ export type AssignmentTraceGlossaryKey =
   | 'grouping-score'
   | 'queue-purity'
   | 'workload'
-  | 'colleague-proximity'
   | 'worker-id'
   | 'priority-tier'
   | 'ticket-priority'
@@ -65,17 +64,6 @@ const GLOSSARY: Record<AssignmentTraceGlossaryKey, AssignmentTraceGlossaryDefini
     interpretation: {
       de: 'Niedriger ist besser, wenn stärkere Kriterien wie Schicht, Rollen und Grouping gleich sind.',
       en: 'Lower is better once stronger criteria such as shift, role, and grouping are equal.',
-    },
-  },
-  'colleague-proximity': {
-    label: { de: 'Kollegen-Nähe', en: 'Colleague proximity' },
-    description: {
-      de: 'Weiches Signal aus Wunschkollegen- bzw. Buddy-Beziehungen. Es erhöht leicht die Chance, wenn passende Kollegen bereits im Einsatz sind.',
-      en: 'Soft signal derived from preferred-colleague or buddy relationships. It slightly increases preference if matching colleagues are already active.',
-    },
-    interpretation: {
-      de: 'Nur später Tie-Breaker. Dieses Signal überschreibt nie harte Regeln.',
-      en: 'Only a late tie-breaker. This signal never overrides hard rules.',
     },
   },
   'worker-id': {
@@ -281,7 +269,6 @@ export function resolveAssignmentTraceGlossaryKey(
   if (raw.includes('grouping score') || raw.includes('system grouping')) return 'grouping-score';
   if (raw.includes('queue purity')) return 'queue-purity';
   if (raw.includes('current workload') || raw.includes('open load') || raw.startsWith('load')) return 'workload';
-  if (raw.includes('colleague proximity')) return 'colleague-proximity';
   if (raw.includes('rotation tie breaker')) return 'rotation-tie-breaker';
   if (raw.includes('worker id') || raw.includes('worker number') || raw.includes('worker-id') || raw.includes('mitarbeiter-id')) return 'worker-id';
   if (raw.includes('priority tier')) return 'priority-tier';
@@ -384,10 +371,6 @@ export function formatAssignmentRankingFactorText(factor: string, language: stri
     return formatAssignmentMetricLabel('workload', workloadMatch[1], safeLanguage);
   }
 
-  const colleagueMatch = factor.match(/colleague proximity\s+(\d+)/i);
-  if (colleagueMatch) {
-    return formatAssignmentMetricLabel('colleague-proximity', colleagueMatch[1], safeLanguage);
-  }
 
   const workerIdMatch = factor.match(/worker id[:\s]+(\d+)/i);
   if (workerIdMatch) {
@@ -433,7 +416,6 @@ export function collectAssignmentTraceGlossaryKeys(payload: {
     groupingScore?: number | null;
     queuePure?: boolean | null;
     workload?: number | null;
-    colleagueScore?: number | null;
     rankingFactors?: string[] | null;
   }> | null;
 }) {
@@ -459,7 +441,6 @@ export function collectAssignmentTraceGlossaryKeys(payload: {
     if (candidate.groupingScore != null) keys.add('grouping-score');
     if (candidate.queuePure != null) keys.add('queue-purity');
     if (candidate.workload != null) keys.add('workload');
-    if ((candidate.colleagueScore || 0) > 0) keys.add('colleague-proximity');
 
     for (const factor of candidate.rankingFactors || []) {
       const resolved = resolveAssignmentTraceGlossaryKey(factor);

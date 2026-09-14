@@ -1,14 +1,15 @@
 import { getShiftColorStyle } from "./shiftColors";
 import type { ShiftTimeMap } from "../../utils/shiftTimes";
 
-const CORE_SHIFT_CODES = ["E1", "E2", "L1", "L2", "N"] as const;
+const CORE_SHIFT_CODES = ["E1", "E2", "L1", "L2", "N", "NK"] as const;
 
 const DEFAULT_SHIFT_TIMES: Record<(typeof CORE_SHIFT_CODES)[number], string> = {
   E1: "06:30-15:30",
   E2: "07:00-16:00",
   L1: "13:00-22:00",
   L2: "15:00-00:00",
-  N: "21:15-06:45",
+  N: "21:45-06:45",
+  NK: "21:45-06:45",
 };
 
 type ShiftTimeLegendProps = {
@@ -18,9 +19,10 @@ type ShiftTimeLegendProps = {
 };
 
 export function ShiftTimeLegend({ shiftTimes = {}, className = "", compact = false }: ShiftTimeLegendProps) {
+  const visibleCodes = shiftTimes.NK ? CORE_SHIFT_CODES : CORE_SHIFT_CODES.filter((code) => code !== "NK");
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className}`} aria-label="Schichtzeiten">
-      {CORE_SHIFT_CODES.map((code) => (
+      {visibleCodes.map((code) => (
         <span
           key={code}
           style={getShiftColorStyle(code)}

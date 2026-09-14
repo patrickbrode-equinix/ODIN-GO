@@ -12,7 +12,6 @@ const PORT = parseInt(process.env.PORT || "8000", 10);
 
 // Backend URL: In host-networking mode, backend is on localhost:8001
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8001";
-const SHIFTPLANNER_API_KEY = process.env.SHIFTPLANNER_API_KEY || "";
 
 /* ------------------------------------------------ */
 /* LOCAL HEALTHCHECK (does NOT proxy to backend)     */
@@ -27,6 +26,11 @@ app.get("/healthz", (_req, res) => {
 
 /* ------------------------------------------------ */
 /* PROXY /api/* and /uploads/* to backend            */
+/*
+ * The browser (or the Jarvis extension) supplies the application key in
+ * x-shiftplanner-key. Do not inject a server-side key here: doing so would
+ * overwrite an invalid extension key and make key rotation ineffective.
+ */
 /* ------------------------------------------------ */
 
 app.use(
@@ -35,7 +39,6 @@ app.use(
         target: BACKEND_URL,
         changeOrigin: true,
         xfwd: true,
-        headers: { "x-shiftplanner-key": SHIFTPLANNER_API_KEY },
         // SSE / long-lived connections must not time out at the proxy layer.
         // proxyTimeout: 0  => no timeout waiting for backend to respond.
         // timeout: 0       => no timeout on inactive socket (SSE keepalive pings every 25s).
@@ -59,7 +62,6 @@ app.use(
         target: BACKEND_URL,
         changeOrigin: true,
         xfwd: true,
-        headers: { "x-shiftplanner-key": SHIFTPLANNER_API_KEY },
     })
 );
 

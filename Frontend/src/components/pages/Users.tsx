@@ -259,7 +259,7 @@ export default function Users() {
   const [loadError, setLoadError] = useState("");
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
-  const [editingDraft, setEditingDraft] = useState<{ firstName: string; lastName: string; } | null>(null);
+  const [editingDraft, setEditingDraft] = useState<{ firstName: string; lastName: string; email: string; } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState("");
   const [expandedUserId, setExpandedUserId] = useState<number | null>(null);
@@ -461,6 +461,7 @@ export default function Users() {
     setEditingDraft({
       firstName: user.firstName ?? "",
       lastName: user.lastName ?? "",
+      email: user.email ?? user.loginName ?? "",
     });
   }
 
@@ -481,6 +482,7 @@ export default function Users() {
       await api.patch(`/admin/users/${userId}`, {
         firstName: editingDraft.firstName.trim(),
         lastName: editingDraft.lastName.trim(),
+        email: editingDraft.email.trim(),
       });
       cancelEditing();
       await loadUsers();
@@ -627,10 +629,20 @@ export default function Users() {
                       </TableCell>
 
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${getSsoDotClass(hasSsoIdentity)}`} />
-                          <span>{user.email || "-"}</span>
-                        </div>
+                        {isEditing && editingDraft ? (
+                          <Input
+                            type="email"
+                            value={editingDraft.email}
+                            onChange={(event) => setEditingDraft({ ...editingDraft, email: event.target.value })}
+                            placeholder="name@equinix.com"
+                            aria-label={language === "de" ? "E-Mail-Adresse" : "Email address"}
+                          />
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className={`inline-flex h-2.5 w-2.5 shrink-0 rounded-full ${getSsoDotClass(hasSsoIdentity)}`} />
+                            <span>{user.email || "-"}</span>
+                          </div>
+                        )}
                       </TableCell>
 
                       <TableCell>{renderLastLogin(user.lastLogin)}</TableCell>

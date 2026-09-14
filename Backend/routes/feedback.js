@@ -12,6 +12,62 @@ import { config } from "../config/index.js";
 
 const router = express.Router();
 
+let feedbackSchemaPromise = null;
+
+async function ensureFeedbackSchema() {
+  if (!feedbackSchemaPromise) {
+    feedbackSchemaPromise = (async () => {
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS feedback_entries (
+          id SERIAL PRIMARY KEY,
+          type VARCHAR(32) NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          description TEXT NOT NULL,
+          sender_name VARCHAR(120),
+          sender_email VARCHAR(255),
+          screenshot_name VARCHAR(255),
+          screenshot_data BYTEA,
+          screenshot_mime VARCHAR(64),
+          email_sent BOOLEAN DEFAULT FALSE,
+          email_error TEXT,
+          status VARCHAR(20) NOT NULL DEFAULT 'open',
+          admin_comment TEXT,
+          status_updated_by VARCHAR(120),
+          status_updated_at TIMESTAMPTZ,
+          archived_at TIMESTAMPTZ,
+          archived_by VARCHAR(120),
+          created_at TIMESTAMPTZ DEFAULT NOW()
+        )
+      `);
+      await db.query(`
+        ALTER TABLE feedback_entries
+          ADD COLUMN IF NOT EXISTS screenshot_data BYTEA,
+          ADD COLUMN IF NOT EXISTS screenshot_mime VARCHAR(64),
+          ADD COLUMN IF NOT EXISTS status VARCHAR(20) NOT NULL DEFAULT 'open',
+          ADD COLUMN IF NOT EXISTS admin_comment TEXT,
+          ADD COLUMN IF NOT EXISTS status_updated_by VARCHAR(120),
+          ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ,
+          ADD COLUMN IF NOT EXISTS archived_by VARCHAR(120)
+      `);
+      await db.query('CREATE INDEX IF NOT EXISTS idx_feedback_entries_archived_at ON feedback_entries(archived_at)');
+    })().catch((error) => {
+      feedbackSchemaPromise = null;
+      throw error;
+    });
+  }
+  return feedbackSchemaPromise;
+}
+
+router.use(async (_req, _res, next) => {
+  try {
+    await ensureFeedbackSchema();
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
+
 function isPatrickBrode(user) {
   const normalize = (value) => String(value || '').trim().toLocaleLowerCase('de-DE').replace(/\s+/g, ' ');
   const displayName = normalize(user?.displayName);
@@ -51,15 +107,13 @@ async function getFeedbackSettings() {
 }
 
 async function saveFeedbackToDb(data) {
-  try {
-    await db.query(
-      `INSERT INTO feedback_entries (type, title, description, sender_name, sender_email, screenshot_name, screenshot_data, screenshot_mime, email_sent, email_error)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [data.type, data.title, data.description, data.senderName, data.senderEmail, data.screenshotName, data.screenshotData || null, data.screenshotMime || null, false, null]
-    );
-  } catch (err) {
-    console.error("[FEEDBACK] Failed to save feedback to DB:", err.message);
-  }
+  const { rows } = await db.query(
+    `INSERT INTO feedback_entries (type, title, description, sender_name, sender_email, screenshot_name, screenshot_data, screenshot_mime, email_sent, email_error)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, created_at AS "createdAt"`,
+    [data.type, data.title, data.description, data.senderName, data.senderEmail, data.screenshotName, data.screenshotData || null, data.screenshotMime || null, false, null]
+  );
+  return rows[0];
 }
 
 router.get(
@@ -123,6 +177,9 @@ router.post(
       if (!title || typeof title !== "string" || title.trim().length === 0) {
         return res.status(400).json({ error: "Titel ist ein Pflichtfeld" });
       }
+      if (title.trim().length > 255) {
+        return res.status(400).json({ error: "Der Titel darf höchstens 255 Zeichen lang sein." });
+      }
       if (!description || typeof description !== "string" || description.trim().length === 0) {
         return res.status(400).json({ error: "Beschreibung ist ein Pflichtfeld" });
       }
@@ -149,7 +206,7 @@ router.post(
         }
       }
 
-      await saveFeedbackToDb({
+      const entry = await saveFeedbackToDb({
         type,
         title: title.trim(),
         description: `${description.trim()}\n\nKontext:\n- Route: ${route || "-"}\n- Zeitpunkt: ${timestamp}`,
@@ -162,23 +219,12 @@ router.post(
 
       res.json({
         success: true,
+        entry,
         message: "Feedback wurde gespeichert und ist im Admin-Bereich sichtbar.",
       });
 
     } catch (err) {
       console.error("[FEEDBACK] Fehler beim Speichern:", err);
-      try {
-        await saveFeedbackToDb({
-          type: req.body?.type,
-          title: req.body?.title,
-          description: req.body?.description,
-          senderName: req.user?.email || 'unknown',
-          senderEmail: req.user?.email,
-          screenshotName: req.file?.originalname || null,
-          screenshotData: req.file?.buffer || null,
-          screenshotMime: req.file?.mimetype || null,
-        });
-      } catch { /* ignore */ }
       res.status(500).json({
         error: "Feedback konnte nicht gespeichert werden. Bitte versuchen Sie es spaeter erneut.",
       });

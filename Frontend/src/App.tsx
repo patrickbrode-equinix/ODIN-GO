@@ -17,7 +17,6 @@ const DashboardStatistik     = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => 
 const OdinLogicPage          = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/OdinLogicPage"));
 const Shiftplan              = lazy(() => import("./components/pages/Shiftplan"));
 const ShiftplanDrafts        = lazy(() => import("./components/pages/ShiftplanDrafts"));
-const WellbeingStatistics    = lazy(() => import("./components/pages/WellbeingStatistics"));
 const Weekplan               = lazy(() => import("./components/pages/Weekplan"));
 const TagesplanungPage       = lazy(() => import("./components/pages/TagesplanungPage"));
 const Handover               = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/Handover"));
@@ -149,14 +148,7 @@ export default function App() {
               }
             />
 
-            <Route
-              path="wellbeing"
-              element={
-                <PageGuard pageKey="wellbeing">
-                  <WellbeingStatistics />
-                </PageGuard>
-              }
-            />
+            <Route path="wellbeing" element={<Navigate to="/admin-settings?section=wellbeing" replace />} />
 
             <Route path="jarvis-notifications" element={<JarvisNotifications />} />
             <Route path="projects" element={<ProjectsPage />} />

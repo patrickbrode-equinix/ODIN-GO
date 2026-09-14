@@ -122,7 +122,7 @@ describe("ODIN GO user preferences", () => {
       const response = await fetch(`${server.baseUrl}/api/odin-go/preferences`, { headers: staleSessionHeaders() });
       assert.equal(response.status, 401);
       const body = await response.json();
-      assert.equal(body.code, "JARVIS_IDENTITY_REQUIRED");
+      assert.equal(body.code, "ADMIN_SESSION_EXPIRED");
     } finally {
       await server.close();
     }
@@ -135,28 +135,27 @@ describe("ODIN GO operational schedule", () => {
   beforeEach(() => { originalQuery = db.query; });
   afterEach(() => { db.query = originalQuery; });
 
-  it("loads the read-only schedule without a Jarvis identity token", async () => {
+  it("rejects schedule access without a verified identity", async () => {
     db.query = mockDatabase();
     const server = await startApp();
     try {
       const response = await fetch(`${server.baseUrl}/api/odin-go/schedule/August%202026`, { headers: applicationHeaders() });
-      assert.equal(response.status, 200);
+      assert.equal(response.status, 401);
       const body = await response.json();
-      assert.equal(body.schedule["Early One"][21], "E1");
-      assert.equal(body.schedule["Night One"][21], "N");
+      assert.equal(body.code, "JARVIS_IDENTITY_REQUIRED");
     } finally {
       await server.close();
     }
   });
 
-  it("loads the read-only schedule when old session tokens are still stored", async () => {
+  it("rejects schedule access when old session tokens are still stored", async () => {
     db.query = mockDatabase();
     const server = await startApp();
     try {
       const response = await fetch(`${server.baseUrl}/api/odin-go/schedule/August%202026`, { headers: staleSessionHeaders() });
-      assert.equal(response.status, 200);
+      assert.equal(response.status, 401);
       const body = await response.json();
-      assert.equal(body.schedule["Early One"][21], "E1");
+      assert.equal(body.code, "ADMIN_SESSION_EXPIRED");
     } finally {
       await server.close();
     }
@@ -166,7 +165,7 @@ describe("ODIN GO operational schedule", () => {
     db.query = mockDatabase();
     const server = await startApp();
     try {
-      const response = await fetch(`${server.baseUrl}/api/odin-go/overview?date=2026-08-21`, { headers: applicationHeaders() });
+      const response = await fetch(`${server.baseUrl}/api/odin-go/overview?date=2026-08-21`, { headers: authHeaders() });
       assert.equal(response.status, 200);
       const body = await response.json();
       assert.deepEqual(body.staffing, { early: 2, late: 1, night: 1 });

@@ -52,6 +52,13 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    if (isInvalidApplicationKeyError(error?.response?.status, error?.response?.data)) {
+      // A rotated VM key must invalidate an existing browser session as well.
+      // Otherwise the UI can look signed in while every API call is rejected.
+      sessionStorage.removeItem("shiftplanner_api_key");
+      sessionStorage.removeItem("shiftplanner_admin_token");
+      window.dispatchEvent(new Event("shiftplanner-admin-session-expired"));
+    }
     if (isJarvisIdentityError(error?.response?.status, error?.response?.data)) {
       sessionStorage.removeItem("shiftplanner_identity_token");
     }
@@ -65,6 +72,10 @@ api.interceptors.response.use(
 
 export function isAdminSessionError(status: unknown, data: any): boolean {
   return status === 401 && String(data?.code || "") === "ADMIN_SESSION_EXPIRED";
+}
+
+export function isInvalidApplicationKeyError(status: unknown, data: any): boolean {
+  return status === 401 && String(data?.message || "") === "Invalid local application key";
 }
 
 export function isJarvisIdentityError(status: unknown, data: any): boolean {

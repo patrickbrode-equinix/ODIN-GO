@@ -235,7 +235,7 @@ function getActiveShiftKinds(now: Date): Set<ShiftKind> {
   for (const shiftName of activeNames) {
     if (shiftName.startsWith("E")) activeKinds.add("early");
     if (shiftName.startsWith("L")) activeKinds.add("late");
-    if (shiftName === "N") activeKinds.add("night");
+    if (/^N/.test(shiftName)) activeKinds.add("night");
   }
 
   if (activeKinds.size > 0) return activeKinds;

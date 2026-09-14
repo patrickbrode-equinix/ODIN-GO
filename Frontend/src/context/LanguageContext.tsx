@@ -885,8 +885,6 @@ export type TranslationKey =
   | "sc.atLeast"
   | "sc.people"
   | "sc.noRulesDefined"
-  | "sc.preferredColleagues"
-  | "sc.noPreferredColleagues"
   | "sc.helpTitle"
   | "sc.confirmDeleteDraft"
   | "sc.tabOverview"
@@ -2136,8 +2134,6 @@ const TRANSLATIONS: Record<TranslationKey, Record<LanguageCode, string>> = {
   "sc.atLeast": { de: "mindestens", en: "at least" },
   "sc.people": { de: "Personen", en: "people" },
   "sc.noRulesDefined": { de: "Keine Regeln definiert", en: "No rules defined" },
-  "sc.preferredColleagues": { de: "Wunschkollegen", en: "Preferred colleagues" },
-  "sc.noPreferredColleagues": { de: "Keine Wunschkollegen", en: "No preferred colleagues" },
   "sc.helpTitle": { de: "Hilfe – So funktioniert der Schichtplaner", en: "Help – how the shift planner works" },
   "sc.confirmDeleteDraft": { de: "Diesen Draft endgültig löschen?", en: "Delete this draft permanently?" },
   "sc.tabOverview": { de: "Übersicht", en: "Overview" },

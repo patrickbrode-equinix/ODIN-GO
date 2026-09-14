@@ -101,16 +101,16 @@ export default function FeedbackPage() {
       body.append('description', description.trim());
       body.append('route', window.location.pathname);
       if (screenshot) body.append('screenshot', screenshot);
-      await api.post('/feedback', body, { headers: { 'Content-Type': 'multipart/form-data' } });
+      await api.post('/feedback', body);
       setTitle('');
       setDescription('');
       setScreenshot(null);
       if (screenshotInputRef.current) screenshotInputRef.current.value = '';
       setMessage({ text: language === 'de' ? 'Feedback wurde gespeichert.' : 'Feedback was saved.' });
       if (!archived) await load();
-    } catch (error) {
+    } catch (error: any) {
       console.error('CREATE FEEDBACK ERROR:', error);
-      setMessage({ text: copy.saveFailed, error: true });
+      setMessage({ text: error?.response?.data?.error || copy.saveFailed, error: true });
     } finally {
       setSaving(false);
     }

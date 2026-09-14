@@ -1,13 +1,8 @@
-import { useCallback, useState } from "react";
-import { HeartHandshake, SlidersHorizontal } from "lucide-react";
+import { SlidersHorizontal } from "lucide-react";
 import EmployeePreferences from "../settings/EmployeePreferences";
-import PreferredColleagues from "../settings/PreferredColleagues";
 import { EnterpriseCard } from "../layout/EnterpriseLayout";
 
 export default function UserPreferencesPage() {
-  const [showPreferredColleagues, setShowPreferredColleagues] = useState(true);
-  const handleColleagueVisibility = useCallback((enabled: boolean) => setShowPreferredColleagues(enabled), []);
-
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 md:p-6">
       <div>
@@ -19,16 +14,6 @@ export default function UserPreferencesPage() {
           Diese Angaben werden bei der automatischen Dienstplanung berücksichtigt.
         </p>
       </div>
-
-      {showPreferredColleagues && (
-        <EnterpriseCard className="flex flex-col gap-4" noPadding={false}>
-          <div className="flex items-center gap-2 text-sm font-semibold">
-            <HeartHandshake className="h-4 w-4 text-pink-400" />
-            Wunschkollegen
-          </div>
-          <PreferredColleagues onVisibilityResolved={handleColleagueVisibility} />
-        </EnterpriseCard>
-      )}
 
       <EnterpriseCard className="flex flex-col gap-4" noPadding={false}>
         <EmployeePreferences />

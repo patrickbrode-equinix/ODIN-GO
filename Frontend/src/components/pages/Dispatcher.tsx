@@ -35,7 +35,7 @@ function mapShiftplanCodeToFixedShift(code: string): ShiftCode {
   const c = (code || "").trim().toUpperCase();
 
   if (c === "ABW" || c === "FS") return "ABW";
-  if (c === "N") return "N";
+  if (/^N/.test(c)) return "N";
 
   // Früh / Spät
   if (EARLY_SHIFT_CODES.includes(c as (typeof EARLY_SHIFT_CODES)[number]) || c === "F") return "F";

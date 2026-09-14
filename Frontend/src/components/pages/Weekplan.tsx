@@ -38,6 +38,7 @@ import {
 } from "../ui/context-menu";
 
 import { fetchSchedule, importSchedule } from "../shiftplan/shiftplan.api";
+import { ShiftplanUploadStatus } from "../shiftplan/ShiftplanUploadStatus";
 import { formatMonthLabel } from "../../utils/dateFormat";
 import { getGermanHolidaysNationwide } from "../../utils/deHolidays";
 import { isColoEmployee, parseColoPool } from "../../utils/colo";
@@ -151,7 +152,7 @@ export default function Weekplan() {
       .then(({ data }) => {
         setColoPool(parseColoPool(data?.["shiftplan.colo_pool"]));
         setDispatcherConfig({
-          enabled: data?.["shiftplan.dispatcher_enabled"] !== "false",
+          enabled: false,
           priorities: parseColoPool(data?.["shiftplan.dispatcher_pool"]),
         });
       })
@@ -613,7 +614,7 @@ export default function Weekplan() {
           ? "early"
           : code.startsWith("L") || code.startsWith("HL")
           ? "late"
-          : code === "N"
+          : /^N/.test(code)
           ? "night"
           : code === "DBS"
           ? "dbs"
@@ -768,6 +769,7 @@ export default function Weekplan() {
                     </span>
                   ) : null}
                 </div>
+                <ShiftplanUploadStatus className="mt-1" />
               </div>
             </div>
 
@@ -1167,11 +1169,10 @@ export default function Weekplan() {
                           <span className="min-w-0 flex-1 pr-2">
                             <span className="block truncate font-medium">
                               {employee.name}{employee.own ? ` · ${de ? "Du" : "You"}` : ""}
-                              {isColoEmployee(employee.name, coloPool) ? <span className="ml-1.5 inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1 py-px text-[8px] font-black text-cyan-200">COLO</span> : null}
                               {employee.dispatcher ? <span className="ml-1.5 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1 py-px text-[8px] font-black text-pink-200">DP</span> : null}
                             </span>
-                            {(assignedRole === "projekt" || assignedRole === "colo") && roleComment ? (
-                              <span className={`mt-0.5 block truncate text-[10px] leading-tight ${assignedRole === "colo" ? "text-cyan-100/80" : "text-amber-100/80"}`} title={roleComment}>
+                            {assignedRole === "projekt" && roleComment ? (
+                              <span className="mt-0.5 block truncate text-[10px] leading-tight text-amber-100/80" title={roleComment}>
                                 {roleComment}
                               </span>
                             ) : null}
@@ -1368,7 +1369,7 @@ export default function Weekplan() {
                     const c = code.toUpperCase();
                     if (c.startsWith("E")) { shiftBg = "rgba(251,146,60,0.12)"; shiftColor = "#fb923c"; shiftBorder = "rgba(251,146,60,0.25)"; }
                     else if (c.startsWith("L")) { shiftBg = "rgba(250,204,21,0.10)"; shiftColor = "#facc15"; shiftBorder = "rgba(250,204,21,0.22)"; }
-                    else if (c === "N") { shiftBg = "rgba(56,189,248,0.12)"; shiftColor = "#38bdf8"; shiftBorder = "rgba(56,189,248,0.25)"; }
+                    else if (/^N/.test(c)) { shiftBg = "rgba(56,189,248,0.12)"; shiftColor = "#38bdf8"; shiftBorder = "rgba(56,189,248,0.25)"; }
                     else if (c === "FS") { shiftBg = "rgba(20,184,166,0.10)"; shiftColor = "#2dd4bf"; shiftBorder = "rgba(20,184,166,0.22)"; }
                     else if (c === "DBS") { shiftBg = "rgba(232,121,249,0.10)"; shiftColor = "#e879f9"; shiftBorder = "rgba(232,121,249,0.22)"; }
                     else if (c === "ABW" || c === "S" || c === "SEMINAR") { shiftBg = "rgba(168,85,247,0.10)"; shiftColor = "#a855f7"; shiftBorder = "rgba(168,85,247,0.22)"; }

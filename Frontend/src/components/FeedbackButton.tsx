@@ -63,9 +63,7 @@ export function FeedbackButton({ variant = "fixed" }: { variant?: "fixed" | "hea
         formData.append("screenshot", screenshot);
       }
 
-      const res = await api.post("/feedback", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const res = await api.post("/feedback", formData);
 
       setResult({ success: true, message: res.data?.message || "Feedback wurde gespeichert." });
       // Reset form after success

@@ -45,7 +45,7 @@ const WELLBEING_COPY: Record<"de" | "en", WellbeingCopy> = {
   en: { balance: "Work-Life Balance", subtitle: "Make workload transparent: night shifts, weekends, and long work streaks in a calm, traceable view.", month: "Month", quarter: "Quarter", year: "Year", refresh: "Refresh", employees: "Employees", withSignal: "With signal", average: "Average", nightShifts: "Night shifts", shiftDistribution: "Shift distribution", shiftDistributionHint: "All scheduled shifts in the selected period.", early: "Early shift", late: "Late shift", night: "Night shift", weekend: "Weekend", shifts: "Shifts", employeeBurden: "Burden by employee", employeeBurdenHint: "Higher values indicate more workload signals, not a performance rating.", nightShort: "Night", weekendShort: "Weekend", streak: "Streak", days: "days", points: "points", withinRange: "Within range", noMetrics: "No calculated wellbeing values are available for the selected period.", thresholds: "Thresholds", weekendDays: "Weekend days", workStreak: "Work streak", context: "Context", contextText: "These values support fair planning. They are guidance for the planning team and must not be treated as an evaluation of individual employees.", loadFailed: "Wellbeing data could not be loaded." },
 };
 
-export default function WellbeingStatistics() {
+export default function WellbeingStatistics({ embedded = false }: { embedded?: boolean }) {
   const { language } = useLanguage();
   const copy = WELLBEING_COPY[language];
   const locale = LANGUAGE_TO_LOCALE[language];
@@ -109,8 +109,8 @@ export default function WellbeingStatistics() {
     return { entries, max };
   }, [copy, summary.early, summary.late, summary.nights, summary.weekend]);
 
-  return (
-    <EnterprisePageShell className="pb-16">
+  const content = (
+    <>
       <section className="liquid-hero rounded-[30px] p-6 md:p-8">
         <div className="flex flex-wrap items-end justify-between gap-6">
           <div className="max-w-3xl">
@@ -169,6 +169,9 @@ export default function WellbeingStatistics() {
           <div className="liquid-panel rounded-[26px] p-5"><CalendarDays className="h-5 w-5 text-violet-300" /><h2 className="mt-3 font-bold">{copy.context}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{copy.contextText}</p></div>
         </aside>
       </section>
-    </EnterprisePageShell>
+    </>
   );
+
+  if (embedded) return <div className="pb-8">{content}</div>;
+  return <EnterprisePageShell className="pb-16">{content}</EnterprisePageShell>;
 }

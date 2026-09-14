@@ -13,6 +13,7 @@ import {
   ThumbsUp,
 } from "lucide-react";
 import { api } from "../../api/api";
+import { getLanguageLocale, useLanguage } from "../../context/LanguageContext";
 import { EnterprisePageShell } from "../layout/EnterpriseLayout";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -35,8 +36,15 @@ type DraftSummary = {
   needs_changes_votes: number;
 };
 type DraftShift = { employee_name: string; day: number; shift_code: string };
-type ColoAssignment = { employee_name: string; date: string; comment: string; task_key: string };
-type Draft = DraftSummary & { shifts_json: DraftShift[]; config_snapshot?: { coloAssignments?: ColoAssignment[]; coloPlanningConfig?: { employeePool?: string[] }; dispatcherConfig?: { enabled?: boolean; priorities?: string[] } } };
+type DraftFairness = { targetHours?: number; actualHours?: number; deltaHours?: number };
+type Draft = DraftSummary & {
+  shifts_json: DraftShift[];
+  fairness?: Record<string, DraftFairness>;
+  config_snapshot?: {
+    dispatcherConfig?: { enabled?: boolean; priorities?: string[] };
+    planningConfig?: { monthly_target_hours?: number };
+  };
+};
 type DraftFeedback = {
   id: number;
   employee_name: string | null;
@@ -64,7 +72,10 @@ function statusLabel(value: string) {
 }
 
 const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = false }: { draft: Draft; compact?: boolean }) {
-  const { employees, days, shiftsByEmployee, coloByEmployee, coloPool, dispatcherPool } = useMemo(() => {
+  const { language } = useLanguage();
+  const locale = getLanguageLocale(language);
+  const isGerman = language === "de";
+  const { employees, days, year, month, shiftsByEmployee, dispatcherPool } = useMemo(() => {
     const employeeNames = [...new Set((draft.shifts_json || []).map((entry) => entry.employee_name))]
       .sort((left, right) => left.localeCompare(right, "de"));
     const [year, month] = draft.month.split("-").map(Number);
@@ -74,21 +85,8 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
       if (!schedule.has(shift.employee_name)) schedule.set(shift.employee_name, new Map());
       schedule.get(shift.employee_name)?.set(Number(shift.day), shift.shift_code);
     }
-    const coloSchedule = new Map<string, Map<number, ColoAssignment>>();
-    for (const assignment of draft.config_snapshot?.coloAssignments || []) {
-      const day = Number.parseInt(String(assignment.date || '').slice(8, 10), 10);
-      if (!Number.isInteger(day)) continue;
-      if (!coloSchedule.has(assignment.employee_name)) coloSchedule.set(assignment.employee_name, new Map());
-      coloSchedule.get(assignment.employee_name)?.set(day, assignment);
-    }
-    const configuredPool = draft.config_snapshot?.coloPlanningConfig?.employeePool || [];
-    // Older drafts may not have stored the pool; their Colo assignments still identify the selected people.
-    const coloPool = [...new Set([
-      ...configuredPool,
-      ...(draft.config_snapshot?.coloAssignments || []).map((assignment) => assignment.employee_name),
-    ])];
     const dispatcherPool = draft.config_snapshot?.dispatcherConfig?.priorities || [];
-    return { employees: employeeNames, days: monthDays, shiftsByEmployee: schedule, coloByEmployee: coloSchedule, coloPool, dispatcherPool };
+    return { employees: employeeNames, days: monthDays, year, month, shiftsByEmployee: schedule, dispatcherPool };
   }, [draft]);
 
   return (
@@ -96,33 +94,56 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
       <table className={`min-w-max border-collapse ${compact ? "text-[10px]" : "text-xs"}`}>
         <thead>
           <tr>
-            <th className={`${compact ? "min-w-40 p-2" : "min-w-48 p-3"} sticky left-0 z-20 bg-[#0a1424]/95 text-left`}>Mitarbeiter</th>
-            {days.map((value) => <th key={value} className={`${compact ? "min-w-8 p-1.5" : "min-w-11 p-2"} border-l border-white/6 text-center text-muted-foreground`}>{value}</th>)}
+            <th className={`${compact ? "min-w-40 p-2" : "min-w-48 p-3"} sticky left-0 z-20 bg-[#0a1424]/95 text-left`}>{isGerman ? "Mitarbeiter" : "Employee"}</th>
+            {days.map((value) => {
+              const date = new Date(year, month - 1, value);
+              const weekend = date.getDay() === 0 || date.getDay() === 6;
+              const weekday = new Intl.DateTimeFormat(locale, { weekday: "short" }).format(date).replace(/\.$/, "");
+              return (
+                <th
+                  key={value}
+                  className={`${compact ? "min-w-8 p-1.5" : "min-w-11 p-2"} border-l border-white/6 text-center ${weekend ? "bg-amber-500/5 text-amber-300/90" : "text-muted-foreground"}`}
+                >
+                  <span className="block text-[9px] font-bold uppercase tracking-wide">{weekday}</span>
+                  <span className="mt-0.5 block text-[11px] font-black text-foreground">{value}</span>
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
-          {employees.map((employee) => (
+          {employees.map((employee) => {
+            const hours = draft.fairness?.[employee];
+            const targetCandidate = Number(hours?.targetHours ?? draft.config_snapshot?.planningConfig?.monthly_target_hours ?? 174);
+            const actualCandidate = Number(hours?.actualHours ?? 0);
+            const targetHours = Number.isFinite(targetCandidate) ? targetCandidate : 174;
+            const actualHours = Number.isFinite(actualCandidate) ? actualCandidate : 0;
+            const deltaCandidate = Number(hours?.deltaHours ?? actualHours - targetHours);
+            const deltaHours = Number.isFinite(deltaCandidate) ? deltaCandidate : actualHours - targetHours;
+            return (
             <tr key={employee} className="border-t border-white/6">
               <th className={`${compact ? "p-2" : "p-3"} sticky left-0 z-10 bg-[#081321]/95 text-left font-semibold text-foreground`}>
-                <span>{employee}</span>
-                {isColoEmployee(employee, coloPool) ? <span className="ml-2 inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1.5 py-px text-[9px] font-black text-cyan-200">COLO</span> : null}
-                {dispatcherPool.length > 0 && isColoEmployee(employee, [dispatcherPool[0]]) && Array.from(shiftsByEmployee.get(employee)?.values() || []).some((code) => String(code).startsWith("E")) ? <span className="ml-2 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1.5 py-px text-[9px] font-black text-pink-200">DP</span> : null}
+                <div>{employee}{dispatcherPool.length > 0 && isColoEmployee(employee, [dispatcherPool[0]]) && Array.from(shiftsByEmployee.get(employee)?.values() || []).some((code) => String(code).startsWith("E")) ? <span className="ml-2 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1.5 py-px text-[9px] font-black text-pink-200">DP</span> : null}</div>
+                <div className="mt-1 flex flex-wrap gap-1 text-[9px] font-bold uppercase tracking-wide">
+                  <span className="rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-sky-200">{isGerman ? "Soll" : "Target"} {targetHours.toFixed(1)}h</span>
+                  <span className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 text-slate-200">{isGerman ? "Ist" : "Actual"} {actualHours.toFixed(1)}h</span>
+                  <span className={`rounded border px-1.5 py-0.5 ${deltaHours >= 0 ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-rose-400/30 bg-rose-500/10 text-rose-200"}`}>{deltaHours >= 0 ? "+" : ""}{deltaHours.toFixed(1)}h</span>
+                </div>
               </th>
               {days.map((value) => {
                 const code = shiftsByEmployee.get(employee)?.get(value) || "";
-                const coloAssignment = coloByEmployee.get(employee)?.get(value);
                 const kind = getShiftColorKind(code);
                 return (
                   <td key={value} className="border-l border-white/6 p-1 text-center">
-                    <div className="flex flex-col items-center gap-1">
+                    <div className="flex flex-col items-center">
                       {code ? <span style={getShiftColorStyle(code)} className={`shift-badge shift-badge-${kind} inline-flex ${compact ? "min-h-5 min-w-6 px-1" : "min-h-7 min-w-8 px-1.5"} items-center justify-center rounded-md border font-bold`}>{code}</span> : null}
-                      {coloAssignment ? <span title={coloAssignment.comment} className="inline-flex rounded border border-cyan-400/40 bg-cyan-500/15 px-1 py-px text-[8px] font-black text-cyan-100">CO</span> : null}
                     </div>
                   </td>
                 );
               })}
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

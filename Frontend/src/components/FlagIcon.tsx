@@ -1,11 +1,14 @@
 import type { LanguageCode } from "../context/LanguageContext";
 
 const DE_FLAG = (
-  <svg viewBox="0 0 640 480" preserveAspectRatio="none" className="h-4 w-6 rounded-[2px] bg-white shadow-sm ring-1 ring-slate-300/80">
-    <rect width="640" height="160" y="0" fill="#000" />
-    <rect width="640" height="160" y="160" fill="#D00" />
-    <rect width="640" height="160" y="320" fill="#FFCE00" />
-  </svg>
+  <span
+    aria-label="Deutschland"
+    className="inline-flex h-4 w-6 flex-col overflow-hidden rounded-[2px] shadow-sm ring-1 ring-slate-300/80"
+  >
+    <span className="h-1/3 w-full bg-[#000000]" />
+    <span className="h-1/3 w-full bg-[#DD0000]" />
+    <span className="h-1/3 w-full bg-[#FFCE00]" />
+  </span>
 );
 
 const US_FLAG = (

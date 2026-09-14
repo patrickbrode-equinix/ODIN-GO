@@ -58,6 +58,7 @@ import cocRoutes from "./routes/coc.js";
 import jarvisNotificationsRoutes from "./routes/jarvisNotifications.js";
 import odinGoRoutes from "./routes/odinGo.js";
 import shiftHandoverRoutes from "./routes/shiftHandovers.js";
+import teamHandoverRoutes from "./routes/teamHandovers.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -151,6 +152,7 @@ app.use("/api/kiosk", kioskRoutes);
 app.use("/api/jarvis-notifications", jarvisNotificationsRoutes);
 app.use("/api/odin-go", odinGoRoutes);
 app.use("/api/shift-handovers", shiftHandoverRoutes);
+app.use("/api/team-handovers", teamHandoverRoutes);
 
 // 6. Dashboard info + toggles
 app.use("/api/dashboard", dashboardRoutes);

@@ -96,7 +96,6 @@ services:
       BACKEND_URL: http://backend:8001
       VITE_API_BASE_URL: /api
       VITE_APP_MODE: shiftplanner
-      SHIFTPLANNER_API_KEY: ${SHIFTPLANNER_API_KEY:?SHIFTPLANNER_API_KEY is required}
     networks:
       - shiftplanner-net
     depends_on:

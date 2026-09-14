@@ -3,7 +3,7 @@
 /* ------------------------------------------------ */
 
 import express from "express";
-import { requireAuth } from "../middleware/authMiddleware.js";
+import { requireApplicationKey } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
@@ -11,6 +11,10 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const HISTORY_CACHE_TTL_MS = 30 * 60 * 1000;
 const QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/EQIX?interval=1d&range=5d&includePrePost=false";
 const HISTORY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/EQIX?interval=1wk&range=1y&includePrePost=false&events=div%2Csplits";
+const REQUEST_HEADERS = {
+  Accept: "application/json, text/plain, */*",
+  "User-Agent": "Mozilla/5.0 (compatible; ODIN-GO/1.0; +https://github.com/patrickbrode-equinix/ODIN-GO)",
+};
 
 let cachedEqixQuote = null;
 let cachedEqixHistory = null;
@@ -100,7 +104,7 @@ async function fetchMarketJson(url, timeoutMs) {
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
-      headers: { Accept: "application/json", "User-Agent": "ODIN/1.0" },
+      headers: REQUEST_HEADERS,
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`Market request failed with status ${response.status}`);
@@ -114,7 +118,7 @@ async function fetchEqixQuote() {
   return parseEqixQuote(await fetchMarketJson(QUOTE_URL, 5000));
 }
 
-router.get("/eqix/history", requireAuth, async (_req, res) => {
+router.get("/eqix/history", requireApplicationKey, async (_req, res) => {
   if (cachedEqixHistory && Date.now() - cachedEqixHistory.fetchedAt < HISTORY_CACHE_TTL_MS) {
     return res.json({ ...cachedEqixHistory.data, cached: true, stale: false });
   }
@@ -145,7 +149,7 @@ router.get("/eqix/history", requireAuth, async (_req, res) => {
   }
 });
 
-router.get("/eqix", requireAuth, async (_req, res) => {
+router.get("/eqix", requireApplicationKey, async (_req, res) => {
   if (cachedEqixQuote && Date.now() - cachedEqixQuote.fetchedAt < CACHE_TTL_MS) {
     return res.json({
       ...cachedEqixQuote.data,

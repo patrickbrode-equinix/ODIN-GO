@@ -38,7 +38,7 @@ function getShiftAccentColor(code: string): string {
   const upper = code.toUpperCase();
   if (upper.startsWith("E")) return "orange";
   if (upper.startsWith("L")) return "amber";
-  if (upper === "N") return "sky";
+  if (/^N/.test(upper)) return "sky";
   if (upper === "DBS") return "violet";
   return "slate";
 }

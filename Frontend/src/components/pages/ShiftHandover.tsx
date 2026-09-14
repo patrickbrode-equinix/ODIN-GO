@@ -9,9 +9,11 @@ import {
   History,
   RefreshCw,
   Save,
+  Pencil,
   Ticket,
   Trash2,
   UserRound,
+  X,
 } from "lucide-react";
 import { api } from "../../api/api";
 import { useAuth } from "../../context/AuthContext";
@@ -19,6 +21,7 @@ import { LANGUAGE_TO_LOCALE, useLanguage } from "../../context/LanguageContext";
 
 type Direction = "early_to_late" | "late_to_night" | "night_to_early";
 type Category = "general_information" | "incidents" | "cross_connect" | "trouble_ticket" | "smart_hand";
+type HandoverStatus = "open" | "closed";
 
 type ShiftHandoverEntry = {
   id: number;
@@ -28,8 +31,11 @@ type ShiftHandoverEntry = {
   ticketNumber: string;
   customerName: string;
   notes: string;
+  status: HandoverStatus;
   createdByName: string;
   createdAt: string;
+  updatedByName?: string;
+  updatedAt?: string | null;
 };
 
 const DIRECTION_LABELS: Record<"de" | "en", Record<Direction, string>> = {
@@ -60,11 +66,25 @@ function nowForInput() {
 }
 
 function categoryStyle(category: Category) {
-  if (category === "incidents") return "border-red-500/35 bg-red-500/10 text-red-200";
-  if (category === "cross_connect") return "border-cyan-500/35 bg-cyan-500/10 text-cyan-200";
-  if (category === "trouble_ticket") return "border-amber-500/35 bg-amber-500/10 text-amber-200";
-  if (category === "smart_hand") return "border-violet-500/35 bg-violet-500/10 text-violet-200";
+  if (category === "incidents") return "border-violet-500/45 bg-violet-500/10 text-violet-200";
+  if (category === "cross_connect") return "border-yellow-400/45 bg-yellow-400/10 text-yellow-100";
+  if (category === "trouble_ticket") return "border-red-500/45 bg-red-500/10 text-red-200";
+  if (category === "smart_hand") return "border-emerald-500/45 bg-emerald-500/10 text-emerald-200";
   return "border-slate-600 bg-slate-800 text-slate-200";
+}
+
+function categoryCardStyle(category: Category) {
+  if (category === "incidents") return "border-violet-500/70 bg-violet-500/[0.035]";
+  if (category === "cross_connect") return "border-yellow-400/70 bg-yellow-400/[0.035]";
+  if (category === "trouble_ticket") return "border-red-500/70 bg-red-500/[0.035]";
+  if (category === "smart_hand") return "border-emerald-500/70 bg-emerald-500/[0.035]";
+  return "border-slate-500/65 bg-slate-950";
+}
+
+function localDateKey(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function creationDay(entry: ShiftHandoverEntry) {
@@ -89,14 +109,20 @@ export default function ShiftHandover() {
   const locale = LANGUAGE_TO_LOCALE[language];
   const directions = DIRECTION_LABELS[language];
   const categories = CATEGORY_LABELS[language];
+  const editorCopy = language === "de"
+    ? { edit: "Bearbeiten", cancelEdit: "Bearbeitung abbrechen", editing: "Übergabe bearbeiten", update: "Änderungen speichern", updateSuccess: "Die Schichtübergabe wurde aktualisiert.", updateFailed: "Die Schichtübergabe konnte nicht aktualisiert werden.", dateFilter: "Nach Übergabedatum suchen", clearDate: "Datum zurücksetzen", updated: "Aktualisiert" }
+    : { edit: "Edit", cancelEdit: "Cancel editing", editing: "Edit handover", update: "Save changes", updateSuccess: "The shift handover was updated.", updateFailed: "The shift handover could not be updated.", dateFilter: "Search by handover date", clearDate: "Clear date", updated: "Updated" };
   const [handoverAt, setHandoverAt] = useState(nowForInput);
   const [direction, setDirection] = useState<Direction>("early_to_late");
   const [category, setCategory] = useState<Category>("general_information");
   const [ticketNumber, setTicketNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [notes, setNotes] = useState("");
+  const [status, setStatus] = useState<HandoverStatus>("open");
   const [entries, setEntries] = useState<ShiftHandoverEntry[]>([]);
   const [filter, setFilter] = useState<"all" | Category>("all");
+  const [dateFilter, setDateFilter] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -122,10 +148,10 @@ export default function ShiftHandover() {
     void loadEntries();
   }, [loadEntries]);
 
-  const visibleEntries = useMemo(
-    () => filter === "all" ? entries : entries.filter((entry) => entry.category === filter),
-    [entries, filter],
-  );
+  const visibleEntries = useMemo(() => entries.filter((entry) => {
+    if (filter !== "all" && entry.category !== filter) return false;
+    return !dateFilter || localDateKey(entry.handoverAt) === dateFilter;
+  }), [dateFilter, entries, filter]);
 
   const entriesByCreationDay = useMemo(() => {
     const groups = new Map<string, ShiftHandoverEntry[]>();
@@ -142,25 +168,59 @@ export default function ShiftHandover() {
     setError("");
     setSuccess("");
     try {
-      const { data } = await api.post("/shift-handovers", {
+      const payload = {
         handoverAt: new Date(handoverAt).toISOString(),
         direction,
         category,
         ticketNumber,
         customerName,
         notes,
-      });
-      if (data?.handover) setEntries((current) => [data.handover, ...current]);
+        status,
+      };
+      if (editingId) {
+        const { data } = await api.put(`/shift-handovers/${editingId}`, payload);
+        if (data?.handover) setEntries((current) => current.map((entry) => entry.id === editingId ? data.handover : entry));
+        setSuccess(editorCopy.updateSuccess);
+      } else {
+        const { data } = await api.post("/shift-handovers", payload);
+        if (data?.handover) setEntries((current) => [data.handover, ...current]);
+        setSuccess(copy.saveSuccess);
+      }
       setHandoverAt(nowForInput());
       setTicketNumber("");
       setCustomerName("");
       setNotes("");
-      setSuccess(copy.saveSuccess);
+      setStatus("open");
+      setEditingId(null);
     } catch (requestError: any) {
-      setError(copy.saveFailed);
+      setError(editingId ? editorCopy.updateFailed : copy.saveFailed);
     } finally {
       setSaving(false);
     }
+  };
+
+  const editEntry = (entry: ShiftHandoverEntry) => {
+    const local = new Date(entry.handoverAt);
+    setHandoverAt(Number.isNaN(local.getTime()) ? nowForInput() : new Date(local.getTime() - local.getTimezoneOffset() * 60_000).toISOString().slice(0, 16));
+    setDirection(entry.direction);
+    setCategory(entry.category);
+    setTicketNumber(entry.ticketNumber || "");
+    setCustomerName(entry.customerName || "");
+    setNotes(entry.notes || "");
+    setStatus(entry.status || "open");
+    setEditingId(entry.id);
+    setError("");
+    setSuccess("");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setHandoverAt(nowForInput());
+    setTicketNumber("");
+    setCustomerName("");
+    setNotes("");
+    setStatus("open");
   };
 
   const deleteEntry = async (entry: ShiftHandoverEntry) => {
@@ -199,7 +259,7 @@ export default function ShiftHandover() {
         <div className="mb-5 flex items-center gap-2 border-b border-slate-700 pb-4">
           <ClipboardCheck className="h-5 w-5 text-blue-300" />
           <div>
-            <h2 className="font-semibold">{copy.newEntry}</h2>
+            <h2 className="font-semibold">{editingId ? editorCopy.editing : copy.newEntry}</h2>
             <p className="text-xs text-slate-500">{copy.creatorHint}</p>
           </div>
         </div>
@@ -244,13 +304,22 @@ export default function ShiftHandover() {
         ) : null}
 
         <label className="mt-4 block space-y-1.5 text-xs font-semibold text-slate-300">
+          {language === "de" ? "Status" : "Status"}
+          <select value={status} onChange={(event) => setStatus(event.target.value as HandoverStatus)} className="block w-full rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-sm text-slate-100">
+            <option value="open">{language === "de" ? "Offen" : "Open"}</option>
+            <option value="closed">{language === "de" ? "Geschlossen" : "Closed"}</option>
+          </select>
+        </label>
+
+        <label className="mt-4 block space-y-1.5 text-xs font-semibold text-slate-300">
           <span className="flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" />{isTicketCategory ? copy.ticketNotes : copy.generalNotes}</span>
           <textarea required value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={8000} placeholder={isTicketCategory ? copy.ticketNotesPlaceholder : copy.generalNotesPlaceholder} className="min-h-32 w-full resize-y rounded-lg border border-slate-600 bg-slate-950 px-3 py-2.5 text-sm leading-6 text-slate-100" />
         </label>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex justify-end gap-2">
+          {editingId ? <button type="button" onClick={cancelEdit} className="inline-flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-200 hover:bg-slate-700"><X className="h-4 w-4" />{editorCopy.cancelEdit}</button> : null}
           <button disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-wait disabled:opacity-60">
-            <Save className="h-4 w-4" />{saving ? copy.saving : copy.save}
+            <Save className="h-4 w-4" />{saving ? copy.saving : editingId ? editorCopy.update : copy.save}
           </button>
         </div>
       </form>
@@ -266,6 +335,8 @@ export default function ShiftHandover() {
               <option value="all">{copy.allCategories}</option>
               {Object.entries(categories).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
+            <input type="date" aria-label={editorCopy.dateFilter} value={dateFilter} onChange={(event) => setDateFilter(event.target.value)} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-xs text-slate-200 [color-scheme:dark]" />
+            {dateFilter ? <button type="button" onClick={() => setDateFilter("")} className="rounded-lg border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title={editorCopy.clearDate}><X className="h-4 w-4" /></button> : null}
             <button type="button" onClick={() => void loadEntries()} className="rounded-lg border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title={copy.refresh}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
           </div>
         </div>
@@ -279,14 +350,18 @@ export default function ShiftHandover() {
               </div>
               <div className="space-y-3">
                 {dayEntries.map((entry) => (
-            <article key={entry.id} className="rounded-lg border border-slate-700 bg-slate-950 p-4">
+            <article key={entry.id} className={`rounded-lg border-2 p-4 ${categoryCardStyle(entry.category)}`}>
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-xs font-bold text-blue-200">{directions[entry.direction]}</span>
                   <span className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${categoryStyle(entry.category)}`}>{categories[entry.category]}</span>
+                  <span className={`rounded-md px-2.5 py-1 text-xs font-semibold ${entry.status === "closed" ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"}`}>{entry.status === "closed" ? (language === "de" ? "Geschlossen" : "Closed") : (language === "de" ? "Offen" : "Open")}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <time className="text-xs tabular-nums text-slate-400">{new Date(entry.handoverAt).toLocaleString(locale)}</time>
+                  <button type="button" onClick={() => editEntry(entry)} className="inline-flex items-center gap-1.5 rounded-md border border-blue-500/40 bg-blue-500/10 px-2.5 py-1.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/20" title={editorCopy.edit}>
+                    <Pencil className="h-3.5 w-3.5" />{editorCopy.edit}
+                  </button>
                   <button type="button" onClick={() => void deleteEntry(entry)} disabled={deletingId === entry.id} className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-2.5 py-1.5 text-xs font-semibold text-red-200 hover:bg-red-500/20 disabled:cursor-wait disabled:opacity-60" title={copy.deleteTitle}>
                     <Trash2 className="h-3.5 w-3.5" />{deletingId === entry.id ? copy.deleting : copy.delete}
                   </button>
@@ -304,6 +379,7 @@ export default function ShiftHandover() {
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3 text-[11px] text-slate-500">
                 <span className="flex items-center gap-1.5"><UserRound className="h-3.5 w-3.5" />{copy.createdBy} {entry.createdByName}</span>
                 <span>{copy.savedAt} {new Date(entry.createdAt).toLocaleString(locale)}</span>
+                {entry.updatedAt ? <span>{editorCopy.updated} {new Date(entry.updatedAt).toLocaleString(locale)}{entry.updatedByName ? ` · ${entry.updatedByName}` : ""}</span> : null}
               </div>
             </article>
                 ))}

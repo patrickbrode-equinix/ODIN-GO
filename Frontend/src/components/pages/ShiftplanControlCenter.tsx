@@ -1343,7 +1343,7 @@ function ExplanationsView({ explanations }: { explanations: Record<string, any> 
   // Categorize a reason string
   const categorizeReason = (reason: string): 'positive' | 'negative' | 'neutral' | 'info' => {
     if (/Regelverstoß|verboten|Limit erreicht|nicht im.*Pool|Feste Schichtvorgabe: nur|fachlich besser|unerwünscht|gesperrt|vermeid|Über Sollzeit|Mehr Stunden/i.test(reason)) return 'negative';
-    if (/bevorzugt|Wunschkollege|Fairness: Weniger|Sollzeit offen|Skill-Match|Pool \(|Schichtvorgabe erfüllt/i.test(reason)) return 'positive';
+    if (/bevorzugt|Fairness: Weniger|Sollzeit offen|Skill-Match|Pool \(|Schichtvorgabe erfüllt/i.test(reason)) return 'positive';
     if (/Planungsbewertung|Rang \d/i.test(reason)) return 'info';
     return 'neutral';
   };
@@ -1645,15 +1645,6 @@ function PlanningBasisView({ basis, loading, onReload, manualOnly = false }: { b
           </div>
         </div>
 
-        <div className="rounded-lg border border-border/20 p-4">
-          <h4 className="text-xs font-bold text-foreground mb-2">{t('sc.preferredColleagues')} ({basis.preferredColleagues?.length || 0})</h4>
-          <div className="text-xs text-muted-foreground max-h-32 overflow-y-auto space-y-0.5">
-            {(basis.preferredColleagues || []).map((p: any, i: number) => (
-              <div key={i}>{p.requester_name} → {p.preferred_employee_name}</div>
-            ))}
-            {(basis.preferredColleagues || []).length === 0 && <div>{t('sc.noPreferredColleagues')}</div>}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -1673,7 +1664,7 @@ function ShiftplanHelp() {
     },
     {
       title: 'Einen Draft generieren',
-      content: 'Wähle oben rechts den gewünschten Monat aus und klicke auf „Draft generieren". Das System berücksichtigt automatisch: verfügbare Mitarbeiter, gemeldete Abwesenheiten, dauerhafte Ausschlüsse, Qualifikationen (SmartHands/TT/CC), Fairness-Metriken aus Vormonaten und Wunschkollegen.',
+      content: 'Wähle oben rechts den gewünschten Monat aus und klicke auf „Draft generieren". Das System berücksichtigt automatisch: verfügbare Mitarbeiter, gemeldete Abwesenheiten, dauerhafte Ausschlüsse, Qualifikationen (SmartHands/TT/CC) und Fairness-Metriken aus Vormonaten.',
     },
     {
       title: 'Mitarbeiter auswählen & ausschließen',
@@ -1701,7 +1692,7 @@ function ShiftplanHelp() {
     },
     {
       title: 'Planungsbasis einsehen',
-      content: 'Im Tab „Planungsbasis" siehst du alle Daten, die bei der Generierung verwendet werden: Mitarbeiterliste, Abwesenheiten, Ausschlüsse, Qualifikationen, Mindestbesetzung und Wunschkollegen. So kannst du vor der Generierung prüfen, ob alle Daten aktuell sind.',
+      content: 'Im Tab „Planungsbasis" siehst du alle Daten, die bei der Generierung verwendet werden: Mitarbeiterliste, Abwesenheiten, Ausschlüsse, Qualifikationen und Mindestbesetzung. So kannst du vor der Generierung prüfen, ob alle Daten aktuell sind.',
     },
     {
       title: 'Tipps für die tägliche Nutzung',
@@ -1714,7 +1705,7 @@ function ShiftplanHelp() {
     },
     {
       title: 'Generate a draft',
-      content: 'Select the target month at the top right and click "Generate draft". The system automatically considers available employees, reported absences, permanent exclusions, qualifications (SmartHands/TT/CC), fairness metrics from previous months, and preferred colleagues.',
+      content: 'Select the target month at the top right and click "Generate draft". The system automatically considers available employees, reported absences, permanent exclusions, qualifications (SmartHands/TT/CC), and fairness metrics from previous months.',
     },
     {
       title: 'Select and exclude employees',
@@ -1742,7 +1733,7 @@ function ShiftplanHelp() {
     },
     {
       title: 'Inspect the planning basis',
-      content: 'In the "Planning basis" tab you can inspect all data used during generation: employee list, absences, exclusions, qualifications, minimum staffing, and preferred colleagues. This lets you validate the input before generating.',
+      content: 'In the "Planning basis" tab you can inspect all data used during generation: employee list, absences, exclusions, qualifications, and minimum staffing. This lets you validate the input before generating.',
     },
     {
       title: 'Daily usage tips',

@@ -8,20 +8,6 @@ import { broadcast } from "./sse.js";
 
 router.use(requireAuth); // All /api/dashboard/* routes require a valid JWT
 
-// Lightweight user-facing feature configuration. Unlike the admin settings
-// endpoint this exposes only the preference flags employees need for their UI.
-router.get("/preference-config", async (_req, res) => {
-    try {
-        const { rows } = await query("SELECT value FROM app_settings WHERE key = 'shiftplan.colleague_preferences_enabled'");
-        const value = rows[0]?.value;
-        const enabled = value === undefined || !['false', '0', 'off'].includes(String(value).trim().toLowerCase());
-        res.json({ colleaguePreferencesEnabled: enabled });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ colleaguePreferencesEnabled: true });
-    }
-});
-
 /* ------------------------------------------------ */
 /* DASHBOARD INFO                                   */
 /* ------------------------------------------------ */
