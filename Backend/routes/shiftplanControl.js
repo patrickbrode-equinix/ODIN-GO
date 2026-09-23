@@ -79,6 +79,35 @@ function dayOfWeek(year, month, day) {
   return new Date(year, month - 1, day).getDay(); // 0=Sun, 6=Sat
 }
 
+function getAuthenticatedUserId(req) {
+  const userId = Number.parseInt(String(req.user?.id ?? ''), 10);
+  return Number.isInteger(userId) && userId > 0 ? userId : null;
+}
+
+async function requireOwnedDraft(req, res, next) {
+  try {
+    const draftId = Number.parseInt(req.params.id ?? req.params.draftId, 10);
+    const userId = getAuthenticatedUserId(req);
+    if (!Number.isInteger(draftId) || draftId <= 0) {
+      return res.status(400).json({ ok: false, error: 'Ungültige Draft-ID' });
+    }
+    if (!userId) {
+      return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
+    }
+
+    const result = await pool.query(
+      'SELECT 1 FROM shiftplan_drafts WHERE id = $1 AND created_by_user_id = $2',
+      [draftId, userId],
+    );
+    if (!result.rowCount) {
+      return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
+    }
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
 function easterSunday(year) {
   const a = year % 19;
   const b = Math.floor(year / 100);
@@ -1096,16 +1125,26 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empForcedNextShiftCode[employee] = carried.forcedNextShiftCode || null;
   }
 
+  // pg returns DATE columns as local-midnight Date objects; compare calendar keys to avoid timezone drift.
+  const toAbsenceDateKey = (value) => {
+    if (value instanceof Date) {
+      return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+    }
+    return String(value || '').slice(0, 10);
+  };
+  const absenceCoversDate = (absence, dateStr) => {
+    const dateKey = String(dateStr || '').slice(0, 10);
+    return dateKey >= toAbsenceDateKey(absence.start_date) && dateKey <= toAbsenceDateKey(absence.end_date);
+  };
+
   const isEmployeeAbsentOnDate = (employeeName, dateStr) => {
     const absences = absenceMap.get(employeeName) || [];
-    const currentDate = new Date(dateStr);
-    return absences.some((absence) => currentDate >= new Date(absence.start_date) && currentDate <= new Date(absence.end_date));
+    return absences.some((absence) => absenceCoversDate(absence, dateStr));
   };
 
   const getEmployeeAbsenceOnDate = (employeeName, dateStr) => {
     const absences = absenceMap.get(employeeName) || [];
-    const currentDate = new Date(dateStr);
-    return absences.find((absence) => currentDate >= new Date(absence.start_date) && currentDate <= new Date(absence.end_date)) || null;
+    return absences.find((absence) => absenceCoversDate(absence, dateStr)) || null;
   };
 
   const isEmployeeBlockedByPreferenceOnDay = (employeeName, dow) => {
@@ -2011,12 +2050,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         for (let previous = day - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) adjacentWorkdays++;
         for (let next = day + 1; next <= numDays && empDayAssignment[employee][next]; next++) adjacentWorkdays++;
         const exceedsWorkdayLimit = adjacentWorkdays + 1 > Math.max(rotation.max_consecutive_workdays || 6, 5);
+        if (exceedsWorkdayLimit) continue;
         const sameCodeNeighbor = empDayAssignment[employee][day - 1] === catchupDefinition.code
           || empDayAssignment[employee][day + 1] === catchupDefinition.code;
         const sameTypeNeighbor = getAssignedShiftType(employee, day - 1) === normalizePlanningShiftTypeKey(catchupDefinition.shift_type)
           || getAssignedShiftType(employee, day + 1) === normalizePlanningShiftTypeKey(catchupDefinition.shift_type);
         const recoveryEntry = explanations[`${employee}_${day}`]?.reasons?.some((reason) => String(reason).includes('Erholung'));
-        availableDays.push({ day, score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) - (recoveryEntry ? 50 : 0) - (exceedsWorkdayLimit ? 1000 : 0) });
+        availableDays.push({ day, score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) - (recoveryEntry ? 50 : 0) });
       }
 
       if (availableDays.length === 0) break;
@@ -2191,7 +2231,6 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (isRecoveryProtectedDay(employee, day)) continue;
           if (!applicableDays.has(dow)) continue;
           if (wouldViolateAdjacentTransition(employee, day, definition)) continue;
-          if (!keepsEmployeeShiftCohesion(employee, day, definition)) continue;
           if (!hasDefinitionCapacityForEmployee(employee, day, definition)) continue;
 
           const workedDays = Object.keys(empDayAssignment[employee])
@@ -2624,9 +2663,13 @@ router.get('/drafts', async (req, res) => {
                       (SELECT COUNT(*)::int FROM shiftplan_draft_feedback f WHERE f.draft_id = d.id AND f.status = 'open') AS open_feedback_count,
                       (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'approve') AS approve_votes,
                       (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'needs_changes') AS needs_changes_votes
-                 FROM shiftplan_drafts d`;
-    const params = [];
-    if (month) { sql += ' WHERE d.month = $1'; params.push(month); }
+                 FROM shiftplan_drafts d
+                WHERE d.created_by_user_id = $1`;
+    const params = [getAuthenticatedUserId(req)];
+    if (month) {
+      params.push(month);
+      sql += ` AND d.month = $${params.length}`;
+    }
     sql += ` ORDER BY d.created_at DESC
              LIMIT 50`;
     const { rows } = await pool.query(sql, params);
@@ -2649,8 +2692,9 @@ router.get('/drafts/year/:year', async (req, res) => {
               (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'needs_changes') AS needs_changes_votes
          FROM shiftplan_drafts d
         WHERE d.month LIKE $1
+          AND d.created_by_user_id = $2
         ORDER BY d.month, d.version DESC`,
-      [`${year}-%`]
+      [`${year}-%`, getAuthenticatedUserId(req)]
     );
     res.json({ ok: true, year, generated: rows, drafts: rows, errors: [] });
   } catch (err) {
@@ -2671,8 +2715,9 @@ router.get('/drafts/year/:year/full', async (req, res) => {
               (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'needs_changes') AS needs_changes_votes
          FROM shiftplan_drafts d
         WHERE d.month LIKE $1
+          AND d.created_by_user_id = $2
         ORDER BY d.month, d.version DESC`,
-      [`${year}-%`]
+      [`${year}-%`, getAuthenticatedUserId(req)]
     );
     res.json({ ok: true, year, drafts: rows });
   } catch (err) {
@@ -2684,7 +2729,7 @@ router.get('/drafts/year/:year/full', async (req, res) => {
 /* GET SINGLE DRAFT (with full data)                */
 /* ------------------------------------------------ */
 
-router.get('/drafts/:id', async (req, res) => {
+router.get('/drafts/:id', requireOwnedDraft, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM shiftplan_drafts WHERE id = $1', [parseInt(req.params.id)]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
@@ -2749,8 +2794,8 @@ router.post('/drafts/generate', requirePageAccess('shiftplan_control', 'write'),
 
     // Persist draft
     const { rows } = await pool.query(
-      `INSERT INTO shiftplan_drafts (month, version, status, shifts_json, explanations, conflicts, fairness, config_snapshot, note, title, created_by)
-       VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10) RETURNING *`,
+      `INSERT INTO shiftplan_drafts (month, version, status, shifts_json, explanations, conflicts, fairness, config_snapshot, note, title, created_by, created_by_user_id)
+       VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11) RETURNING *`,
       [
         month, nextVersion,
         JSON.stringify(result.shifts),
@@ -2761,6 +2806,7 @@ router.post('/drafts/generate', requirePageAccess('shiftplan_control', 'write'),
         note || null,
         title || null,
         createdBy,
+        getAuthenticatedUserId(req),
       ]
     );
 
@@ -2823,8 +2869,8 @@ router.post('/drafts/generate-week', requirePageAccess('shiftplan_control', 'wri
         const version = versionResult.rows[0].next_version;
         const title = `Wochenplanung ${weekStart}${generatedPlans.length > 1 ? ` (${segment.startDay}-${segment.endDay})` : ''}`;
         const { rows } = await client.query(
-          `INSERT INTO shiftplan_drafts (month, version, status, shifts_json, explanations, conflicts, fairness, config_snapshot, note, title, created_by)
-           VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10)
+          `INSERT INTO shiftplan_drafts (month, version, status, shifts_json, explanations, conflicts, fairness, config_snapshot, note, title, created_by, created_by_user_id)
+           VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10, $11)
            RETURNING id, month, version, status, title, created_at`,
           [
             month,
@@ -2837,6 +2883,7 @@ router.post('/drafts/generate-week', requirePageAccess('shiftplan_control', 'wri
             req.body?.note || `Wochenplanung ab ${weekStart}`,
             title,
             createdBy,
+            getAuthenticatedUserId(req),
           ]
         );
         generated.push({
@@ -2863,7 +2910,7 @@ router.post('/drafts/generate-week', requirePageAccess('shiftplan_control', 'wri
   }
 });
 
-router.get('/drafts/:id/schedule', async (req, res) => {
+router.get('/drafts/:id/schedule', requireOwnedDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(draftId) || draftId <= 0) return res.status(400).json({ ok: false, error: 'Ungueltige Draft-ID' });
@@ -2884,7 +2931,7 @@ router.get('/drafts/:id/schedule', async (req, res) => {
 /* UPDATE DRAFT STATUS                              */
 /* ------------------------------------------------ */
 
-router.patch('/drafts/:id/status', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+router.patch('/drafts/:id/status', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   try {
     const { status, note } = req.body;
     const validStatuses = ['draft', 'in_review', 'approved', 'failed'];
@@ -2908,7 +2955,7 @@ router.patch('/drafts/:id/status', requirePageAccess('shiftplan_control', 'write
   }
 });
 
-router.get('/drafts/:id/feedback', async (req, res) => {
+router.get('/drafts/:id/feedback', requireOwnedDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     const { rows } = await pool.query(
@@ -2925,7 +2972,7 @@ router.get('/drafts/:id/feedback', async (req, res) => {
   }
 });
 
-router.get('/drafts/:id/votes', async (req, res) => {
+router.get('/drafts/:id/votes', requireOwnedDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(draftId)) return res.status(400).json({ ok: false, error: 'Ungueltiger Draft.' });
@@ -2954,7 +3001,7 @@ router.get('/drafts/:id/votes', async (req, res) => {
   }
 });
 
-router.put('/drafts/:id/vote', requireVerifiedIdentity, async (req, res) => {
+router.put('/drafts/:id/vote', requireVerifiedIdentity, requireOwnedDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     const vote = String(req.body?.vote || '').trim();
@@ -2985,7 +3032,7 @@ router.put('/drafts/:id/vote', requireVerifiedIdentity, async (req, res) => {
   }
 });
 
-router.post('/drafts/:id/feedback', requireVerifiedIdentity, async (req, res) => {
+router.post('/drafts/:id/feedback', requireVerifiedIdentity, requireOwnedDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     const employeeName = String(req.body?.employeeName || '').trim();
@@ -3024,7 +3071,7 @@ router.post('/drafts/:id/feedback', requireVerifiedIdentity, async (req, res) =>
   }
 });
 
-router.patch('/drafts/:draftId/feedback/:feedbackId', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+router.patch('/drafts/:draftId/feedback/:feedbackId', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   try {
     const validStatuses = new Set(['open', 'accepted', 'declined', 'resolved']);
     const status = String(req.body?.status || '').trim();
@@ -3046,7 +3093,7 @@ router.patch('/drafts/:draftId/feedback/:feedbackId', requirePageAccess('shiftpl
   }
 });
 
-router.patch('/drafts/:id/metadata', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+router.patch('/drafts/:id/metadata', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   try {
     const draftId = parseInt(req.params.id, 10);
     const title = req.body?.title == null ? null : String(req.body.title).trim();
@@ -3068,7 +3115,7 @@ router.patch('/drafts/:id/metadata', requirePageAccess('shiftplan_control', 'wri
   }
 });
 
-router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   try {
     const draftId = parseInt(req.params.id, 10);
     const employeeName = String(req.body?.employeeName || '').trim();
@@ -3109,7 +3156,7 @@ router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write
 /* ACTIVATE DRAFT → Overwrite live shiftplan        */
 /* ------------------------------------------------ */
 
-router.post('/drafts/:id/activate', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+router.post('/drafts/:id/activate', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -3201,7 +3248,7 @@ router.post('/drafts/:id/activate', requirePageAccess('shiftplan_control', 'writ
 /* DELETE DRAFT                                     */
 /* ------------------------------------------------ */
 
-router.delete('/drafts/:id', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+router.delete('/drafts/:id', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `DELETE FROM shiftplan_drafts WHERE id = $1 AND status != 'activated' RETURNING *`,
@@ -3451,7 +3498,7 @@ async function buildExcelWorkbook(drafts) {
   return workbook;
 }
 
-router.get('/drafts/:id/excel', async (req, res) => {
+router.get('/drafts/:id/excel', requireOwnedDraft, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM shiftplan_drafts WHERE id = $1', [parseInt(req.params.id)]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
@@ -3479,8 +3526,12 @@ router.get('/drafts/year-excel/:year', async (req, res) => {
 
     // Get latest draft for each month of the year
     const { rows } = await pool.query(
-      `SELECT DISTINCT ON (month) * FROM shiftplan_drafts WHERE month LIKE $1 ORDER BY month, version DESC`,
-      [`${year}-%`]
+      `SELECT DISTINCT ON (month) *
+         FROM shiftplan_drafts
+        WHERE month LIKE $1
+          AND created_by_user_id = $2
+        ORDER BY month, version DESC`,
+      [`${year}-%`, getAuthenticatedUserId(req)]
     );
 
     if (!rows.length) return res.status(404).json({ ok: false, error: `Keine Drafts für ${year} gefunden` });
@@ -3718,8 +3769,8 @@ router.post('/drafts/generate-year', requirePageAccess('shiftplan_control', 'wri
         const nextVersion = verRes.rows[0].next_version;
 
         const { rows } = await client.query(
-          `INSERT INTO shiftplan_drafts (month, version, status, shifts_json, explanations, conflicts, fairness, config_snapshot, note, created_by)
-           VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9) RETURNING id, month, version, status, created_at`,
+          `INSERT INTO shiftplan_drafts (month, version, status, shifts_json, explanations, conflicts, fairness, config_snapshot, note, created_by, created_by_user_id)
+           VALUES ($1, $2, 'draft', $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10) RETURNING id, month, version, status, created_at`,
           [
             month, nextVersion,
             JSON.stringify(result.shifts),
@@ -3729,6 +3780,7 @@ router.post('/drafts/generate-year', requirePageAccess('shiftplan_control', 'wri
             JSON.stringify({ ...result.configSnapshot, planReport: result.planReport }),
             note || `Jahresplanung ${yearNum}`,
             createdBy,
+            getAuthenticatedUserId(req),
           ]
         );
 

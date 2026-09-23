@@ -784,6 +784,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     try {
       await api.put(`/shift-config/definitions/${definition.id}`, {
         ...definition,
+        start_time: String(definition.start_time || '').slice(0, 5),
+        end_time: String(definition.end_time || '').slice(0, 5),
         applicable_days: normalizeApplicableDays(definition.applicable_days),
       });
       showToast(t("shiftAdmin.toastDefSaved"));

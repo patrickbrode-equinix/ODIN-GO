@@ -33,6 +33,12 @@ function requireRootAdmin(req, res, next) {
   return res.status(403).json({ ok: false, error: 'Dieser Bereich ist nur für den Administrator verfügbar' });
 }
 
+// PostgreSQL TIME columns are returned as HH:MM:SS; clients often send them back unchanged.
+function normalizeClockTime(value) {
+  const match = /^(\d{2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(String(value ?? '').trim());
+  return match ? `${match[1]}:${match[2]}` : value;
+}
+
 function validateShiftDefinitionInput(input = {}) {
   const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
   const duration = Number.parseFloat(String(input.duration_hours ?? 8));
@@ -166,7 +172,12 @@ router.put('/definitions/:id/day-overrides/:weekday', requirePageAccess('shiftpl
   try {
     const id = Number.parseInt(req.params.id, 10);
     const weekday = Number.parseInt(req.params.weekday, 10);
-    const input = { ...req.body, weekday };
+    const input = {
+      ...req.body,
+      weekday,
+      start_time: normalizeClockTime(req.body?.start_time),
+      end_time: normalizeClockTime(req.body?.end_time),
+    };
     const validationError = validateDayOverride(input);
     if (validationError) return res.status(400).json({ ok: false, error: validationError });
 
@@ -279,7 +290,9 @@ router.put('/short-night-options', requirePageAccess('shiftplan_control', 'write
 
 router.put('/definitions/:id', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
   try {
-    const { name, short_name, shift_type, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, is_active, sort_order, applicable_days } = req.body;
+    const { name, short_name, shift_type, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, is_active, sort_order, applicable_days } = req.body;
+    const start_time = normalizeClockTime(req.body?.start_time);
+    const end_time = normalizeClockTime(req.body?.end_time);
     const id = parseInt(req.params.id);
     const validationError = validateShiftDefinitionInput({ shift_type, start_time, end_time, duration_hours, min_staff, max_staff, applicable_days });
     if (validationError) return res.status(400).json({ ok: false, error: validationError });
@@ -318,7 +331,9 @@ router.put('/definitions/:id', requirePageAccess('shiftplan_control', 'write'), 
 
 router.post('/definitions', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
   try {
-    const { code, name, short_name, shift_type, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, sort_order, applicable_days } = req.body;
+    const { code, name, short_name, shift_type, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, sort_order, applicable_days } = req.body;
+    const start_time = normalizeClockTime(req.body?.start_time);
+    const end_time = normalizeClockTime(req.body?.end_time);
     if (!code || !name) return res.status(400).json({ ok: false, error: 'Code und Name erforderlich' });
     const validationError = validateShiftDefinitionInput({ shift_type, start_time, end_time, duration_hours, min_staff, max_staff, applicable_days });
     if (validationError) return res.status(400).json({ ok: false, error: validationError });

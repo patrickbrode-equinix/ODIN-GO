@@ -96,10 +96,24 @@ router.get("/:id", requireAuth, async (req, res) => {
       [pollId, req.user.id]
     );
 
+    const { rows: comments } = await db.query(`
+      SELECT
+        pc.id,
+        pc.comment,
+        pc.created_at,
+        pc.user_id,
+        COALESCE(NULLIF(BTRIM(CONCAT_WS(' ', cu.first_name, cu.last_name)), ''), cu.email) AS user_name
+      FROM poll_comments pc
+      LEFT JOIN users cu ON cu.id = pc.user_id
+      WHERE pc.poll_id = $1
+      ORDER BY pc.created_at ASC, pc.id ASC
+    `, [pollId]);
+
     res.json({
       ...poll,
       votes,
       myVote: myVote ? myVote.option_index : null,
+      comments,
     });
   } catch (err) {
     console.error("[POLLS] Get failed:", err.message);
@@ -187,6 +201,61 @@ router.post("/:id/vote", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("[POLLS] Vote failed:", err.message);
     res.status(500).json({ error: "Failed to cast vote" });
+  }
+});
+
+/* ------------------------------------------------ */
+/* POST /api/polls/:id/comments – comment after vote */
+/* ------------------------------------------------ */
+
+router.post("/:id/comments", requireAuth, async (req, res) => {
+  try {
+    const pollId = parseInt(req.params.id, 10);
+    const comment = String(req.body?.comment || "").trim();
+
+    if (!Number.isFinite(pollId)) return res.status(400).json({ error: "Invalid poll id" });
+    if (!comment || comment.length > 2000) {
+      return res.status(400).json({ error: "Comment must contain between 1 and 2000 characters" });
+    }
+
+    const { rows: [poll] } = await db.query(
+      `SELECT p.id,
+              EXISTS (
+                SELECT 1
+                FROM poll_votes pv
+                WHERE pv.poll_id = p.id
+                  AND pv.user_id = $2
+              ) AS has_voted
+         FROM polls p
+        WHERE p.id = $1`,
+      [pollId, req.user.id]
+    );
+    if (!poll) return res.status(404).json({ error: "Poll not found" });
+    if (!poll.has_voted) {
+      return res.status(403).json({ error: "Vote before commenting on this poll" });
+    }
+
+    const { rows: [created] } = await db.query(`
+      WITH inserted AS (
+        INSERT INTO poll_comments (poll_id, user_id, comment)
+        VALUES ($1, $2, $3)
+        RETURNING id, poll_id, user_id, comment, created_at
+      )
+      SELECT
+        inserted.id,
+        inserted.poll_id,
+        inserted.user_id,
+        inserted.comment,
+        inserted.created_at,
+        COALESCE(NULLIF(BTRIM(CONCAT_WS(' ', users.first_name, users.last_name)), ''), users.email) AS user_name
+      FROM inserted
+      LEFT JOIN users ON users.id = inserted.user_id
+    `, [pollId, req.user.id, comment]);
+
+    res.status(201).json(created);
+  } catch (err) {
+    console.error("[POLLS] Comment failed:", err.message);
+    res.status(500).json({ error: "Failed to add poll comment" });
   }
 });
 
