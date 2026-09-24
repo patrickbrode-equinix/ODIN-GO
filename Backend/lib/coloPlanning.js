@@ -1,10 +1,21 @@
 const NON_WORKING_SHIFT_CODES = new Set(['FS', 'ABW', 'S', 'URLAUB', 'KRANK', 'SEMINAR']);
 
+// Colo business rules:
+// - Mon-Fri early: preparation and e-mail/phone traffic with the exchange.
+// - Every night: line preparation (Mon-Thu) and execution (Fri-Sun).
+// - Sat/Sun early: one person for on-site Colo work during the day.
 const TASK_DEFINITIONS = {
-  preparation: { label: 'Colo Vorbereitung', weekdays: [1, 2, 3, 4, 5] },
-  installation: { label: 'Colo Installation', weekdays: [0, 6] },
-  troubleshooting: { label: 'Colo Troubleshooting', weekdays: [0, 6] },
+  preparation: { label: 'Colo Vorbereitung (Börse: E-Mail/Telefon)', weekdays: [1, 2, 3, 4, 5], shiftType: 'early' },
+  night: { label: 'Colo Nacht', weekdays: [0, 1, 2, 3, 4, 5, 6], shiftType: 'night' },
+  weekend: { label: 'Colo Wochenende (Arbeiten vor Ort)', weekdays: [0, 6], shiftType: 'early' },
 };
+
+function taskLabel(taskKey, weekday) {
+  if (taskKey === 'night') {
+    return [1, 2, 3, 4].includes(weekday) ? 'Colo Nacht – Leitungsvorbereitung' : 'Colo Nacht – Ausführung';
+  }
+  return TASK_DEFINITIONS[taskKey]?.label || 'Colo';
+}
 
 function parseBoolean(value, fallback = false) {
   if (typeof value === 'boolean') return value;
@@ -45,8 +56,8 @@ export function normalizeColoPlanningConfig(value = {}) {
     enabled: parseBoolean(value.enabled, false),
     employeePool: parseEmployeePool(value.employeePool),
     weekdayPreparationStaff: parseNonNegativeInteger(value.weekdayPreparationStaff, 1),
-    weekendInstallationStaff: parseNonNegativeInteger(value.weekendInstallationStaff, 1),
-    weekendTroubleshootingStaff: parseNonNegativeInteger(value.weekendTroubleshootingStaff, 1),
+    nightStaff: parseNonNegativeInteger(value.nightStaff, 1),
+    weekendDayStaff: parseNonNegativeInteger(value.weekendDayStaff ?? value.weekendInstallationStaff, 1),
   };
 }
 
@@ -95,14 +106,17 @@ function preferenceFor(preferencesByEmployee, employee) {
     || null;
 }
 
-function tasksForWeekday(weekday, config) {
-  if (TASK_DEFINITIONS.preparation.weekdays.includes(weekday)) {
-    return [{ key: 'preparation', required: config.weekdayPreparationStaff }];
-  }
-  return [
-    { key: 'installation', required: config.weekendInstallationStaff },
-    { key: 'troubleshooting', required: config.weekendTroubleshootingStaff },
-  ];
+export function getColoTaskRequirements(weekday, rawConfig = {}) {
+  const config = normalizeColoPlanningConfig(rawConfig);
+  const requiredByTask = {
+    preparation: config.weekdayPreparationStaff,
+    night: config.nightStaff,
+    weekend: config.weekendDayStaff,
+  };
+  return Object.entries(TASK_DEFINITIONS)
+    .filter(([, definition]) => definition.weekdays.includes(weekday))
+    .map(([key, definition]) => ({ key, shiftType: definition.shiftType, required: requiredByTask[key], label: taskLabel(key, weekday) }))
+    .filter((task) => task.required > 0);
 }
 
 export function buildColoRolePlan({
@@ -154,9 +168,9 @@ export function buildColoRolePlan({
     const employeeKey = String(shift.employee_name || '').trim().toLocaleLowerCase('de');
     const employee = poolByKey.get(employeeKey);
     const shiftType = definitionTypeByCode.get(shiftCode);
-    if (!employee || !Number.isInteger(day) || NON_WORKING_SHIFT_CODES.has(shiftCode) || shiftType === 'night') continue;
+    if (!employee || !Number.isInteger(day) || NON_WORKING_SHIFT_CODES.has(shiftCode)) continue;
     if (!workingByDay.has(day)) workingByDay.set(day, []);
-    workingByDay.get(day).push({ employee, shiftCode });
+    workingByDay.get(day).push({ employee, shiftCode, shiftType });
   }
 
   const totalByEmployee = new Map(config.employeePool.map((employee) => [employee, 0]));
@@ -164,20 +178,20 @@ export function buildColoRolePlan({
   const firstDay = Math.max(1, Number.parseInt(String(startDay), 10) || 1);
   const lastDay = Math.min(numDays, Number.parseInt(String(endDay), 10) || numDays);
 
+  let previousDayTask = new Set();
   for (let day = firstDay; day <= lastDay; day++) {
+    const todayTask = new Set();
     const date = new Date(year, month - 1, day);
     const weekday = date.getDay();
     const dateKey = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const usedToday = new Set();
 
-    for (const task of tasksForWeekday(weekday, config)) {
-      if (task.required <= 0) continue;
+    for (const task of getColoTaskRequirements(weekday, config)) {
       summary.requiredAssignments += task.required;
-      const taskDefinition = TASK_DEFINITIONS[task.key];
 
       for (let slot = 0; slot < task.required; slot++) {
         const candidates = (workingByDay.get(day) || [])
-          .filter(({ employee }) => !usedToday.has(employee))
+          .filter(({ employee, shiftType }) => !usedToday.has(employee) && shiftType === task.shiftType)
           .map(({ employee, shiftCode }) => {
             const preferences = preferenceFor(preferencesByEmployee, employee);
             const blockedDays = normalizePreferenceDays(preferences?.blocked_days);
@@ -189,15 +203,17 @@ export function buildColoRolePlan({
             const taskCounts = taskByEmployee.get(employee) || {};
             let score = -(total * 1000) - ((taskCounts[task.key] || 0) * 250);
             if (respectEmployeeWishes && preferredShifts.has('COLO')) score += 500;
+            const continuesTask = previousDayTask.has(`${task.key}:${employee}`);
             return {
               employee,
               shiftCode,
+              continuesTask,
               score,
               rank: deterministicRank(`${year}-${month}-${day}-${task.key}-${employee}`),
             };
           })
           .filter(Boolean)
-          .sort((left, right) => right.score - left.score || left.rank - right.rank || left.employee.localeCompare(right.employee, 'de'));
+          .sort((left, right) => Number(right.continuesTask) - Number(left.continuesTask) || right.score - left.score || left.rank - right.rank || left.employee.localeCompare(right.employee, 'de'));
 
         const winner = candidates[0];
         if (!winner) {
@@ -214,10 +230,11 @@ export function buildColoRolePlan({
           employee_name: winner.employee,
           date: dateKey,
           role_key: 'colo',
-          comment: taskDefinition.label,
+          comment: task.label,
           task_key: task.key,
           shift_code: winner.shiftCode,
         });
+        todayTask.add(`${task.key}:${winner.employee}`);
         summary.assigned += 1;
       }
 
@@ -233,10 +250,11 @@ export function buildColoRolePlan({
           required: task.required,
           actual: assignedForTask,
           missing: task.required - assignedForTask,
-          message: `${dateKey}: ${taskDefinition.label} ist mit ${assignedForTask}/${task.required} Personen unterbesetzt. Verfuegbar sind nur eingeplante Pool-Mitarbeiter ohne widersprechenden Wunsch.`,
+          message: `${dateKey}: ${task.label} ist mit ${assignedForTask}/${task.required} Personen unterbesetzt. Kein Colo-Pool-Mitarbeiter ist in einer passenden ${task.shiftType === 'night' ? 'Nachtschicht' : 'Frühschicht'} ohne widersprechenden Wunsch eingeplant.`,
         });
       }
     }
+    previousDayTask = todayTask;
   }
 
   return { assignments, conflicts, summary, config };

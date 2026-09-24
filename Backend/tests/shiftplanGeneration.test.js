@@ -262,4 +262,31 @@ describe('shiftplanGeneration helpers', () => {
 
     assert.equal(suggestions.length, 0);
   });
+
+  it('rejects substitutes that would break rest, recovery, weekend or pool rules', () => {
+    const suggestions = rankSafeSubstituteCandidates({
+      shiftType: 'night',
+      shiftCode: 'N',
+      coverageDays: [4, 5, 6, 7],
+      weekendDays: [6, 7],
+      rules: { freeDaysAfterNight: 2, maxConsecutiveWorkdays: 6, maxWeekendsPerMonth: 2 },
+      candidates: [
+        { employee: 'Early After', assignmentDays: [8], assignmentTypesByDay: { 8: 'early' } },
+        { employee: 'No Recovery', assignmentDays: [9], assignmentTypesByDay: { 9: 'late' } },
+        { employee: 'Long Run', assignmentDays: [1, 2, 3], assignmentTypesByDay: { 1: 'night', 2: 'night', 3: 'night' } },
+        { employee: 'Weekend Limit', workedWeekendBlocks: 2 },
+        { employee: 'Safe', assignmentDays: [12], assignmentTypesByDay: { 12: 'early' } },
+      ],
+    });
+    assert.deepEqual(suggestions.map((entry) => entry.employee), ['Safe']);
+
+    const dbsSuggestions = rankSafeSubstituteCandidates({
+      shiftType: 'special',
+      shiftCode: 'DBS',
+      coverageDays: [4],
+      rules: { restrictedPool: new Set(['Pool Member']) },
+      candidates: [{ employee: 'Outsider' }, { employee: 'Pool Member' }],
+    });
+    assert.deepEqual(dbsSuggestions.map((entry) => entry.employee), ['Pool Member']);
+  });
 });

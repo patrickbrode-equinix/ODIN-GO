@@ -364,10 +364,22 @@ export function rankSafeSubstituteCandidates({
   coverageDays = [],
   weekendDays = [],
   limit = 3,
+  rules = {},
 } = {}) {
   const normalizedType = normalizePlanningShiftTypeKey(shiftType);
   const requiredDays = new Set(coverageDays.map(Number));
   const requiredWeekendDays = new Set(weekendDays.map(Number));
+  const sortedCoverage = [...requiredDays].sort((left, right) => left - right);
+  const firstCoverageDay = sortedCoverage[0];
+  const lastCoverageDay = sortedCoverage[sortedCoverage.length - 1];
+  const nightToEarlyForbidden = rules.nightToEarlyForbidden !== false;
+  const lateToEarlyForbidden = rules.lateToEarlyForbidden !== false;
+  const freeDaysAfterNight = Math.max(Number.parseInt(String(rules.freeDaysAfterNight ?? 0), 10) || 0, 0);
+  const freeDaysAfterWeekend = Math.max(Number.parseInt(String(rules.freeDaysAfterWeekend ?? 0), 10) || 0, 0);
+  const maxConsecutiveWorkdays = Math.max(Number.parseInt(String(rules.maxConsecutiveWorkdays ?? 0), 10) || 0, 0);
+  const maxWeekendsPerMonth = Number.parseInt(String(rules.maxWeekendsPerMonth ?? ''), 10);
+  const maxNightsPerMonth = Number.parseInt(String(rules.maxNightsPerMonth ?? ''), 10);
+  const restrictedPool = rules.restrictedPool instanceof Set ? rules.restrictedPool : null;
 
   return candidates
     .map((candidate) => {
@@ -376,13 +388,59 @@ export function rankSafeSubstituteCandidates({
       const recoveryDays = new Set((candidate.recoveryDays || []).map(Number));
       const preferences = candidate.preferences || {};
       const fixedShiftType = normalizePlanningShiftTypeKey(candidate.fixedShiftType);
+      const typesByDay = candidate.assignmentTypesByDay || {};
+      const typeOnDay = (day) => normalizePlanningShiftTypeKey(typesByDay[day]);
 
+      if (restrictedPool && !restrictedPool.has(candidate.employee)) return null;
       if ([...requiredDays].some((day) => assignments.has(day))) return null;
       if ([...requiredDays].some((day) => absences.has(day))) return null;
       if ([...requiredDays].some((day) => recoveryDays.has(day))) return null;
       if (fixedShiftType && fixedShiftType !== normalizedType) return null;
       if (isShiftUnwantedByEmployeePreference(preferences, shiftCode)) return null;
       if (normalizedType === 'night' && isNightShiftRefused(preferences)) return null;
+
+      // The substitute must not break a neighbouring shift: rest periods,
+      // recovery after nights/weekends and the consecutive-workday limit.
+      if (Number.isInteger(firstCoverageDay)) {
+        const previousType = typeOnDay(firstCoverageDay - 1);
+        const nextType = typeOnDay(lastCoverageDay + 1);
+        if (normalizedType === 'early' && previousType === 'night' && nightToEarlyForbidden) return null;
+        if (normalizedType === 'early' && previousType === 'late' && lateToEarlyForbidden) return null;
+        if (normalizedType === 'night' && nextType === 'early' && nightToEarlyForbidden) return null;
+        if (normalizedType === 'late' && nextType === 'early' && lateToEarlyForbidden) return null;
+        if (normalizedType !== 'night' || previousType !== 'night') {
+          for (let offset = 1; offset <= freeDaysAfterNight; offset++) {
+            if (typeOnDay(firstCoverageDay - offset) === 'night') return null;
+          }
+        }
+        if (normalizedType === 'night') {
+          for (let offset = 1; offset <= freeDaysAfterNight; offset++) {
+            if (assignments.has(lastCoverageDay + offset)) return null;
+          }
+        }
+        if (requiredWeekendDays.size > 0 && freeDaysAfterWeekend > 0) {
+          const lastWeekendDay = Math.max(...requiredWeekendDays);
+          for (let offset = 1; offset <= freeDaysAfterWeekend; offset++) {
+            if (assignments.has(lastWeekendDay + offset)) return null;
+          }
+        }
+        if (maxConsecutiveWorkdays > 0) {
+          let before = 0;
+          for (let day = firstCoverageDay - 1; assignments.has(day); day--) before++;
+          let after = 0;
+          for (let day = lastCoverageDay + 1; assignments.has(day); day++) after++;
+          if (before + requiredDays.size + after > Math.max(maxConsecutiveWorkdays, requiredDays.size)) return null;
+        }
+      }
+
+      if (requiredWeekendDays.size > 0) {
+        const workedWeekendBlocks = Math.max(Number(candidate.workedWeekendBlocks || 0), 0);
+        const individualWeekendLimit = Number.parseInt(String(preferences.max_weekends_per_month ?? ''), 10);
+        const weekendLimits = [individualWeekendLimit, maxWeekendsPerMonth].filter(Number.isInteger);
+        if (weekendLimits.some((weekendLimit) => workedWeekendBlocks + 1 > weekendLimit)) return null;
+      }
+      if (normalizedType === 'night' && Number.isInteger(maxNightsPerMonth) && maxNightsPerMonth > 0
+        && Number(candidate.currentNights || 0) + requiredDays.size > maxNightsPerMonth) return null;
 
       const maxNights = Number.parseInt(String(preferences.max_nights_per_month ?? ''), 10);
       if (normalizedType === 'night' && Number.isInteger(maxNights)) {
