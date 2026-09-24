@@ -2045,6 +2045,35 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
     return false;
   };
+  // Checks only what adding `day` changes: the day must not fall into the
+  // recovery window after an earlier weekend block, and if it joins a block
+  // containing a weekend, the free days after that block must stay free.
+  const violatesWeekendRecoveryForAddedDay = (employee, day) => {
+    const requiredFreeDays = Math.max(Number.parseInt(String(rotation.free_days_after_weekend ?? 0), 10) || 0, 0);
+    if (requiredFreeDays <= 0) return false;
+    const isWorked = (candidateDay) => candidateDay === day || Boolean(empDayAssignment[employee][candidateDay]);
+    let start = day;
+    while (start > 1 && isWorked(start - 1)) start--;
+    let end = day;
+    while (end < numDays && isWorked(end + 1)) end++;
+    let runHasWeekend = false;
+    for (let current = start; current <= end; current++) if (isWeekend(year, mon, current)) runHasWeekend = true;
+    if (runHasWeekend) {
+      for (let offset = 2; offset <= requiredFreeDays; offset++) {
+        if (end + offset <= numDays && empDayAssignment[employee][end + offset]) return true;
+      }
+    }
+    for (let previousEnd = start - 2; previousEnd >= Math.max(start - requiredFreeDays, 1); previousEnd--) {
+      if (!empDayAssignment[employee][previousEnd]) continue;
+      let previousStart = previousEnd;
+      while (previousStart > 1 && empDayAssignment[employee][previousStart - 1]) previousStart--;
+      for (let current = previousStart; current <= previousEnd; current++) {
+        if (isWeekend(year, mon, current)) return true;
+      }
+      break;
+    }
+    return false;
+  };
   const changeEmployeeShiftCode = (employee, day, newCode, reasons) => {
     const normalizedNewCode = String(newCode || '').trim().toUpperCase();
     const shift = shifts.find((entry) => entry.employee_name === employee && entry.day === day);
@@ -2331,10 +2360,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (wouldViolateAdjacentTransition(employee, day, definition)) continue;
           if (!hasDefinitionCapacityForEmployee(employee, day, definition)) continue;
 
-          const workedDays = Object.keys(empDayAssignment[employee])
-            .map((entry) => Number.parseInt(entry, 10))
-            .filter((entry) => Number.isInteger(entry));
-          if (violatesWeekendRecoveryAfterBlock(employee, [...workedDays, day])) continue;
+          if (violatesWeekendRecoveryForAddedDay(employee, day)) continue;
 
           let previousStreak = 0;
           for (let previous = day - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) previousStreak++;
