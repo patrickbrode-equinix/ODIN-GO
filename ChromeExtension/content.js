@@ -14,35 +14,23 @@
       :host { all: initial; }
       * { box-sizing: border-box; }
       button, input { font: inherit; }
-      .launcher { position: fixed; z-index: 2147483646; top: 8px; left: 108px; display: none; width: 124px; height: 36px; padding: 1.5px; overflow: hidden; isolation: isolate; touch-action:none; user-select:none; border: 0; border-radius: 12px; background: #06101f; color:#e6f8ff; font:800 12px/1 "Segoe UI Variable Display","Segoe UI",Inter,Arial,sans-serif; cursor:grab; box-shadow:0 6px 18px rgba(2,6,23,.55),0 0 0 1px rgba(56,189,248,.18),0 0 22px rgba(14,165,233,.38); transition:transform .22s cubic-bezier(.34,1.56,.64,1),box-shadow .22s ease,filter .22s ease; }
-      .launcher::before { content:""; position:absolute; z-index:-2; left:50%; top:50%; width:220%; aspect-ratio:1; transform:translate(-50%,-50%) rotate(0deg); background:conic-gradient(from 0deg,#00e5ff 0deg,#2563eb 70deg,#7c3aed 140deg,#ec4899 190deg,#f59e0b 230deg,#22d3ee 290deg,#00e5ff 360deg); animation:odin-lx-spin 4.5s linear infinite; }
-      .launcher::after { content:""; position:absolute; z-index:-1; inset:0; border-radius:inherit; background:radial-gradient(60% 120% at 50% 120%,rgba(56,189,248,.55),transparent 70%); filter:blur(6px); opacity:.55; animation:odin-lx-breathe 3.2s ease-in-out infinite; }
+      .launcher { position: fixed; z-index: 2147483646; top: 8px; left: 108px; display: none; width: 118px; height: 34px; padding: 0; overflow: hidden; touch-action:none; user-select:none; border: 1px solid #3a3a3a; border-radius: 6px; background: linear-gradient(180deg,#1f1f1f 0%,#111 100%); color:#fff; font:600 12px/1 Arial,"Helvetica Neue","Segoe UI",sans-serif; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.4),0 4px 12px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.06); transition:border-color .18s ease,box-shadow .18s ease,transform .12s ease,background .18s ease; }
       .launcher.context-open { display: none !important; visibility: hidden; pointer-events: none; }
-      .launcher:hover { transform:translateY(-1px) scale(1.045); filter:brightness(1.12) saturate(1.15); box-shadow:0 10px 26px rgba(2,6,23,.6),0 0 0 1px rgba(125,211,252,.35),0 0 34px rgba(56,189,248,.62),0 0 60px rgba(124,58,237,.3); }
-      .launcher:hover::before { animation-duration:1.6s; }
-      .launcher:active { transform:scale(.97); }
-      .launcher:focus-visible { outline:2px solid #7dd3fc; outline-offset:3px; }
-      .launcher.dragging { cursor:grabbing; transform:scale(1.06) rotate(-1.5deg); box-shadow:0 16px 36px rgba(2,6,23,.65),0 0 30px rgba(56,189,248,.7); }
+      .launcher:hover { border-color:#5a5a5a; background:linear-gradient(180deg,#262626 0%,#141414 100%); box-shadow:0 2px 4px rgba(0,0,0,.45),0 8px 20px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.08); }
+      .launcher:active { transform:translateY(1px); }
+      .launcher:focus-visible { outline:2px solid #e91c24; outline-offset:2px; }
+      .launcher.dragging { cursor:grabbing; border-color:#e91c24; box-shadow:0 10px 28px rgba(0,0,0,.5); }
       .launcher img { display:none; }
-      .lx-face { position:relative; display:flex; align-items:center; gap:7px; width:100%; height:100%; padding:0 10px 0 5px; overflow:hidden; border-radius:10.5px; background:radial-gradient(120% 160% at 0% 0%,#15508a 0%,#0a2340 38%,#060e1d 72%,#040913 100%); box-shadow:inset 0 1px 0 rgba(255,255,255,.18),inset 0 -1px 0 rgba(0,0,0,.5),inset 0 0 14px rgba(14,165,233,.18); }
-      .lx-face::before { content:""; position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(0deg,rgba(255,255,255,.035) 0 1px,transparent 1px 3px),linear-gradient(180deg,rgba(255,255,255,.14),transparent 46%); mix-blend-mode:screen; }
-      .lx-face::after { content:""; position:absolute; top:-20%; bottom:-20%; left:0; width:38%; pointer-events:none; background:linear-gradient(105deg,transparent 0%,rgba(255,255,255,.08) 30%,rgba(255,255,255,.5) 50%,rgba(255,255,255,.08) 70%,transparent 100%); transform:translateX(-160%) skewX(-18deg); animation:odin-lx-sheen 4.2s cubic-bezier(.65,0,.35,1) infinite; }
-      .lx-aurora { position:absolute; inset:-40%; pointer-events:none; background:radial-gradient(28% 40% at 30% 50%,rgba(34,211,238,.35),transparent 70%),radial-gradient(26% 38% at 75% 60%,rgba(168,85,247,.32),transparent 70%); filter:blur(4px); animation:odin-lx-aurora 7s ease-in-out infinite alternate; }
-      .lx-mark { position:relative; flex:0 0 auto; display:grid; place-items:center; width:25px; height:25px; border-radius:8px; background:linear-gradient(145deg,#38bdf8,#2563eb 55%,#7c3aed); box-shadow:0 0 12px rgba(56,189,248,.7),inset 0 1px 0 rgba(255,255,255,.55),inset 0 -2px 4px rgba(30,27,75,.45); }
-      .lx-mark svg { width:15px; height:15px; filter:drop-shadow(0 0 3px rgba(255,255,255,.9)); animation:odin-lx-bolt 3.6s ease-in-out infinite; }
-      .lx-text { position:relative; display:flex; align-items:baseline; gap:4px; white-space:nowrap; letter-spacing:.16em; text-shadow:0 0 10px rgba(56,189,248,.55); }
-      .lx-text b { font-weight:900; color:#f0faff; }
-      .lx-text i { font-style:normal; font-weight:900; background:linear-gradient(90deg,#67e8f9,#a78bfa,#f472b6,#67e8f9); background-size:220% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; animation:odin-lx-gradient 3.5s linear infinite; text-shadow:none; filter:drop-shadow(0 0 6px rgba(167,139,250,.6)); }
-      .lx-live { position:absolute; top:5px; right:6px; width:5px; height:5px; border-radius:50%; background:#34d399; box-shadow:0 0 6px #34d399; }
-      .lx-live::after { content:""; position:absolute; inset:0; border-radius:inherit; background:inherit; animation:odin-lx-ping 1.8s cubic-bezier(0,0,.2,1) infinite; }
-      @keyframes odin-lx-spin { to { transform:translate(-50%,-50%) rotate(360deg); } }
-      @keyframes odin-lx-breathe { 0%,100% { opacity:.35; } 50% { opacity:.8; } }
-      @keyframes odin-lx-sheen { 0%,55% { transform:translateX(-160%) skewX(-18deg); } 100% { transform:translateX(360%) skewX(-18deg); } }
-      @keyframes odin-lx-aurora { from { transform:translate3d(-8%,-4%,0) rotate(0deg); } to { transform:translate3d(8%,4%,0) rotate(20deg); } }
-      @keyframes odin-lx-gradient { to { background-position:220% 0; } }
-      @keyframes odin-lx-bolt { 0%,70%,100% { transform:scale(1); opacity:1; } 76% { transform:scale(1.25) rotate(-6deg); } 82% { transform:scale(.95); opacity:.75; } 88% { transform:scale(1.12); opacity:1; } }
-      @keyframes odin-lx-ping { 75%,100% { transform:scale(2.8); opacity:0; } }
-      @media (prefers-reduced-motion: reduce) { .launcher::before,.launcher::after,.lx-face::after,.lx-aurora,.lx-mark svg,.lx-text i,.lx-live::after { animation:none !important; } }
+      .lx-face { position:relative; display:flex; align-items:center; gap:9px; width:100%; height:100%; padding:0 12px 0 0; }
+      .lx-face::after { content:""; position:absolute; left:14px; right:12px; bottom:0; height:2px; background:#e91c24; transform:scaleX(0); transform-origin:left; transition:transform .25s ease; }
+      .launcher:hover .lx-face::after, .launcher:focus-visible .lx-face::after { transform:scaleX(1); }
+      .lx-mark { flex:0 0 auto; align-self:stretch; width:5px; background:#e91c24; box-shadow:1px 0 0 rgba(0,0,0,.35); }
+      .lx-text { display:flex; align-items:baseline; gap:5px; white-space:nowrap; letter-spacing:.12em; text-transform:uppercase; }
+      .lx-text b { font-weight:700; color:#fff; }
+      .lx-text i { font-style:normal; font-weight:700; color:#e91c24; }
+      .lx-live { margin-left:auto; width:6px; height:6px; border-radius:50%; background:#6b6b6b; transition:background .18s ease; }
+      .launcher:hover .lx-live { background:#e91c24; }
+      @media (prefers-reduced-motion: reduce) { .launcher, .lx-face::after, .lx-live { transition:none !important; } }
       .odin-brand { flex:0 0 auto; display:flex; align-items:center; justify-content:center; height:112px; overflow:hidden; border-bottom:1px solid #334155; background:#0b1220; }
       .odin-brand img { display:block; width:auto; height:104px; max-width:88%; object-fit:contain; filter:none; opacity:1; }
       .odin-title { font-family:"Segoe UI",Arial,sans-serif; font-weight:700; letter-spacing:.04em; text-shadow:none; }
@@ -100,7 +88,7 @@
       .jarvis-notification footer { padding:0 20px 18px; color:#64748b; font-size:10px; }
       .jarvis-notification button { border:0; background:transparent; color:#bae6fd; cursor:pointer; font-size:20px; }
     </style>
-    <button class="launcher" type="button" aria-label="ODIN GO öffnen oder verschieben" title="Klicken zum Öffnen, gedrückt halten zum Verschieben"><span class="lx-face"><span class="lx-aurora"></span><span class="lx-mark"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13.5 2 5 13.2h6L9.8 22 19 10.3h-6.1L13.5 2Z" fill="#fff" stroke="#e0f2fe" stroke-width=".8" stroke-linejoin="round"/></svg></span><span class="lx-text"><b>ODIN</b><i>GO</i></span><span class="lx-live"></span></span><img alt="ODIN GO" /></button>
+    <button class="launcher" type="button" aria-label="ODIN GO öffnen oder verschieben" title="Klicken zum Öffnen, gedrückt halten zum Verschieben"><span class="lx-face"><span class="lx-mark"></span><span class="lx-text"><b>ODIN</b><i>GO</i></span><span class="lx-live"></span></span><img alt="ODIN GO" /></button>
     <div class="app-menu" role="menu" aria-label="Anwendung auswählen">
       <button class="app-choice" type="button" data-app="planner"><span class="app-symbol">S</span><span><strong>Schichtplaner</strong><small>Dienstplan, Drafts und Wellbeing</small></span></button>
       <button class="app-choice" type="button" data-app="coc"><span class="app-symbol">C</span><span><strong>CoC</strong><small>Chain of Command für Ideen und Probleme</small></span></button>
@@ -291,8 +279,8 @@
 
   function getLauncherBounds() {
     const rect = launcher.getBoundingClientRect();
-    const width = rect.width || 124;
-    const height = rect.height || 36;
+    const width = rect.width || 118;
+    const height = rect.height || 34;
     return {
       width,
       height,
@@ -370,8 +358,8 @@
     }
     const brandAnchor = findBrandAnchor();
     const brandRect = brandAnchor?.getBoundingClientRect();
-    const launcherWidth = launcher.getBoundingClientRect().width || 124;
-    const launcherHeight = launcher.getBoundingClientRect().height || 36;
+    const launcherWidth = launcher.getBoundingClientRect().width || 118;
+    const launcherHeight = launcher.getBoundingClientRect().height || 34;
     const preferredTop = brandRect
       ? Math.max(4, brandRect.top + (brandRect.height - launcherHeight) / 2)
       : 7;

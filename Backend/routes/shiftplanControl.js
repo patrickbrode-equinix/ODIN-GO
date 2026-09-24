@@ -1174,10 +1174,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const getEmployeeNightModel = (employeeName) => {
-    // The central NK switch is authoritative. When it is off, no historic
-    // individual preference may create a short-night assignment.
-    if (!rotation.short_night_mode_enabled) return NIGHT_MODELS.SEVEN_DAY;
-    return NIGHT_MODELS.SHORT;
+    // The central NK switch plans short nights for everyone; otherwise an
+    // explicit employee wish for short night blocks is honoured individually.
+    if (rotation.short_night_mode_enabled) return NIGHT_MODELS.SHORT;
+    return normalizeNightModel(empPrefsMap.get(employeeName)?.night_model);
   };
   const getShiftHoursForDay = (definition, day) => getShiftDurationHours(definition, dayOfWeek(year, mon, day));
   const isPoolEmployeeWorkingOnWeekday = (definition, employeeName, weekday) => {
