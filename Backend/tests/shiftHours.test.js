@@ -3,9 +3,11 @@ import { describe, it } from 'node:test';
 
 import {
   aggregateYearlyHours,
+  countWeekdaysInYear,
   DEFAULT_ANNUAL_TARGET_HOURS,
   DEFAULT_MONTHLY_TARGET_HOURS,
   getDailyCreditedHours,
+  getWorkdayBasedTargetHours,
 } from '../lib/shiftHours.js';
 
 describe('shiftHours helpers', () => {
@@ -57,5 +59,18 @@ describe('shiftHours helpers', () => {
 
     assert.equal(result.monthly_target_hours, DEFAULT_MONTHLY_TARGET_HOURS);
     assert.equal(result.annual_target_hours, DEFAULT_ANNUAL_TARGET_HOURS);
+  });
+
+  it('distributes the annual target by Mon-Fri working days per month', () => {
+    // 2026 has 261 weekdays -> 2088h / 261 = 8h per weekday
+    assert.equal(countWeekdaysInYear(2026), 261);
+    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 11 }), 168);
+    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 10 }), 176);
+    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 11, startDay: 1, endDay: 15 }), 80);
+    let sum = 0;
+    for (let month = 1; month <= 12; month++) sum += getWorkdayBasedTargetHours({ year: 2026, month });
+    assert.equal(Math.round(sum), DEFAULT_ANNUAL_TARGET_HOURS);
+    const result = aggregateYearlyHours({ year: 2026, shifts: [], absences: [], shiftHoursLookup: {} });
+    assert.equal(result.employees.length, 0);
   });
 });

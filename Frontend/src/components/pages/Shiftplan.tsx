@@ -129,6 +129,25 @@ function normalizeTargetHours(value: unknown, fallback = 174) {
   return Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(2)) : fallback;
 }
 
+function countWeekdays(year: number, month1: number) {
+  const lastDay = new Date(year, month1, 0).getDate();
+  let count = 0;
+  for (let day = 1; day <= lastDay; day++) {
+    const weekday = new Date(year, month1 - 1, day).getDay();
+    if (weekday !== 0 && weekday !== 6) count++;
+  }
+  return count;
+}
+
+// Mirrors the backend: the annual target is distributed by Mon-Fri working days.
+function getWorkdayBasedTargetHours(year: number, month1: number, monthlyTarget: number, annualTarget: number | null) {
+  const annual = annualTarget && annualTarget > 0 ? annualTarget : monthlyTarget * 12;
+  let yearWeekdays = 0;
+  for (let m = 1; m <= 12; m++) yearWeekdays += countWeekdays(year, m);
+  if (!yearWeekdays) return monthlyTarget;
+  return Number(((annual * countWeekdays(year, month1)) / yearWeekdays).toFixed(2));
+}
+
 function pad2(value: number) {
   return String(value).padStart(2, "0");
 }
@@ -275,7 +294,8 @@ export default function Shiftplan() {
   const [issuePriorityMode, setIssuePriorityMode] = useState<IssuePriorityMode>("balanced");
   const [skillsEnabled, setSkillsEnabled] = useState(false);
   const [hourLimits, setHourLimits] = useState<HourLimitsConfig>({ maxDailyHours: 10, maxWeeklyHours: 48, dailyMode: 'warn', weeklyMode: 'warn' });
-  const [defaultTargetHours, setDefaultTargetHours] = useState(174);
+  const [configuredMonthlyTargetHours, setDefaultTargetHours] = useState(174);
+  const [annualTargetHours, setAnnualTargetHours] = useState<number | null>(null);
   const [employeeYearProgress, setEmployeeYearProgress] = useState<Map<string, ShiftHoursEmployee>>(new Map());
   const [employeeYearProgressLoading, setEmployeeYearProgressLoading] = useState(false);
 
@@ -505,6 +525,8 @@ export default function Shiftplan() {
         if (cancelled) return;
 
         setDefaultTargetHours(normalizeTargetHours(res.data?.config?.monthly_target_hours, 174));
+        const annual = Number.parseFloat(String(res.data?.config?.annual_target_hours ?? ""));
+        setAnnualTargetHours(Number.isFinite(annual) && annual > 0 ? annual : null);
       })
       .catch(() => {
         if (cancelled) return;
@@ -797,6 +819,10 @@ export default function Shiftplan() {
   }, [schedule, hiddenEmployees, searchTerm, showWarningsOnly, showNightOnly, showWeekendOnly, showManualOnly, warningsComputed, selectedYear, monthIndex1, manualEmployeeNameSet, locale]);
 
   // Employee hours calculation (always active)
+  const defaultTargetHours = useMemo(
+    () => getWorkdayBasedTargetHours(selectedYear, monthIndex1, configuredMonthlyTargetHours, annualTargetHours),
+    [selectedYear, monthIndex1, configuredMonthlyTargetHours, annualTargetHours]
+  );
   const employeeHours = useMemo(() => {
     const map = new Map<string, EmployeeMonthlyStats>();
     for (const [name, row] of Object.entries(visibleSchedule)) {
