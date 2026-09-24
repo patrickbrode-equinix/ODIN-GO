@@ -2350,7 +2350,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       {/* ── Employee exclusions ── */}
       <Section title={t("shiftAdmin.sectionExclusions")} icon={UserX} helpKey="shiftAdmin.helpSectionExclusions" t={t}>
         <div className="mb-2 text-xs text-slate-400">
-          {isGerman ? 'Leer laesst den Mitarbeiter an den gewählten Wochentagen draussen. Frueh, Spaet oder Nacht plant ihn nur an den gewählten Wochentagen und nur mit dieser Schichtart ein.' : 'Leave empty to exclude the employee on the selected weekdays. Early, late, or night plans the employee only on the selected weekdays and only with that shift type.'}
+          {isGerman ? 'Schicht wählen (Früh, Spät oder Nacht) und die Tage Mo–So markieren: Der Mitarbeiter wird nur an diesen Tagen und nur in dieser Schicht eingeplant. Ohne Schicht wird er an den markierten Tagen gar nicht eingeplant.' : 'Leave empty to exclude the employee on the selected weekdays. Early, late, or night plans the employee only on the selected weekdays and only with that shift type.'}
         </div>
         <div className="mb-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_auto]">
           <select value={newExclusionName} onChange={(event) => setNewExclusionName(event.target.value)} className="flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
@@ -2369,7 +2369,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               : (newExclusionFixedShiftType ? (isGerman ? 'Regel anlegen' : 'Add rule') : t("shiftAdmin.exclExclude"))}
           </button>
           <div className="flex flex-wrap items-center gap-2 xl:col-span-3">
-            <span className="text-xs text-slate-400">{isGerman ? 'Wochentage:' : 'Weekdays:'}</span>
+            <span className="text-xs text-slate-400">{newExclusionFixedShiftType ? (isGerman ? 'Einplanen an:' : 'Plan on:') : (isGerman ? 'Nicht einplanen an:' : 'Do not plan on:')}</span>
             {weekdayOptions.map((option) => {
               const active = newExclusionWeekdays.includes(option.value);
               return (
@@ -2399,7 +2399,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                       {formatExclusionWeekdays(exclusion.weekdays, isGerman)}
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-1.5 pt-1">
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[11px] text-slate-400">{isFixedShiftRule ? (isGerman ? 'Einplanen an:' : 'Plan on:') : (isGerman ? 'Nicht einplanen an:' : 'Do not plan on:')}</span>
                     {weekdayOptions.map((option) => {
                       const ruleWeekdays = normalizeExclusionWeekdays(exclusion.weekdays);
                       const active = ruleWeekdays.includes(option.value);
