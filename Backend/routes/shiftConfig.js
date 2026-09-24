@@ -9,7 +9,7 @@ import { requireAuth, requireVerifiedIdentity } from '../middleware/authMiddlewa
 import { requirePageAccess } from '../middleware/requirePageAccess.js';
 import pool from '../db.js';
 import { ensureShiftplanSchema } from '../lib/ensureShiftplanSchema.js';
-import { DEFAULT_SHIFT_DEFINITIONS, DEFAULT_STAFFING_RULES, STAFFING_SHIFT_TYPES } from '../lib/shiftDefaults.js';
+import { DEFAULT_SHIFT_DEFINITIONS, DEFAULT_STAFFING_RULES, STAFFING_SHIFT_TYPES, getPaidShiftHours } from '../lib/shiftDefaults.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -73,7 +73,7 @@ function getDurationHours({ startTime, endTime, startDayOffset = 0, endDayOffset
   const start = toMinutes(startTime) + Number(startDayOffset || 0) * 1440;
   let end = toMinutes(endTime) + Number(endDayOffset || 0) * 1440;
   if (end <= start) end += 1440;
-  return Number(((end - start) / 60).toFixed(2));
+  return getPaidShiftHours((end - start) / 60);
 }
 
 function validateDayOverride(input = {}) {

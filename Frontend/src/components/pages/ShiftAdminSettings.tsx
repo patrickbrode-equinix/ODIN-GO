@@ -666,7 +666,9 @@ function getShiftDurationPreview(startTime: string, endTime: string, startOffset
   const start = toMinutes(startTime) + startOffset * 1440;
   let end = toMinutes(endTime) + endOffset * 1440;
   if (end <= start) end += 1440;
-  return (end - start) / 60;
+  const presence = (end - start) / 60;
+  // Shifts longer than six hours contain an unpaid one-hour break.
+  return presence > 6 ? presence - 1 : presence;
 }
 
 function SettingsGroup({ title, description }: { title: string; description: string }) {
@@ -1545,7 +1547,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                                 <label className="text-[10px] text-slate-400">{isGerman ? 'Von' : 'From'}<input type="time" value={String(fieldValue.start_time).slice(0, 5)} onChange={(event) => updateDayOverride(definition.id, option.value, 'start_time', event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100" /></label>
                                 <label className="text-[10px] text-slate-400">{isGerman ? 'Bis' : 'To'}<input type="time" value={String(fieldValue.end_time).slice(0, 5)} onChange={(event) => updateDayOverride(definition.id, option.value, 'end_time', event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100" /></label>
                               </div>
-                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400"><span>{isGerman ? 'Dauer' : 'Duration'}: {getShiftDurationPreview(String(fieldValue.start_time), String(fieldValue.end_time), Number(fieldValue.start_day_offset || 0), Number(fieldValue.end_day_offset || 0)).toFixed(1)}h</span><span>{isGerman ? 'wird berechnet' : 'calculated'}</span></div>
+                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400"><span>{isGerman ? 'Dauer' : 'Duration'}: {getShiftDurationPreview(String(fieldValue.start_time), String(fieldValue.end_time), Number(fieldValue.start_day_offset || 0), Number(fieldValue.end_day_offset || 0)).toFixed(1)}h</span><span>{isGerman ? 'abzgl. 1h Pause' : 'minus 1h break'}</span></div>
                               <div className="mt-2 flex gap-2"><button type="button" onClick={() => void saveDayOverride(definition, option.value)} disabled={busy} className="rounded-lg bg-violet-400 px-2 py-1 text-xs font-medium text-slate-950 disabled:opacity-50">{busy ? '…' : (isGerman ? 'Speichern' : 'Save')}</button><button type="button" onClick={() => void removeDayOverride(definition, option.value)} disabled={busy} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50">{isGerman ? 'Standard' : 'Default'}</button></div>
                             </>
                           ) : (
