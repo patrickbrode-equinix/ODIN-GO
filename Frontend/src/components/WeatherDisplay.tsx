@@ -2,16 +2,12 @@
 import { useState, useEffect } from "react";
 import {
     Cloud,
-    Sun,
-    CloudRain,
-    CloudSnow,
-    CloudLightning,
-    CloudDrizzle,
     ThermometerSun,
     Snowflake,
     AlertTriangle,
     Loader2,
 } from "lucide-react";
+import { AnimatedWeatherIcon } from "./widgets/AnimatedWeatherIcon";
 import {
     Popover,
     PopoverContent,
@@ -47,15 +43,8 @@ type WeatherData = {
 /* ------------------------------------------------ */
 
 // WMO Weather Codes (Open-Meteo)
-function getWeatherIcon(code: number) {
-    if (code === 0 || code === 1) return <Sun className="w-4 h-4 text-yellow-500" />;
-    if (code === 2 || code === 3) return <Cloud className="w-4 h-4 text-gray-400" />;
-    if ([45, 48].includes(code)) return <Cloud className="w-4 h-4 text-gray-500" />;
-    if ([51, 53, 56, 61, 63, 66, 80, 81].includes(code)) return <CloudDrizzle className="w-4 h-4 text-blue-400" />;
-    if ([55, 57, 65, 67, 82].includes(code)) return <CloudRain className="w-4 h-4 text-blue-500" />;
-    if ([71, 73, 75, 77, 85, 86].includes(code)) return <CloudSnow className="w-4 h-4 text-cyan-200" />;
-    if ([95, 96, 99].includes(code)) return <CloudLightning className="w-4 h-4 text-purple-500" />;
-    return <Cloud className="w-4 h-4 text-gray-400" />;
+function getWeatherIcon(code: number, className = "w-5 h-5") {
+    return <AnimatedWeatherIcon code={code} className={className} />;
 }
 
 function getDayName(dateStr: string, locale: string) {

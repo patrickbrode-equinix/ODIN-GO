@@ -1,6 +1,11 @@
 import { RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { MarketHistory, MarketQuote } from "../api/market";
+import { AnimatedNumber } from "./widgets/MotionWidgets";
+
+function formatPlain(value: number | null) {
+  return value === null ? "–" : new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+}
 
 type Props = {
   market: MarketQuote | null;
@@ -34,11 +39,11 @@ export default function EqixHistoryPanel({ market, history, loading, error }: Pr
 
   return (
     <section role="dialog" aria-label="EQIX Aktienkurs der letzten 12 Monate" className="absolute right-0 top-[52px] z-50 w-[min(560px,calc(100vw-24px))] animate-[odin-weather-panel-in_180ms_ease-out] overflow-hidden rounded-xl border border-slate-600 bg-slate-950 shadow-2xl shadow-black/60">
-      <div className="border-b border-slate-700 bg-gradient-to-br from-slate-800 via-slate-900 to-slate-950 px-5 py-4">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className={`odin-wx-backdrop ${positive ? "odin-market-backdrop-up" : "odin-market-backdrop-down"} border-b border-slate-700 px-5 py-4`}>
+        <div className="odin-stagger relative flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">Equinix · NASDAQ: EQIX</div>
-            <div className="mt-2 text-3xl font-semibold tabular-nums text-white">{formatDollar(market?.price)}</div>
+            <div className="mt-2 text-3xl font-semibold tabular-nums text-white">$<AnimatedNumber value={market?.available ? market?.price : null} format={formatPlain} initialRatio={0.9} duration={1.3} /></div>
             <div className="mt-1 text-[11px] text-slate-500">Aktueller Kurs · USD</div>
           </div>
           <div className={`rounded-lg border px-3 py-2 text-right ${positive ? "border-emerald-500/30 bg-emerald-500/10" : "border-red-500/30 bg-red-500/10"}`}>
@@ -68,7 +73,7 @@ export default function EqixHistoryPanel({ market, history, loading, error }: Pr
                 <XAxis dataKey="date" axisLine={false} tickLine={false} minTickGap={44} tick={{ fill: "#64748b", fontSize: 9 }} tickFormatter={(value) => new Date(value).toLocaleDateString("de-DE", { month: "short" })} />
                 <YAxis axisLine={false} tickLine={false} width={52} domain={["auto", "auto"]} tick={{ fill: "#64748b", fontSize: 9 }} tickFormatter={(value) => `$${Math.round(Number(value))}`} />
                 <Tooltip content={<MarketChartTooltip />} cursor={{ stroke: "#64748b", strokeDasharray: "3 3" }} />
-                <Area type="monotone" dataKey="price" stroke={positive ? "#34d399" : "#f87171"} strokeWidth={2.5} fill="url(#eqixHistoryFill)" activeDot={{ r: 4, strokeWidth: 0 }} isAnimationActive animationDuration={700} />
+                <Area type="monotone" dataKey="price" stroke={positive ? "#34d399" : "#f87171"} strokeWidth={2.5} fill="url(#eqixHistoryFill)" activeDot={{ r: 5, strokeWidth: 2, stroke: "#020617" }} isAnimationActive animationDuration={1400} animationEasing="ease-out" style={{ filter: `drop-shadow(0 0 6px ${positive ? "rgba(52,211,153,0.45)" : "rgba(248,113,113,0.45)"})` }} />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -76,7 +81,7 @@ export default function EqixHistoryPanel({ market, history, loading, error }: Pr
           <div className="flex h-60 items-center justify-center text-sm text-slate-500">{error || "Der 12-Monats-Verlauf ist momentan nicht verfügbar."}</div>
         )}
 
-        <div className="mt-2 grid grid-cols-3 gap-2">
+        <div className="odin-stagger mt-2 grid grid-cols-3 gap-2">
           <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2"><div className="text-[9px] uppercase tracking-wider text-slate-500">Veränderung</div><div className={`mt-1 text-xs font-bold tabular-nums ${positive ? "text-emerald-300" : "text-red-300"}`}>{typeof history?.change === "number" ? `${history.change >= 0 ? "+" : ""}${formatDollar(history.change)}` : "–"}</div></div>
           <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2"><div className="text-[9px] uppercase tracking-wider text-slate-500">12M Tief</div><div className="mt-1 text-xs font-bold tabular-nums text-slate-200">{formatDollar(history?.minPrice)}</div></div>
           <div className="rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-2"><div className="text-[9px] uppercase tracking-wider text-slate-500">12M Hoch</div><div className="mt-1 text-xs font-bold tabular-nums text-slate-200">{formatDollar(history?.maxPrice)}</div></div>

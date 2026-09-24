@@ -1,4 +1,5 @@
 import { Clock3, Globe2, Moon, Sun } from "lucide-react";
+import { MiniClockFace, RollingText } from "./widgets/MotionWidgets";
 
 type Props = { now: Date };
 
@@ -53,6 +54,13 @@ function offsetAt(now: Date, timeZone: string) {
   }
 }
 
+function dayFractionAt(now: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value || 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value || 0);
+  return (hour * 60 + minute) / 1440;
+}
+
 function isDayAt(now: Date, timeZone: string) {
   const hour = Number(new Intl.DateTimeFormat("en-GB", {
     timeZone,
@@ -68,16 +76,19 @@ export default function WorldClockPanel({ now }: Props) {
       <div className="flex items-center justify-between border-b border-slate-700 bg-gradient-to-r from-slate-800 via-slate-900 to-slate-950 px-5 py-3.5">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-lg border border-blue-400/25 bg-blue-500/10 shadow-[0_0_24px_rgba(59,130,246,0.12)]">
-            <Globe2 className="h-5 w-5 text-blue-300" />
+            <Globe2 className="h-5 w-5 animate-[odin-wx-spin_40s_linear_infinite] text-blue-300" />
           </div>
           <div>
             <div className="text-sm font-bold tracking-wide text-white">Weltzeit</div>
             <div className="mt-0.5 text-[10px] text-slate-400">Aktuelle Ortszeiten an internationalen Standorten</div>
           </div>
         </div>
-        <div className="text-right">
-          <div className="font-mono text-lg font-bold tabular-nums text-white">{timeAt(now, "Europe/Berlin")}</div>
-          <div className="text-[9px] font-semibold uppercase tracking-[0.15em] text-blue-300">Frankfurt · {offsetAt(now, "Europe/Berlin")}</div>
+        <div className="flex items-center gap-3">
+          <div className="text-right">
+            <RollingText text={timeAt(now, "Europe/Berlin")} className="font-mono text-xl font-bold text-white" />
+            <div className="text-[9px] font-semibold uppercase tracking-[0.15em] text-blue-300">Frankfurt · {offsetAt(now, "Europe/Berlin")}</div>
+          </div>
+          <MiniClockFace className="h-12 w-12" timeZone="Europe/Berlin" />
         </div>
       </div>
 
@@ -86,10 +97,10 @@ export default function WorldClockPanel({ now }: Props) {
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(2,6,23,0.22),rgba(2,6,23,0.04)_45%,rgba(2,6,23,0.68))]" />
         <div className="pointer-events-none absolute inset-0 shadow-[inset_0_0_70px_rgba(2,6,23,0.9)]" />
 
-        {WORLD_ZONES.map((zone) => (
-          <div key={zone.code} className="absolute h-0 w-0" style={{ left: `${zone.x}%`, top: `${zone.y}%` }}>
-            <span className="absolute -left-2 -top-2 h-4 w-4 animate-ping rounded-full bg-blue-400/35" />
-            <span className="absolute -left-1.5 -top-1.5 h-3 w-3 rounded-full border-2 border-blue-100 bg-blue-400 shadow-[0_0_12px_rgba(96,165,250,0.95)]" />
+        {WORLD_ZONES.map((zone, index) => (
+          <div key={zone.code} className="odin-marker-in absolute h-0 w-0" style={{ left: `${zone.x}%`, top: `${zone.y}%`, animationDelay: `${120 + index * 55}ms` }}>
+            <span className={`absolute -left-2 -top-2 h-4 w-4 animate-ping rounded-full ${isDayAt(now, zone.timeZone) ? "bg-amber-300/35" : "bg-blue-400/35"}`} style={{ animationDelay: `${index * 180}ms` }} />
+            <span className={`absolute -left-1.5 -top-1.5 h-3 w-3 rounded-full border-2 ${isDayAt(now, zone.timeZone) ? "border-amber-50 bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.9)]" : "border-blue-100 bg-blue-400 shadow-[0_0_12px_rgba(96,165,250,0.95)]"}`} />
             <div className={`absolute whitespace-nowrap rounded-md border border-blue-300/25 bg-slate-950/90 px-2 py-1 text-center shadow-lg backdrop-blur-sm ${MARKER_LABEL_CLASS[zone.label]}`}>
                 <div className="text-[8px] font-bold tracking-[0.16em] text-blue-300">{zone.code}</div>
                 <div className="font-mono text-[11px] font-bold tabular-nums text-white">{timeAt(now, zone.timeZone, false)}</div>
@@ -102,17 +113,22 @@ export default function WorldClockPanel({ now }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-4 gap-2 p-3">
+      <div className="odin-stagger grid grid-cols-4 gap-2 p-3">
         {WORLD_ZONES.map((zone) => {
           const day = isDayAt(now, zone.timeZone);
+          const fraction = dayFractionAt(now, zone.timeZone);
           return (
-            <div key={zone.timeZone} className={`rounded-lg border px-3 py-2.5 ${zone.code === "FRA" ? "border-blue-400/40 bg-blue-500/10" : "border-slate-800 bg-slate-900/70"}`}>
+            <div key={zone.timeZone} className={`rounded-lg border px-3 py-2.5 transition hover:-translate-y-0.5 hover:border-slate-600 ${zone.code === "FRA" ? "border-blue-400/40 bg-blue-500/10" : "border-slate-800 bg-slate-900/70"}`}>
               <div className="flex items-center justify-between gap-2">
                 <div className="truncate text-[10px] font-semibold text-slate-300">{zone.city}</div>
-                {day ? <Sun className="h-3.5 w-3.5 shrink-0 text-amber-300" /> : <Moon className="h-3.5 w-3.5 shrink-0 text-blue-200" />}
+                {day ? <Sun className="h-3.5 w-3.5 shrink-0 animate-[odin-wx-spin_14s_linear_infinite] text-amber-300" /> : <Moon className="h-3.5 w-3.5 shrink-0 animate-[odin-wx-bob_5s_ease-in-out_infinite] text-blue-200" />}
               </div>
               <div className="mt-1 font-mono text-base font-bold tabular-nums text-white">{timeAt(now, zone.timeZone)}</div>
               <div className="mt-0.5 flex items-center justify-between gap-2 text-[9px] text-slate-500"><span>{dateAt(now, zone.timeZone)}</span><span>{offsetAt(now, zone.timeZone)}</span></div>
+              <div className="odin-day-track relative mt-2 h-1 rounded-full bg-slate-800" aria-hidden="true" title="Tagesverlauf">
+                <span className="absolute inset-y-0 left-[29%] right-[21%] rounded-full bg-amber-400/25" />
+                <span className={`absolute top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-[left] duration-700 ${day ? "bg-amber-300 shadow-[0_0_6px_#fbbf24]" : "bg-blue-300 shadow-[0_0_6px_#60a5fa]"}`} style={{ left: `${fraction * 100}%` }} />
+              </div>
             </div>
           );
         })}

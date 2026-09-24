@@ -1502,6 +1502,165 @@ h3,
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* ODIN header widgets: animated weather scenes, clock and market     */
+/* ------------------------------------------------------------------ */
+.odin-wx-spin { transform-box: fill-box; transform-origin: center; animation: odin-wx-spin 18s linear infinite; }
+.odin-wx-core { transform-box: fill-box; transform-origin: center; animation: odin-wx-core 3.2s ease-in-out infinite; }
+.odin-wx-halo { transform-box: fill-box; transform-origin: center; animation: odin-wx-halo 4s ease-in-out infinite; }
+.odin-wx-bob { animation: odin-wx-bob 5s ease-in-out infinite; }
+.odin-wx-twinkle { transform-box: fill-box; transform-origin: center; animation: odin-wx-twinkle 2.4s ease-in-out infinite; }
+.odin-wx-drift { animation: odin-wx-drift 6s ease-in-out infinite; }
+.odin-wx-drift-slow { animation: odin-wx-drift 9s ease-in-out infinite reverse; }
+.odin-wx-fog { animation: odin-wx-fog 4s ease-in-out infinite; }
+.odin-wx-drop { animation: odin-wx-drop 0.9s linear infinite; }
+.odin-wx-flake { transform-box: fill-box; transform-origin: center; animation: odin-wx-flake 2.6s linear infinite; }
+.odin-wx-bolt { animation: odin-wx-bolt 3.6s ease-in-out infinite; }
+
+@keyframes odin-wx-spin { to { transform: rotate(360deg); } }
+@keyframes odin-wx-core { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.07); } }
+@keyframes odin-wx-halo { 0%, 100% { opacity: 0.55; transform: scale(0.92); } 50% { opacity: 1; transform: scale(1.08); } }
+@keyframes odin-wx-bob { 0%, 100% { transform: translateY(0) rotate(0deg); } 50% { transform: translateY(-1.5px) rotate(-4deg); } }
+@keyframes odin-wx-twinkle { 0%, 100% { opacity: 0.2; transform: scale(0.6); } 50% { opacity: 1; transform: scale(1.2); } }
+@keyframes odin-wx-drift { 0%, 100% { transform: translateX(-1.5px); } 50% { transform: translateX(2px); } }
+@keyframes odin-wx-fog { 0%, 100% { transform: translateX(-4px); opacity: 0.45; } 50% { transform: translateX(4px); opacity: 0.95; } }
+@keyframes odin-wx-drop {
+  0% { transform: translateY(-3px); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translateY(12px); opacity: 0; }
+}
+@keyframes odin-wx-flake {
+  0% { transform: translate(0, -3px) rotate(0deg); opacity: 0; }
+  20% { opacity: 1; }
+  50% { transform: translate(2px, 6px) rotate(120deg); }
+  100% { transform: translate(-1px, 16px) rotate(240deg); opacity: 0; }
+}
+@keyframes odin-wx-bolt {
+  0%, 62%, 72%, 100% { opacity: 0.15; filter: none; }
+  64%, 70% { opacity: 1; filter: drop-shadow(0 0 4px #fde047) drop-shadow(0 0 10px rgba(250, 204, 21, 0.7)); }
+  67% { opacity: 0.4; }
+}
+
+/* Condition themed backdrops for the weather panel hero. */
+.odin-wx-backdrop { position: relative; isolation: isolate; overflow: hidden; background: linear-gradient(135deg, #1e293b, #0f172a 55%, #172554); }
+.odin-wx-backdrop::before,
+.odin-wx-backdrop::after { position: absolute; z-index: -1; content: ""; border-radius: 999px; filter: blur(34px); pointer-events: none; }
+.odin-wx-backdrop::before { right: -40px; top: -60px; width: 220px; height: 220px; background: var(--wx-glow, rgba(96, 165, 250, 0.22)); animation: odin-wx-aurora 9s ease-in-out infinite; }
+.odin-wx-backdrop::after { left: -60px; bottom: -80px; width: 240px; height: 180px; background: var(--wx-glow-2, rgba(56, 189, 248, 0.12)); animation: odin-wx-aurora 12s ease-in-out infinite reverse; }
+.odin-wx-backdrop-clear { background: linear-gradient(135deg, #1e3a8a, #0f172a 60%, #422006); --wx-glow: rgba(251, 191, 36, 0.32); --wx-glow-2: rgba(59, 130, 246, 0.2); }
+.odin-wx-backdrop-partly { background: linear-gradient(135deg, #1e3a5f, #0f172a 60%, #1c1917); --wx-glow: rgba(251, 191, 36, 0.2); --wx-glow-2: rgba(148, 163, 184, 0.18); }
+.odin-wx-backdrop-night { background: linear-gradient(135deg, #0b1026, #020617 55%, #1e1b4b); --wx-glow: rgba(129, 140, 248, 0.25); --wx-glow-2: rgba(56, 189, 248, 0.1); }
+.odin-wx-backdrop-cloudy,
+.odin-wx-backdrop-fog { background: linear-gradient(135deg, #334155, #0f172a 60%, #1e293b); --wx-glow: rgba(203, 213, 225, 0.16); --wx-glow-2: rgba(100, 116, 139, 0.2); }
+.odin-wx-backdrop-drizzle,
+.odin-wx-backdrop-rain { background: linear-gradient(135deg, #1e3a5f, #0b1220 60%, #0c4a6e); --wx-glow: rgba(56, 189, 248, 0.26); --wx-glow-2: rgba(37, 99, 235, 0.2); }
+.odin-wx-backdrop-snow { background: linear-gradient(135deg, #164e63, #0f172a 60%, #1e3a5f); --wx-glow: rgba(224, 242, 254, 0.22); --wx-glow-2: rgba(125, 211, 252, 0.18); }
+.odin-wx-backdrop-thunder { background: linear-gradient(135deg, #2e1065, #0b1220 60%, #1e1b4b); --wx-glow: rgba(250, 204, 21, 0.2); --wx-glow-2: rgba(139, 92, 246, 0.26); }
+.odin-market-backdrop-up { background: linear-gradient(135deg, #1e293b, #0f172a 60%, #022c22); --wx-glow: rgba(52, 211, 153, 0.22); --wx-glow-2: rgba(59, 130, 246, 0.14); }
+.odin-market-backdrop-down { background: linear-gradient(135deg, #1e293b, #0f172a 60%, #450a0a); --wx-glow: rgba(248, 113, 113, 0.22); --wx-glow-2: rgba(59, 130, 246, 0.14); }
+@keyframes odin-wx-aurora {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: 0.7; }
+  50% { transform: translate3d(-18px, 14px, 0) scale(1.15); opacity: 1; }
+}
+
+/* Staggered entrance for rows in header panels. */
+.odin-stagger > * { animation: odin-stagger-in 460ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+.odin-stagger > *:nth-child(1) { animation-delay: 40ms; }
+.odin-stagger > *:nth-child(2) { animation-delay: 80ms; }
+.odin-stagger > *:nth-child(3) { animation-delay: 120ms; }
+.odin-stagger > *:nth-child(4) { animation-delay: 160ms; }
+.odin-stagger > *:nth-child(5) { animation-delay: 200ms; }
+.odin-stagger > *:nth-child(6) { animation-delay: 240ms; }
+.odin-stagger > *:nth-child(7) { animation-delay: 280ms; }
+.odin-stagger > *:nth-child(8) { animation-delay: 320ms; }
+.odin-stagger > *:nth-child(9) { animation-delay: 360ms; }
+.odin-stagger > *:nth-child(10) { animation-delay: 400ms; }
+.odin-stagger > *:nth-child(n + 11) { animation-delay: 440ms; }
+@keyframes odin-stagger-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Header status chips: consistent enterprise surface with a subtle sheen. */
+.odin-chip {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.72), rgba(2, 6, 23, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+.odin-chip::after {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  background: linear-gradient(105deg, transparent 35%, rgba(148, 197, 255, 0.1) 50%, transparent 65%);
+  transform: translateX(-120%);
+  animation: odin-chip-sheen 7s ease-in-out infinite;
+  pointer-events: none;
+}
+.odin-chip:hover::after { animation-duration: 1.6s; }
+@keyframes odin-chip-sheen {
+  0%, 70% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+
+.odin-clock-sep { animation: odin-clock-blink 1s steps(2, start) infinite; }
+@keyframes odin-clock-blink { 50% { opacity: 0.35; } }
+.odin-clock-ring { animation: odin-clock-ring 4s ease-in-out infinite; }
+@keyframes odin-clock-ring { 0%, 100% { stroke-opacity: 0.45; } 50% { stroke-opacity: 1; } }
+.odin-clock-tip { filter: drop-shadow(0 0 2px #38bdf8); }
+
+.odin-spark-line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: odin-spark-draw 1.4s cubic-bezier(0.65, 0, 0.35, 1) 150ms forwards; }
+.odin-spark-area { opacity: 0; animation: odin-fade-in 900ms ease-out 700ms forwards; }
+.odin-spark-ping { transform-box: fill-box; transform-origin: center; animation: odin-spark-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
+@keyframes odin-spark-draw { to { stroke-dashoffset: 0; } }
+@keyframes odin-fade-in { to { opacity: 1; } }
+@keyframes odin-spark-ping {
+  0% { transform: scale(0.5); opacity: 0.6; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+.odin-live-dot { position: relative; display: inline-flex; width: 6px; height: 6px; border-radius: 999px; }
+.odin-live-dot::before { position: absolute; inset: 0; content: ""; border-radius: inherit; background: inherit; animation: odin-live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
+@keyframes odin-live-ping { 75%, 100% { transform: scale(2.6); opacity: 0; } }
+
+.odin-flash-up { animation: odin-flash-up 1.2s ease-out; }
+.odin-flash-down { animation: odin-flash-down 1.2s ease-out; }
+@keyframes odin-flash-up { 0% { background-color: rgba(16, 185, 129, 0.35); } 100% { background-color: transparent; } }
+@keyframes odin-flash-down { 0% { background-color: rgba(239, 68, 68, 0.35); } 100% { background-color: transparent; } }
+
+/* World clock: day progress bars and marker entrance. */
+.odin-marker-in { animation: odin-marker-in 620ms cubic-bezier(0.34, 1.56, 0.64, 1) both; }
+@keyframes odin-marker-in { from { opacity: 0; transform: scale(0.4); } to { opacity: 1; transform: scale(1); } }
+.odin-day-bar { transition: width 900ms cubic-bezier(0.16, 1, 0.3, 1); }
+
+.light .odin-chip { background: linear-gradient(180deg, #ffffff, #f8fafc) !important; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08) !important; }
+.light .odin-chip::after { background: linear-gradient(105deg, transparent 35%, rgba(37, 99, 235, 0.08) 50%, transparent 65%); }
+.light .odin-go-workspace-shell .odin-wx-backdrop { background-image: linear-gradient(135deg, #e0f2fe, #ffffff 60%, #eef2ff) !important; }
+.light .odin-go-workspace-shell .odin-wx-backdrop-clear,
+.light .odin-go-workspace-shell .odin-wx-backdrop-partly { background-image: linear-gradient(135deg, #fef3c7, #ffffff 60%, #e0f2fe) !important; }
+.light .odin-go-workspace-shell .odin-wx-backdrop-thunder { background-image: linear-gradient(135deg, #ede9fe, #ffffff 60%, #e0e7ff) !important; }
+.light .odin-go-workspace-shell .odin-day-bar { background-image: linear-gradient(90deg, #38bdf8, #fbbf24, #fb923c) !important; }
+.light .odin-go-workspace-shell .odin-day-track { background-color: #e2e8f0 !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  [class*="odin-wx-"],
+  .odin-stagger > *,
+  .odin-chip::after,
+  .odin-clock-sep,
+  .odin-clock-ring,
+  .odin-spark-ping,
+  .odin-live-dot::before,
+  .odin-marker-in,
+  .odin-wx-backdrop::before,
+  .odin-wx-backdrop::after {
+    animation: none !important;
+  }
+  .odin-spark-line { stroke-dashoffset: 0; animation: none !important; }
+  .odin-spark-area { opacity: 1; animation: none !important; }
+}
+
 .shiftplan-enterprise,
 .drafts-enterprise,
 .weekplan-enterprise,
