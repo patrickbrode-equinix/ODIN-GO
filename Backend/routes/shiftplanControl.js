@@ -280,8 +280,9 @@ async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftD
 
   const carry = {};
   for (const employee of employees) {
+    // Only real shifts count as work; free markers such as FS or absence codes break the streak.
     const employeeRows = (rowsByEmployee.get(employee) || [])
-      .filter((row) => Number.isInteger(row.day) && row.day >= 1 && row.day <= previousMonthDays && row.code)
+      .filter((row) => Number.isInteger(row.day) && row.day >= 1 && row.day <= previousMonthDays && row.code && definitionByCode.has(row.code))
       .sort((left, right) => left.day - right.day);
     if (employeeRows.length === 0) continue;
 
@@ -923,7 +924,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const specialPoolRes = await pool.query(
     `SELECT shift_code, employee_name, monthly_max_assignments, working_weekdays, free_days_after_block
      FROM shift_special_pools
-     WHERE is_active = TRUE`
+     WHERE is_active = TRUE
+     ORDER BY shift_code, sort_order, employee_name`
   );
   const specialPoolsByShift = new Map();
   for (const row of specialPoolRes.rows) {
@@ -1216,7 +1218,19 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const entry = specialPoolsByShift.get(shiftCode)?.get(employeeName);
     return Boolean(entry?.workingWeekdays?.includes(weekday));
   };
+  // DBS rotation plan (day -> employee), filled before the day loop.
+  const dbsRoster = new Map();
+  const dbsReservedDays = new Map();
+  const isDbsDefinition = (definition) => String(definition?.code || '').trim().toUpperCase() === dbsPlanningConfig.shiftCode;
+  const getDbsRosterRunLength = (employeeName, day) => {
+    let length = 0;
+    while (day + length <= planningEndDay && dbsRoster.get(day + length) === employeeName) length++;
+    return length;
+  };
   const getPlannedSeriesDays = (employeeName, shiftDef, day) => {
+    if (isDbsDefinition(shiftDef) && dbsRoster.size > 0) {
+      return Math.max(getDbsRosterRunLength(employeeName, day), 1);
+    }
     if (normalizePlanningShiftTypeKey(shiftDef?.shift_type) !== 'night') {
       return getAnchoredSeriesDays(shiftDef, dayOfWeek(year, mon, day));
     }
@@ -1324,7 +1338,17 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
     if (String(shiftDef.code).toUpperCase() === dbsPlanningConfig.shiftCode && blockEndsToday) {
       const dbsEntry = specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.get(emp);
-      empRequiredFreeDays[emp] = Math.max(empRequiredFreeDays[emp], dbsEntry?.freeDaysAfterBlock ?? dbsPlanningConfig.freeDaysAfterBlock);
+      const freeDaysAfterBlock = dbsEntry?.freeDaysAfterBlock ?? dbsPlanningConfig.freeDaysAfterBlock;
+      // Days outside the employee's DBS weekdays (e.g. Sunday for a Mon-Sat
+      // pattern) are free anyway and must not consume the recovery days.
+      const dbsWeekdays = dbsEntry?.workingWeekdays?.length ? dbsEntry.workingWeekdays : [0, 1, 2, 3, 4, 5, 6];
+      let dbsRecoveryDays = 0;
+      let countedFreeDays = 0;
+      while (countedFreeDays < freeDaysAfterBlock && dbsRecoveryDays < 14) {
+        dbsRecoveryDays++;
+        if (dbsWeekdays.includes(dayOfWeek(year, mon, day + dbsRecoveryDays))) countedFreeDays++;
+      }
+      empRequiredFreeDays[emp] = Math.max(empRequiredFreeDays[emp], dbsRecoveryDays);
       empRecoveryReason[emp] = 'DBS-Block';
     }
     if (previousWorkedShiftType && previousWorkedShiftType !== shiftDef.shift_type) empStats[emp].shiftTypeChanges++;
@@ -1392,6 +1416,189 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return demand;
   };
 
+  // DBS is planned as a weekly rotation before the regular shifts: each Monday
+  // week belongs to one pool member (in pool order), weekdays outside that
+  // member's DBS pattern are covered by the previous week's member. Reserved
+  // days are protected against regular blocks and their recovery days.
+  const dbsDefinitionForRoster = shiftDefs.find(isDbsDefinition);
+  const dbsPoolEntries = dbsPlanningConfig.enabled && dbsDefinitionForRoster
+    ? [...(specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.entries() || [])].filter(([name]) => activeEmployees.includes(name))
+    : [];
+  if (dbsPoolEntries.length > 0) {
+    const poolNames = dbsPoolEntries.map(([name]) => name);
+    const poolEntryByName = new Map(dbsPoolEntries);
+    const weekdayLimit = Math.max(Number(rotation.max_consecutive_workdays) || 0, 7);
+    const isAvailableForDbs = (name, day) => {
+      const dateKey = `${month}-${String(day).padStart(2, '0')}`;
+      const weekday = dayOfWeek(year, mon, day);
+      if (!poolEntryByName.get(name)?.workingWeekdays?.includes(weekday)) return false;
+      if (isEmployeeAbsentOnDate(name, dateKey) || isEmployeeBlockedByPreferenceOnDay(name, weekday)) return false;
+      if (isShiftUnwantedByEmployeePreference(preferencesForDate(name, dateKey), dbsDefinitionForRoster.code)) return false;
+      if (day - planningStartDay < (empRequiredFreeDays[name] || 0)) return false;
+      return true;
+    };
+    const weeks = [];
+    for (let day = planningStartDay; day <= planningEndDay;) {
+      const days = [day];
+      while (days[days.length - 1] < planningEndDay && dayOfWeek(year, mon, days[days.length - 1] + 1) !== 1) days.push(days[days.length - 1] + 1);
+      weeks.push(days);
+      day = days[days.length - 1] + 1;
+    }
+    const carriedIndex = poolNames.findIndex((name) => String(empSeriesCode[name] || '').toUpperCase() === dbsPlanningConfig.shiftCode && empSeriesRemaining[name] > 0);
+    const lastWorkedIndex = poolNames.findIndex((name) => String(carryState[name]?.lastWorkedShiftCode || '').toUpperCase() === dbsPlanningConfig.shiftCode);
+    let rotationIndex = carriedIndex >= 0 ? carriedIndex : (lastWorkedIndex >= 0 ? (lastWorkedIndex + 1) % poolNames.length : 0);
+    // Simulated per-member state: current work streak (carried series keep
+    // running until their end) and the first day after DBS recovery.
+    const rosterState = new Map(poolNames.map((name) => [name, {
+      streak: empConsecutiveWork[name] || 0,
+      carriedUntil: planningStartDay + Math.max(empSeriesRemaining[name] || 0, 0) - 1,
+      freeUntil: planningStartDay + Math.max(empRequiredFreeDays[name] || 0, 0),
+    }]));
+    const getDbsRecoveryDays = (name, lastDay) => {
+      const entry = poolEntryByName.get(name);
+      const patternDays = entry?.workingWeekdays?.length ? entry.workingWeekdays : [0, 1, 2, 3, 4, 5, 6];
+      let recovery = 0;
+      let counted = 0;
+      while (counted < (entry?.freeDaysAfterBlock ?? dbsPlanningConfig.freeDaysAfterBlock) && recovery < 14) {
+        recovery++;
+        if (patternDays.includes(dayOfWeek(year, mon, lastDay + recovery))) counted++;
+      }
+      const weekendRecovery = isWeekend(year, mon, lastDay) ? Number(rotation.free_days_after_weekend) || 0 : 0;
+      return Math.max(recovery, weekendRecovery);
+    };
+    const canTakeRosterDay = (name, day) => {
+      const state = rosterState.get(name);
+      return isAvailableForDbs(name, day) && day >= state.freeUntil && state.streak < weekdayLimit;
+    };
+    const advanceRosterDay = (day) => {
+      for (const name of poolNames) {
+        const state = rosterState.get(name);
+        if (dbsRoster.get(day) === name) {
+          state.streak++;
+        } else if (dbsRoster.get(day - 1) === name) {
+          state.streak = 0;
+          state.freeUntil = day - 1 + 1 + getDbsRecoveryDays(name, day - 1);
+        } else if (day <= state.carriedUntil) {
+          state.streak++;
+        } else {
+          state.streak = 0;
+        }
+      }
+    };
+    const simulateCoverage = (name, days) => {
+      const state = rosterState.get(name);
+      let streak = state.streak;
+      let covered = 0;
+      for (const day of days) {
+        if (isAvailableForDbs(name, day) && day >= state.freeUntil && streak < weekdayLimit) {
+          covered++;
+          streak++;
+        } else if (covered > 0) {
+          break;
+        } else {
+          streak = day <= state.carriedUntil ? streak + 1 : 0;
+        }
+      }
+      return covered;
+    };
+    const weekOwners = [];
+    const rosterWeekendsOf = (name) => new Set([...dbsRoster.entries()]
+      .filter(([day, employee]) => employee === name && isWeekend(year, mon, day))
+      .map(([day]) => getWeekendBlockKey(year, mon, day))).size;
+    weeks.forEach((days, weekIndex) => {
+      let owner = null;
+      let bestCoverage = 0;
+      for (let offset = 0; offset < poolNames.length; offset++) {
+        const name = poolNames[(rotationIndex + offset) % poolNames.length];
+        const covered = simulateCoverage(name, days);
+        // Take the member whose turn it is unless another one covers clearly more days.
+        if (covered > bestCoverage + (owner ? 1 : 0)) {
+          owner = name;
+          bestCoverage = covered;
+        }
+      }
+      weekOwners.push(owner);
+      if (owner) rotationIndex = (poolNames.indexOf(owner) + 1) % poolNames.length;
+      const nextOwner = owner ? poolNames[rotationIndex] : null;
+      for (const day of days) {
+        const ownerRunBroken = owner
+          && days.some((current) => current < day && dbsRoster.get(current) === owner)
+          && dbsRoster.get(day - 1) !== owner;
+        if (owner && !ownerRunBroken && canTakeRosterDay(owner, day)) {
+          dbsRoster.set(day, owner);
+          advanceRosterDay(day);
+          continue;
+        }
+        // Gap: the previous week's member first, the next week's member last.
+        const previousOwner = weekOwners[weekIndex - 1];
+        const candidates = poolNames
+          .filter((name) => name !== owner && canTakeRosterDay(name, day))
+          .sort((left, right) => {
+            const continuing = (name) => (dbsRoster.get(day - 1) === name ? 0 : 1);
+            if (continuing(left) !== continuing(right)) return continuing(left) - continuing(right);
+            const weekendDifference = isWeekend(year, mon, day) ? rosterWeekendsOf(left) - rosterWeekendsOf(right) : 0;
+            if (weekendDifference !== 0) return weekendDifference;
+            const rank = (name) => (name === previousOwner ? 0 : name === nextOwner ? 2 : 1);
+            return rank(left) - rank(right);
+          });
+        if (candidates[0]) dbsRoster.set(day, candidates[0]);
+        advanceRosterDay(day);
+      }
+    });
+    for (const [day, name] of dbsRoster.entries()) {
+      if (!dbsReservedDays.has(name)) dbsReservedDays.set(name, new Set());
+      dbsReservedDays.get(name).add(day);
+    }
+    planReport.dbsRotation = weeks.map((days, index) => ({
+      week: `${month}-${String(days[0]).padStart(2, '0')}`,
+      owner: weekOwners[index],
+      days: days.map((day) => `${day}:${dbsRoster.get(day) || '-'}`),
+    }));
+  }
+  const dbsReservedWeekendKeys = (employee) => new Set([...(dbsReservedDays.get(employee) || [])]
+    .filter((day) => isWeekend(year, mon, day))
+    .map((day) => getWeekendBlockKey(year, mon, day)));
+  // A regular block must neither touch a reserved DBS day nor push its
+  // recovery days into it, and it must leave room for the reserved weekends.
+  const conflictsWithDbsReservation = (employee, shiftDef, day, seriesDays) => {
+    const reserved = dbsReservedDays.get(employee);
+    if (!reserved || reserved.size === 0 || isDbsDefinition(shiftDef)) return null;
+    const lastDay = Math.min(day + Math.max(seriesDays, 1) - 1, planningEndDay);
+    let recoveryDays = 0;
+    const blockWeekendKeys = new Set();
+    for (let current = day; current <= lastDay; current++) {
+      if (isWeekend(year, mon, current)) {
+        recoveryDays = Math.max(recoveryDays, Number(rotation.free_days_after_weekend) || 0);
+        blockWeekendKeys.add(getWeekendBlockKey(year, mon, current));
+      }
+    }
+    if (normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night') {
+      if (getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT) {
+        recoveryDays = Math.max(recoveryDays, Number(rotation.short_night_free_days_after ?? rotation.free_days_after_night) || 0);
+      } else {
+        const targetWeekday = Math.max(0, Math.min(6, Number.parseInt(rotation.night_next_workday, 10) || 0));
+        const daysUntilTarget = ((targetWeekday - dayOfWeek(year, mon, lastDay) + 7) % 7) || 7;
+        recoveryDays = Math.max(recoveryDays, Number(rotation.free_days_after_night) || 0, daysUntilTarget - 1);
+      }
+    }
+    for (let current = day; current <= lastDay + recoveryDays; current++) {
+      if (reserved.has(current)) return `DBS-Rotation: Tag ${current} ist für DBS reserviert`;
+    }
+    if (reserved.has(lastDay + 1)) {
+      const streakLimit = Math.max(Number(rotation.max_consecutive_workdays) || 0, 7);
+      const streakAtRosterStart = (empConsecutiveWork[employee] || 0) + (lastDay - day + 1);
+      if (streakAtRosterStart + getDbsRosterRunLength(employee, lastDay + 1) > streakLimit) {
+        return `DBS-Rotation: Vor dem DBS-Block ab Tag ${lastDay + 1} ist ein freier Tag nötig`;
+      }
+    }
+    const worked = empStats[employee]?.workedWeekendBlocks || new Set();
+    const neededWeekends = new Set([...worked, ...blockWeekendKeys, ...dbsReservedWeekendKeys(employee)]);
+    if (blockWeekendKeys.size > 0 && neededWeekends.size > Number(rotation.max_weekends_per_month || 0) && Number(rotation.max_weekends_per_month || 0) > 0) {
+      return 'DBS-Rotation: Wochenenden sind für DBS reserviert';
+    }
+    return null;
+  };
+
   for (let day = planningStartDay; day <= planningEndDay; day++) {
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     const weekend = isWeekend(year, mon, day);
@@ -1442,7 +1649,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const availableShiftCodes = new Set(shiftSlots.map((slot) => slot.code));
     for (const employee of activeEmployees) {
       if (empSeriesRemaining[employee] <= 0) continue;
-      if (!availableEmployeeSet.has(employee)
+      const rosterMismatch = dbsRoster.size > 0 && (
+        (dbsRoster.get(day) === employee && String(empSeriesCode[employee] || '').toUpperCase() !== dbsPlanningConfig.shiftCode)
+        || (dbsRoster.get(day) !== employee && String(empSeriesCode[employee] || '').toUpperCase() === dbsPlanningConfig.shiftCode)
+      );
+      if (rosterMismatch
+        || !availableEmployeeSet.has(employee)
         || !availableShiftCodes.has(empSeriesCode[employee])
         || isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), empSeriesCode[employee])) {
         empSeriesCode[employee] = null;
@@ -1506,7 +1718,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         && availableForDay.some((employee) => getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT
           && !assignedToday.has(employee)
           && !isShiftUnwantedByEmployeePreference(preferencesForDate(employee, dateStr), shiftDef.code));
-      if (!canStartShiftSeries({ day, dayOfWeek: dow, definition: shiftDef }) && !hasConfiguredNightTransition && !isBoundaryBootstrap && !hasShortNightCandidate) {
+      const hasDbsRosterStart = isDbsDefinition(shiftDef) && dbsRoster.has(day);
+      if (!canStartShiftSeries({ day, dayOfWeek: dow, definition: shiftDef }) && !hasConfiguredNightTransition && !isBoundaryBootstrap && !hasShortNightCandidate && !hasDbsRosterStart) {
         const requiredStaff = Math.max(Number.parseInt(String(shiftDef.min_staff ?? 0), 10) || 0, 0);
         if (continuingEmployees.length < requiredStaff) {
           conflicts.push({
@@ -1578,6 +1791,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
           const seriesDays = getPlannedSeriesDays(employee, shiftDef, day);
           const nightModel = getEmployeeNightModel(employee);
+          const isRosterDbsAssignment = isDbsDefinition(shiftDef) && dbsRoster.get(day) === employee;
           let hardBlocked = false;
 
           if (isDayBlockedByEmployeePreference(prefs, dow)) {
@@ -1655,7 +1869,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             }
           }
 
-          const effectiveWorkdayLimit = Math.max(rotation.max_consecutive_workdays, seriesDays);
+          const effectiveWorkdayLimit = isRosterDbsAssignment
+            ? Math.max(rotation.max_consecutive_workdays, 7, seriesDays)
+            : Math.max(rotation.max_consecutive_workdays, seriesDays);
           if (empConsecutiveWork[employee] >= effectiveWorkdayLimit) {
             hardBlocked = true;
             reasons.push(`Max. Arbeitstage in Folge erreicht (${empConsecutiveWork[employee]}/${effectiveWorkdayLimit})`);
@@ -1673,7 +1889,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             reasons.push(`Nachtlimit erreicht (${stats.nights}/${rotationNightLimit})`);
           }
 
-          if (plannedWeekendKey && !stats.workedWeekendBlocks.has(plannedWeekendKey) && stats.workedWeekendBlocks.size >= rotation.max_weekends_per_month) {
+          if (!isRosterDbsAssignment && plannedWeekendKey && !stats.workedWeekendBlocks.has(plannedWeekendKey) && stats.workedWeekendBlocks.size >= rotation.max_weekends_per_month) {
             hardBlocked = true;
             reasons.push(`Wochenendlimit erreicht (${stats.workedWeekendBlocks.size}/${rotation.max_weekends_per_month})`);
           }
@@ -1692,6 +1908,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (consecutiveSame >= effectiveSameShiftLimit) {
             hardBlocked = true;
             reasons.push(`Max. gleiche Schichtart in Folge erreicht (${consecutiveSame}/${effectiveSameShiftLimit})`);
+          }
+
+          const dbsReservationConflict = conflictsWithDbsReservation(employee, shiftDef, day, seriesDays);
+          if (dbsReservationConflict) {
+            hardBlocked = true;
+            reasons.push(dbsReservationConflict);
+          }
+          if (isRosterDbsAssignment) {
+            score += 10_000_000;
+            reasons.push('DBS-Rotation: Diese Woche ist für diese Person eingeplant');
           }
 
           if (isRestrictedPoolShift) {
@@ -1864,6 +2090,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             hardBlocked,
             preferenceMatch,
             coloBoost,
+            dbsRoster: isRosterDbsAssignment,
             targetHoursGap: Math.max(remainingToTarget, 0),
           };
         });
@@ -1887,6 +2114,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
         const rotationWeekKey = getWeekendBlockKey(year, mon, day);
         eligibleScored.sort((left, right) => {
+          if (Boolean(left.dbsRoster) !== Boolean(right.dbsRoster)) return left.dbsRoster ? -1 : 1;
           // Contractual hours remain the first fairness guard. Within one
           // shift's worth of open hours, honour the selected shift wish.
           const targetGapDifference = right.targetHoursGap - left.targetHoursGap;

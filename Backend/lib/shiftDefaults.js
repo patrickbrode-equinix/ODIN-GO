@@ -18,6 +18,10 @@ export const DEFAULT_SHIFT_DEFINITIONS = Object.freeze({
   L1: Object.freeze({ start_time: '13:00', end_time: '22:00', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 8 }),
   L2: Object.freeze({ start_time: '15:00', end_time: '00:00', start_day_offset: 0, end_day_offset: 1, duration_hours: 8, min_staff: 1, max_staff: 8 }),
   N: Object.freeze({ start_time: '21:15', end_time: '06:45', start_day_offset: 0, end_day_offset: 1, duration_hours: 8.5, min_staff: 4, max_staff: 5 }),
+  // Weekend series use the same times as their weekday counterparts.
+  E1SA: Object.freeze({ start_time: '06:30', end_time: '15:30', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
+  E1WE: Object.freeze({ start_time: '06:30', end_time: '15:30', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
+  L1WE: Object.freeze({ start_time: '13:00', end_time: '22:00', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
 });
 
 // Cumulative staffing across all definitions of one shift type per day.
