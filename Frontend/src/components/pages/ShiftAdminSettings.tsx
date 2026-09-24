@@ -199,7 +199,7 @@ function getPlanningAuditIssues({
   }
 
   if (coloConfig.enabled) {
-    const requiredPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendInstallationStaff + coloConfig.weekendTroubleshootingStaff);
+    const requiredPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendDayStaff) + coloConfig.nightStaff;
     if (requiredPoolSize > coloConfig.employeePool.length) {
       add('colo-pool-too-small', 'error', `Für die aktivierte Colo-Planung werden gleichzeitig bis zu ${requiredPoolSize} Mitarbeitende benötigt, im Pool sind aber nur ${coloConfig.employeePool.length}.`, `Enabled Colo planning needs up to ${requiredPoolSize} employees at the same time, but the pool only has ${coloConfig.employeePool.length}.`);
     }
@@ -335,8 +335,8 @@ interface ColoConfig {
   enabled: boolean;
   employeePool: string[];
   weekdayPreparationStaff: number;
-  weekendInstallationStaff: number;
-  weekendTroubleshootingStaff: number;
+  nightStaff: number;
+  weekendDayStaff: number;
 }
 
 interface OvertimeConfig {
@@ -375,8 +375,8 @@ const DEFAULT_COLO_CONFIG: ColoConfig = {
   enabled: false,
   employeePool: [],
   weekdayPreparationStaff: 1,
-  weekendInstallationStaff: 1,
-  weekendTroubleshootingStaff: 1,
+  nightStaff: 1,
+  weekendDayStaff: 1,
 };
 
 const DEFAULT_OVERTIME_CONFIG: OvertimeConfig = {
@@ -476,8 +476,8 @@ function extractColoConfig(settings: Record<string, string>): ColoConfig {
     enabled: parseBooleanSetting(settings['shiftplan.colo_enabled'], DEFAULT_COLO_CONFIG.enabled),
     employeePool: parseEmployeePoolSetting(settings['shiftplan.colo_pool']),
     weekdayPreparationStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_weekday_preparation_staff'], DEFAULT_COLO_CONFIG.weekdayPreparationStaff)),
-    weekendInstallationStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_weekend_installation_staff'], DEFAULT_COLO_CONFIG.weekendInstallationStaff)),
-    weekendTroubleshootingStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_weekend_troubleshooting_staff'], DEFAULT_COLO_CONFIG.weekendTroubleshootingStaff)),
+    nightStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_night_staff'], DEFAULT_COLO_CONFIG.nightStaff)),
+    weekendDayStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_weekend_day_staff'] ?? settings['shiftplan.colo_weekend_installation_staff'], DEFAULT_COLO_CONFIG.weekendDayStaff)),
   };
 }
 
@@ -1097,8 +1097,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.colo_enabled': coloConfig.enabled,
         'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
         'shiftplan.colo_weekday_preparation_staff': Math.max(0, Math.trunc(coloConfig.weekdayPreparationStaff)),
-        'shiftplan.colo_weekend_installation_staff': Math.max(0, Math.trunc(coloConfig.weekendInstallationStaff)),
-        'shiftplan.colo_weekend_troubleshooting_staff': Math.max(0, Math.trunc(coloConfig.weekendTroubleshootingStaff)),
+        'shiftplan.colo_night_staff': Math.max(0, Math.trunc(coloConfig.nightStaff)),
+        'shiftplan.colo_weekend_day_staff': Math.max(0, Math.trunc(coloConfig.weekendDayStaff)),
       });
       await api.put('/app-settings', { 'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes) });
       showToast(isGerman ? 'Colo-Kompetenzplanung gespeichert.' : 'Colo competency planning saved.');
@@ -1306,7 +1306,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const selectedBlockedWeekdayEmployees = advancedSettings.blockedWeekdayEmployees.filter((employee) => (
     !normalizedBlockedWeekdaySearch || employee.toLocaleLowerCase('de').includes(normalizedBlockedWeekdaySearch)
   ));
-  const minimumWeekendPoolSize = coloConfig.weekendInstallationStaff + coloConfig.weekendTroubleshootingStaff;
+  const minimumColoPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendDayStaff) + coloConfig.nightStaff;
   const planningAuditErrors = planningAuditIssues.filter((issue) => issue.level === 'error');
   const planningAuditWarnings = planningAuditIssues.filter((issue) => issue.level === 'warning');
 
@@ -1336,7 +1336,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         <div className="theme-admin-hero rounded-3xl border border-cyan-400/25 p-5 shadow-[0_20px_50px_rgba(2,6,23,0.18)]">
           <div className="text-xs uppercase tracking-[0.2em] text-cyan-700/80 dark:text-cyan-200/70">Colo-Kompetenz</div>
           <div className="mt-3 text-3xl font-semibold text-foreground">{coloConfig.employeePool.length}</div>
-          <div className="mt-2 text-sm text-muted-foreground">{isGerman ? 'Ausgewählte Mitarbeitende für Vorbereitung, Installation und Troubleshooting.' : 'Selected employees for preparation, installation and troubleshooting.'}</div>
+          <div className="mt-2 text-sm text-muted-foreground">{isGerman ? 'Ausgewählte Mitarbeitende für Werktags-Vorbereitung, Nacht-Colo und Wochenend-Einsätze.' : 'Selected employees for weekday preparation, night Colo and weekend work.'}</div>
         </div>
         <div className="theme-admin-hero rounded-3xl border border-amber-400/25 p-5 shadow-[0_20px_50px_rgba(2,6,23,0.18)]">
           <div className="text-xs uppercase tracking-[0.2em] text-amber-700/80 dark:text-amber-200/70">{t("shiftAdmin.cardExclusions")}</div>
@@ -1779,8 +1779,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             <div className="font-semibold text-cyan-100">{isGerman ? 'Automatische COLO-Rollen im Wochenplan' : 'Automatic COLO roles in the weekly plan'}</div>
             <p className="mt-1 text-xs leading-5 text-slate-400">
               {isGerman
-                ? 'Montag bis Freitag wird Vorbereitung geplant. Samstag und Sonntag werden Installation und Troubleshooting getrennt besetzt. Berücksichtigt werden nur ausgewählte Mitarbeitende, die an diesem Tag im Dienst sind und keinen widersprechenden Wunsch hinterlegt haben.'
-                : 'Preparation is planned Monday through Friday. Installation and troubleshooting are staffed separately on Saturday and Sunday. Only selected employees who are working that day and have no conflicting preference are considered.'}
+                ? 'Montag bis Freitag: eine Person in der Frühschicht für Vorbereitung sowie E-Mail- und Telefonverkehr mit der Börse. Jede Nacht: eine Person für die Vorbereitung von Leitungen (Mo–Do) bzw. die Ausführung (Fr–So). Samstag und Sonntag: eine Person in der Frühschicht für Colo-Arbeiten vor Ort. Der Generator plant Pool-Mitarbeitende bevorzugt in diese Schichten – aber nie gegen Schichtwünsche, Sperrtage oder Wellbeing-Grenzen.'
+                : 'Monday to Friday: one early-shift person for preparation and e-mail/phone traffic with the exchange. Every night: one person for line preparation (Mon–Thu) or execution (Fri–Sun). Saturday and Sunday: one early-shift person for on-site Colo work. The generator prefers pool members for these shifts, but never against shift wishes, blocked days or wellbeing limits.'}
             </p>
           </div>
 
@@ -1794,16 +1794,16 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
 
           <div className="grid gap-4 md:grid-cols-3">
             <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Vorbereitung pro Werktag' : 'Preparation per weekday'}</label>
+              <label className="text-xs text-slate-400">{isGerman ? 'Mo–Fr Frühschicht (Vorbereitung/Börse)' : 'Mon–Fri early (preparation/exchange)'}</label>
               <input type="number" min="0" max="20" value={coloConfig.weekdayPreparationStaff} onChange={(event) => setColoConfig({ ...coloConfig, weekdayPreparationStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
             </div>
             <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Installation pro Wochenendtag' : 'Installation per weekend day'}</label>
-              <input type="number" min="0" max="20" value={coloConfig.weekendInstallationStaff} onChange={(event) => setColoConfig({ ...coloConfig, weekendInstallationStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              <label className="text-xs text-slate-400">{isGerman ? 'Jede Nacht (Leitungen/Ausführung)' : 'Every night (lines/execution)'}</label>
+              <input type="number" min="0" max="20" value={coloConfig.nightStaff} onChange={(event) => setColoConfig({ ...coloConfig, nightStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
             </div>
             <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Troubleshooting pro Wochenendtag' : 'Troubleshooting per weekend day'}</label>
-              <input type="number" min="0" max="20" value={coloConfig.weekendTroubleshootingStaff} onChange={(event) => setColoConfig({ ...coloConfig, weekendTroubleshootingStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              <label className="text-xs text-slate-400">{isGerman ? 'Sa/So Frühschicht (Arbeiten vor Ort)' : 'Sat/Sun early (on-site work)'}</label>
+              <input type="number" min="0" max="20" value={coloConfig.weekendDayStaff} onChange={(event) => setColoConfig({ ...coloConfig, weekendDayStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
             </div>
           </div>
 
@@ -1844,10 +1844,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             </div>
           </div>
 
-          {coloConfig.enabled && coloConfig.employeePool.length < Math.max(coloConfig.weekdayPreparationStaff, minimumWeekendPoolSize) ? (
+          {coloConfig.enabled && coloConfig.employeePool.length < minimumColoPoolSize ? (
             <div className="flex items-start gap-3 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{isGerman ? `Der Pool ist für die eingestellte Mindestbesetzung zu klein. Am Wochenende werden mindestens ${minimumWeekendPoolSize} unterschiedliche Mitarbeitende pro Tag benötigt.` : `The pool is too small for the configured minimum staffing. At least ${minimumWeekendPoolSize} different employees are required per weekend day.`}</span>
+              <span>{isGerman ? `Der Pool ist für die eingestellte Mindestbesetzung zu klein. Pro Tag werden mindestens ${minimumColoPoolSize} unterschiedliche Mitarbeitende (Tag + Nacht) benötigt.` : `The pool is too small for the configured minimum staffing. At least ${minimumColoPoolSize} different employees (day + night) are required per day.`}</span>
             </div>
           ) : null}
 
