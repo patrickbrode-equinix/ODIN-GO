@@ -21,6 +21,7 @@ import {
   parseDraftMonthId,
 } from '../lib/shiftplanMonth.js';
 import { parseMonthLabel } from '../lib/monthParser.js';
+import { countWeekdaysInRange, getWorkdayBasedTargetHours } from '../lib/shiftHours.js';
 import {
   buildDailyShiftSlots,
   buildShiftSlots,
@@ -1097,7 +1098,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       employeeNameLookup,
     });
   }
-  const targetHours = parseTargetHoursValue(planConfig.monthly_target_hours, 174);
+  const configuredMonthlyTargetHours = parseTargetHoursValue(planConfig.monthly_target_hours, 174);
+  // Month target follows the Mon-Fri working days of the month (Ø = configured monthly target).
+  const targetHours = getWorkdayBasedTargetHours({
+    year,
+    month: mon,
+    monthlyTargetHours: configuredMonthlyTargetHours,
+    annualTargetHours: planConfig.annual_target_hours,
+  });
   const employeeBaseTargetHours = Object.fromEntries(activeEmployees.map((employee) => [employee, targetHours]));
   const employeeTargetRes = await pool.query(
     `SELECT employee_name, target_hours
@@ -1112,9 +1120,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
   // Every month is planned against its own target. A deficit from an earlier
   // month must not inflate the next target, otherwise year plans oscillate.
+  const monthWeekdays = countWeekdaysInRange(year, mon, 1, numDays);
+  const periodWeekdays = countWeekdaysInRange(year, mon, planningStartDay, planningEndDay);
   const employeeTargetHours = Object.fromEntries(activeEmployees.map((employee) => {
     const periodBaseTarget = isPartialPeriod
-      ? employeeBaseTargetHours[employee] * (planningDays / numDays)
+      ? employeeBaseTargetHours[employee] * (monthWeekdays > 0 ? periodWeekdays / monthWeekdays : planningDays / numDays)
       : employeeBaseTargetHours[employee];
     return [employee, Number(Math.max(0, periodBaseTarget).toFixed(2))];
   }));
@@ -2809,7 +2819,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     'Wochenanker aktiv: Neue Serien werden zur nächsten Montagkante ausgerichtet',
     `Abwesenheitsgutschrift: Urlaub, Krank und Seminar zählen mit ${CREDITED_ABSENCE_HOURS} Stunden pro Werktag`,
     `Freitage nach Nacht: ${rotation.free_days_after_night || 0}, nach Wochenendarbeit: ${rotation.free_days_after_weekend || 0}`,
-    `Monatliche Zielzeit: ${targetHours} Stunden je Monat (kein Übertrag zwischen Monaten)`,
+    `Monatliche Zielzeit: ${targetHours} Stunden (Werktage Mo–Fr, Ø ${configuredMonthlyTargetHours} h; kein Übertrag zwischen Monaten)`,
     targetShortfalls.length > 0
       ? `Monatliche Unterstunden: ${targetShortfalls.length} Mitarbeiter unter Zielzeit`
       : 'Monatliche Zielzeit erreicht oder uebertroffen',

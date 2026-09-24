@@ -20,6 +20,43 @@ export function normalizeAnnualTargetHours(value, monthlyTargetHours = DEFAULT_M
   return normalizeTargetHours(value, normalizeTargetHours(monthlyTargetHours, DEFAULT_MONTHLY_TARGET_HOURS) * 12);
 }
 
+export function countWeekdaysInRange(year, month, startDay = 1, endDay = 31) {
+  const lastDay = new Date(year, month, 0).getDate();
+  const from = Math.max(1, startDay);
+  const to = Math.min(lastDay, endDay);
+  let count = 0;
+  for (let day = from; day <= to; day++) {
+    const weekday = new Date(year, month - 1, day).getDay();
+    if (weekday !== 0 && weekday !== 6) count++;
+  }
+  return count;
+}
+
+export function countWeekdaysInYear(year) {
+  let count = 0;
+  for (let month = 1; month <= 12; month++) count += countWeekdaysInRange(year, month);
+  return count;
+}
+
+// Distributes the annual target across the months by their Mon-Fri working days,
+// so a month with 21 weekdays gets ~168h and one with 23 weekdays ~184h while the
+// year still sums up to the annual target (Ø 174h with the default 2088h).
+export function getWorkdayBasedTargetHours({
+  year,
+  month,
+  monthlyTargetHours = DEFAULT_MONTHLY_TARGET_HOURS,
+  annualTargetHours,
+  startDay = 1,
+  endDay = 31,
+}) {
+  const normalizedMonthly = normalizeTargetHours(monthlyTargetHours, DEFAULT_MONTHLY_TARGET_HOURS);
+  const normalizedAnnual = normalizeAnnualTargetHours(annualTargetHours, normalizedMonthly);
+  const yearWeekdays = countWeekdaysInYear(year);
+  if (!yearWeekdays) return normalizedMonthly;
+  const weekdays = countWeekdaysInRange(year, month, startDay, endDay);
+  return Number(((normalizedAnnual * weekdays) / yearWeekdays).toFixed(2));
+}
+
 export function buildShiftHoursLookup(shiftDefinitions) {
   const lookup = new Map();
   for (const definition of Array.isArray(shiftDefinitions) ? shiftDefinitions : []) {
@@ -176,12 +213,18 @@ export function aggregateYearlyHours({
       const months = Array.from({ length: 12 }, (_, index) => {
         const month = index + 1;
         const monthActualHours = Number((monthlyHoursByEmployee.get(employeeName)?.get(month) || 0).toFixed(2));
-        const monthDiff = Number((monthActualHours - normalizedMonthlyTargetHours).toFixed(2));
+        const monthTargetHours = getWorkdayBasedTargetHours({
+          year,
+          month,
+          monthlyTargetHours: normalizedMonthlyTargetHours,
+          annualTargetHours: normalizedAnnualTargetHours,
+        });
+        const monthDiff = Number((monthActualHours - monthTargetHours).toFixed(2));
         return {
           month,
           key: monthLabelForYearMonth(year, month),
           actual_hours: monthActualHours,
-          target_hours: normalizedMonthlyTargetHours,
+          target_hours: monthTargetHours,
           diff_hours: monthDiff,
         };
       });
