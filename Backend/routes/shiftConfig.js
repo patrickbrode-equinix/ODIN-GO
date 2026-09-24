@@ -9,6 +9,7 @@ import { requireAuth, requireVerifiedIdentity } from '../middleware/authMiddlewa
 import { requirePageAccess } from '../middleware/requirePageAccess.js';
 import pool from '../db.js';
 import { ensureShiftplanSchema } from '../lib/ensureShiftplanSchema.js';
+import { DEFAULT_SHIFT_DEFINITIONS, DEFAULT_STAFFING_RULES, STAFFING_SHIFT_TYPES } from '../lib/shiftDefaults.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -368,6 +369,121 @@ router.delete('/definitions/:id', requirePageAccess('shiftplan_control', 'write'
 });
 
 /* ------------------------------------------------ */
+/* DEFAULTS & CUMULATIVE STAFFING                   */
+/* ------------------------------------------------ */
+
+async function loadStaffingRuleRows(client = pool) {
+  const { rows } = await client.query(
+    'SELECT shift_type, min_count, max_count FROM staffing_rules WHERE LOWER(shift_type) = ANY($1::text[])',
+    [STAFFING_SHIFT_TYPES]
+  );
+  return STAFFING_SHIFT_TYPES.map((shiftType) => {
+    const row = rows.find((entry) => String(entry.shift_type).toLowerCase() === shiftType);
+    return {
+      shift_type: shiftType,
+      min_count: row ? Number(row.min_count) : 0,
+      max_count: row && row.max_count !== null && row.max_count !== undefined ? Number(row.max_count) : null,
+    };
+  });
+}
+
+async function upsertStaffingRule(client, shiftType, minCount, maxCount) {
+  await client.query(
+    `INSERT INTO staffing_rules (shift_type, min_count, max_count)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (shift_type) DO UPDATE SET min_count = EXCLUDED.min_count, max_count = EXCLUDED.max_count`,
+    [shiftType, minCount, maxCount]
+  );
+}
+
+router.get('/defaults', (_req, res) => {
+  res.json({ ok: true, definitions: DEFAULT_SHIFT_DEFINITIONS, staffing: DEFAULT_STAFFING_RULES });
+});
+
+router.get('/staffing-rules', async (_req, res) => {
+  try {
+    res.json({ ok: true, rules: await loadStaffingRuleRows(), defaults: DEFAULT_STAFFING_RULES });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.put('/staffing-rules', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+  const input = Array.isArray(req.body?.rules) ? req.body.rules : [];
+  const normalized = [];
+  for (const rule of input) {
+    const shiftType = String(rule?.shift_type || '').trim().toLowerCase();
+    if (!STAFFING_SHIFT_TYPES.includes(shiftType)) return res.status(400).json({ ok: false, error: 'Ungültiger Schichttyp' });
+    const minCount = Number.parseInt(String(rule?.min_count ?? 0), 10);
+    const rawMax = rule?.max_count;
+    const maxCount = rawMax === null || rawMax === undefined || rawMax === '' ? null : Number.parseInt(String(rawMax), 10);
+    if (!Number.isInteger(minCount) || minCount < 0) return res.status(400).json({ ok: false, error: 'Ungültige Mindestbesetzung' });
+    if (maxCount !== null && (!Number.isInteger(maxCount) || maxCount < minCount)) {
+      return res.status(400).json({ ok: false, error: 'Die Maximalbesetzung darf die Mindestbesetzung nicht unterschreiten' });
+    }
+    normalized.push({ shiftType, minCount, maxCount });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    for (const rule of normalized) await upsertStaffingRule(client, rule.shiftType, rule.minCount, rule.maxCount);
+    await client.query('COMMIT');
+    res.json({ ok: true, rules: await loadStaffingRuleRows() });
+  } catch (err) {
+    await client?.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    client?.release();
+  }
+});
+
+// Restores the operational defaults. scope: 'all' | 'definitions' | 'staffing'; optional code limits it to one shift.
+router.post('/defaults/reset', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
+  const scope = ['all', 'definitions', 'staffing'].includes(req.body?.scope) ? req.body.scope : 'all';
+  const requestedCode = req.body?.code ? String(req.body.code).trim().toUpperCase() : null;
+  if (requestedCode && !DEFAULT_SHIFT_DEFINITIONS[requestedCode]) {
+    return res.status(400).json({ ok: false, error: 'Für diese Schicht gibt es keinen Standardwert' });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    if (scope !== 'staffing') {
+      const codes = requestedCode ? [requestedCode] : Object.keys(DEFAULT_SHIFT_DEFINITIONS);
+      for (const code of codes) {
+        const defaults = DEFAULT_SHIFT_DEFINITIONS[code];
+        await client.query(
+          `UPDATE shift_definitions
+           SET start_time = $2, end_time = $3, start_day_offset = $4, end_day_offset = $5,
+               duration_hours = $6, min_staff = $7, max_staff = $8, updated_at = NOW()
+           WHERE UPPER(code) = $1`,
+          [code, defaults.start_time, defaults.end_time, defaults.start_day_offset, defaults.end_day_offset, defaults.duration_hours, defaults.min_staff, defaults.max_staff]
+        );
+        await client.query(
+          `DELETE FROM shift_definition_day_overrides
+           WHERE shift_definition_id IN (SELECT id FROM shift_definitions WHERE UPPER(code) = $1)`,
+          [code]
+        );
+      }
+    }
+    if (scope !== 'definitions' && !requestedCode) {
+      for (const shiftType of STAFFING_SHIFT_TYPES) {
+        const defaults = DEFAULT_STAFFING_RULES[shiftType];
+        await upsertStaffingRule(client, shiftType, defaults.min_count, defaults.max_count);
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, rules: await loadStaffingRuleRows() });
+  } catch (err) {
+    await client?.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    client?.release();
+  }
+});
+
+/* ------------------------------------------------ */
 /* SPECIAL SHIFT POOLS                              */
 /* ------------------------------------------------ */
 
@@ -586,6 +702,14 @@ router.get('/exclusions', async (_req, res) => {
   }
 });
 
+function normalizeExclusionWeekdaysInput(value) {
+  if (!Array.isArray(value)) return null;
+  const weekdays = [...new Set(value
+    .map((day) => Number.parseInt(String(day), 10))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((left, right) => left - right);
+  return weekdays.length === 0 || weekdays.length === 7 ? null : JSON.stringify(weekdays);
+}
+
 router.post('/exclusions', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
   try {
     const { employee_name, reason, reason_text, fixed_shift_type } = req.body;
@@ -593,10 +717,10 @@ router.post('/exclusions', requirePageAccess('shiftplan_control', 'write'), asyn
     const actor = req.user?.email || req.user?.username || 'system';
     const normalizedFixedShiftType = normalizeFixedShiftType(fixed_shift_type);
     const { rows } = await pool.query(
-      `INSERT INTO shiftplan_exclusions (employee_name, reason, reason_text, fixed_shift_type, created_by)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO shiftplan_exclusions (employee_name, reason, reason_text, fixed_shift_type, weekdays, created_by)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6)
        RETURNING *`,
-      [employee_name.trim(), reason || 'admin_override', reason_text || null, normalizedFixedShiftType, actor]
+      [employee_name.trim(), reason || 'admin_override', reason_text || null, normalizedFixedShiftType, normalizeExclusionWeekdaysInput(req.body?.weekdays), actor]
     );
     res.json({ ok: true, exclusion: rows[0] });
   } catch (err) {
@@ -612,15 +736,17 @@ router.patch('/exclusions/:id', requirePageAccess('shiftplan_control', 'write'),
     const normalizedFixedShiftType = normalizeFixedShiftType(req.body?.fixed_shift_type);
     const nextReason = normalizedFixedShiftType ? 'fixed_shift' : (req.body?.reason || 'admin_override');
     const nextReasonText = req.body?.reason_text ?? null;
+    const updatesWeekdays = Object.prototype.hasOwnProperty.call(req.body || {}, 'weekdays');
 
     const { rows } = await pool.query(
       `UPDATE shiftplan_exclusions
        SET reason = $1,
            reason_text = $2,
-           fixed_shift_type = $3
+           fixed_shift_type = $3,
+           weekdays = CASE WHEN $5::boolean THEN $6::jsonb ELSE weekdays END
        WHERE id = $4 AND is_active = TRUE
        RETURNING *`,
-      [nextReason, nextReasonText, normalizedFixedShiftType, id]
+      [nextReason, nextReasonText, normalizedFixedShiftType, id, updatesWeekdays, normalizeExclusionWeekdaysInput(req.body?.weekdays)]
     );
 
     if (!rows[0]) return res.status(404).json({ ok: false, error: 'Eintrag nicht gefunden' });
