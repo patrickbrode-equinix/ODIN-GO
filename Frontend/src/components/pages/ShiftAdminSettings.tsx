@@ -946,10 +946,11 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }
   };
 
-  const saveShortNightOptions = async () => {
+  const saveShortNightOptions = async (override?: Partial<ShortNightOptions>) => {
     setSaving('short-night');
+    const payload = { ...shortNightOptions, ...override };
     try {
-      const { data } = await api.put('/shift-config/short-night-options', shortNightOptions);
+      const { data } = await api.put('/shift-config/short-night-options', payload);
       const next = data.options as ShortNightOptions;
       setShortNightOptions(next);
       setRotation((current) => current ? {
@@ -1929,8 +1930,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               </label>
               <div className="rounded-2xl border border-violet-300/25 bg-violet-500/10 px-4 py-3 text-sm text-slate-100">
                 <div className="flex items-start gap-2">
-                  <input type="checkbox" checked={shortNightOptions.enabled} onChange={(event) => setShortNightOptions({ ...shortNightOptions, enabled: event.target.checked })} className="mt-0.5 rounded border-white/20 bg-slate-950" />
-                  <span><span className="block font-medium">{isGerman ? 'Kurze Nachtschicht (NK)' : 'Short night shift (NK)'}</span><span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Erstellt bis zu drei Nachtdienste als NK. NK wird im Draft und in allen Planansichten sichtbar ausgewiesen.' : 'Creates up to three night duties as NK. NK is shown in drafts and every schedule view.'}</span></span>
+                  <input type="checkbox" checked={shortNightOptions.enabled} disabled={saving === 'short-night'} onChange={(event) => { const enabled = event.target.checked; setShortNightOptions({ ...shortNightOptions, enabled }); void saveShortNightOptions({ enabled }); }} className="mt-0.5 rounded border-white/20 bg-slate-950" />
+                  <span><span className="block font-medium">{isGerman ? 'Kurze Nachtschicht (NK) für alle' : 'Short night shift (NK) for everyone'}</span><span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Wird sofort gespeichert. Aktiv: alle Nachtdienste werden als NK-Blöcke (max. 3 Nächte) geplant. Aus: nur Mitarbeiter, die in ihren Wünschen „Kurze Nachtblöcke“ gewählt haben, bekommen NK.' : 'Saved immediately. On: all night duties are planned as NK blocks (max. 3 nights). Off: only employees who chose short night blocks in their preferences get NK.'}</span></span>
                 </div>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Start' : 'Start'}<input type="time" value={shortNightOptions.start_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, start_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
