@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarRange,
   CheckCircle2,
+  ChevronDown,
   Clock3,
   FileSpreadsheet,
   LayoutGrid,
@@ -197,6 +198,7 @@ export default function ShiftplanDrafts() {
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
   const [yearDrafts, setYearDrafts] = useState<DraftSummary[]>([]);
+  const [yearPlanExpanded, setYearPlanExpanded] = useState(false);
   const [viewMode, setViewMode] = useState<ViewMode>(initialParams.get("view") === "year" ? "year" : "month");
   const [selectedYear, setSelectedYear] = useState(Number(initialParams.get("year")) || 2027);
   const [feedback, setFeedback] = useState<DraftFeedback[]>([]);
@@ -294,6 +296,7 @@ export default function ShiftplanDrafts() {
 
   const selectYear = async (year: number) => {
     setSelectedYear(year);
+    setYearPlanExpanded(false);
     if (viewMode === "year") await loadYear(year);
   };
 
@@ -388,11 +391,23 @@ export default function ShiftplanDrafts() {
 
       {viewMode === "year" ? (
         <div className="mt-5 space-y-5">
-          <section className="rounded-xl border border-slate-700 bg-slate-900 p-5">
-            <h2 className="text-xl font-bold text-foreground">Jahresplanung {selectedYear}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Je Monat wird die neueste gespeicherte Draft-Version angezeigt. Öffne einen Monat für Votes und Kommentare.</p>
+          <section className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
+            <button
+              type="button"
+              onClick={() => setYearPlanExpanded((current) => !current)}
+              aria-expanded={yearPlanExpanded}
+              className="flex w-full items-center justify-between gap-4 p-5 text-left transition hover:bg-white/[0.03]"
+            >
+              <div>
+                <h2 className="text-xl font-bold text-foreground">Jahresplanung {selectedYear}</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {yearDrafts.length} Monats-Drafts · {yearPlanExpanded ? "Monate einklappen" : "Monate ausklappen"}
+                </p>
+              </div>
+              <ChevronDown className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform ${yearPlanExpanded ? "rotate-180" : ""}`} />
+            </button>
           </section>
-          {yearDrafts.map((draft) => (
+          {yearPlanExpanded ? yearDrafts.map((draft) => (
             <section key={draft.id} className="liquid-panel overflow-hidden rounded-[22px]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 p-4">
                 <div><h3 className="text-lg font-bold text-foreground">{draft.title || formatMonth(draft.month)} <span className="text-xs font-normal text-muted-foreground">v{draft.version}</span></h3><div className="mt-1 text-xs text-muted-foreground">{draft.feedback_count || 0} Kommentare · {draft.approve_votes || 0} Zustimmung · {draft.needs_changes_votes || 0} Änderungswünsche</div></div>
@@ -400,7 +415,7 @@ export default function ShiftplanDrafts() {
               </div>
               <LazyYearDraftTable draft={draft} />
             </section>
-          ))}
+          )) : null}
           {!yearDrafts.length && !loading ? <div className="liquid-panel rounded-[26px] p-12 text-center text-muted-foreground">Für {selectedYear} sind noch keine gespeicherten Drafts vorhanden.</div> : null}
         </div>
       ) : (

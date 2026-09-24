@@ -55,6 +55,13 @@ const COPY: Record<LanguageCode, Record<string, string>> = {
     days: "Tage",
     hours: "Std.",
     expired: "abgelaufen",
+    comments: "Kommentare",
+    commentPlaceholder: "Kommentar zur Abstimmung hinzufügen…",
+    addComment: "Kommentieren",
+    addingComment: "Wird gespeichert…",
+    voteToComment: "Stimme zuerst ab, um einen Kommentar zu hinterlassen.",
+    noComments: "Noch keine Kommentare.",
+    commentFailed: "Der Kommentar konnte nicht gespeichert werden.",
   },
   en: {
     title: "Polls",
@@ -97,6 +104,13 @@ const COPY: Record<LanguageCode, Record<string, string>> = {
     days: "days",
     hours: "hrs",
     expired: "expired",
+    comments: "Comments",
+    commentPlaceholder: "Add a comment about this poll…",
+    addComment: "Comment",
+    addingComment: "Saving…",
+    voteToComment: "Vote first to leave a comment.",
+    noComments: "No comments yet.",
+    commentFailed: "The comment could not be saved.",
   },
 };
 
@@ -122,6 +136,7 @@ type Poll = {
 type PollDetail = Poll & {
   votes: { option_index: number; count: number; voters: { userId: number; name: string; email: string }[] }[];
   myVote: number | null;
+  comments: { id: number; user_id: number; user_name: string; comment: string; created_at: string }[];
 };
 
 /* ─────────────── Helpers ─────────────── */
@@ -298,6 +313,9 @@ function PollCard({ poll, onUpdate }: { poll: Poll; onUpdate: () => void }) {
   const [detail, setDetail] = useState<PollDetail | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [voting, setVoting] = useState(false);
+  const [comment, setComment] = useState("");
+  const [commenting, setCommenting] = useState(false);
+  const [commentError, setCommentError] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const expired = isPollExpired(poll);
   const manage = canManage(poll, user);
@@ -328,6 +346,22 @@ function PollCard({ poll, onUpdate }: { poll: Poll; onUpdate: () => void }) {
       await api.patch(`/polls/${poll.id}`, { closed: !poll.closed });
       onUpdate();
     } catch { /* ignore */ }
+  };
+
+  const addComment = async () => {
+    const value = comment.trim();
+    if (!value || detail?.myVote === null || detail?.myVote === undefined) return;
+    setCommenting(true);
+    setCommentError("");
+    try {
+      await api.post(`/polls/${poll.id}/comments`, { comment: value });
+      setComment("");
+      await loadDetail();
+    } catch (requestError: any) {
+      setCommentError(requestError.response?.data?.error || c.commentFailed);
+    } finally {
+      setCommenting(false);
+    }
   };
 
   const toggleArchived = async () => {
@@ -449,6 +483,51 @@ function PollCard({ poll, onUpdate }: { poll: Poll; onUpdate: () => void }) {
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…
             </div>
           )}
+
+          {detail ? (
+            <section className="space-y-2 border-t border-border/50 pt-3">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{c.comments}</h4>
+              {detail.comments?.length ? (
+                <div className="space-y-2">
+                  {detail.comments.map((entry) => (
+                    <div key={entry.id} className="rounded-lg border border-border/50 bg-background/50 px-3 py-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                        <span className="font-semibold text-foreground">{entry.user_name}</span>
+                        <span>{new Date(entry.created_at).toLocaleString(language === "de" ? "de-DE" : "en-US")}</span>
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-foreground">{entry.comment}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">{c.noComments}</p>
+              )}
+
+              {detail.myVote !== null ? (
+                <div className="space-y-2">
+                  <textarea
+                    value={comment}
+                    onChange={(event) => setComment(event.target.value)}
+                    maxLength={2000}
+                    rows={3}
+                    placeholder={c.commentPlaceholder}
+                    className="w-full resize-y rounded-lg border border-border/70 bg-background/60 px-3 py-2 text-sm text-foreground outline-none transition focus:border-sky-500/40"
+                  />
+                  {commentError ? <p className="text-xs text-red-400">{commentError}</p> : null}
+                  <button
+                    type="button"
+                    disabled={commenting || !comment.trim()}
+                    onClick={addComment}
+                    className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-300 transition hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {commenting ? c.addingComment : c.addComment}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-xs text-amber-400/80">{c.voteToComment}</p>
+              )}
+            </section>
+          ) : null}
 
           {/* Admin actions */}
           {manage && (

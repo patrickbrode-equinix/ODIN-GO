@@ -43,6 +43,16 @@ export async function ensureShiftplanSchema() {
       }
 
       await pool.query(`
+        ALTER TABLE shiftplan_exclusions
+          ADD COLUMN IF NOT EXISTS weekdays JSONB NULL
+      `);
+
+      await pool.query(`
+        ALTER TABLE staffing_rules
+          ADD COLUMN IF NOT EXISTS max_count INT NULL
+      `);
+
+      await pool.query(`
         ALTER TABLE shift_planning_config
           ADD COLUMN IF NOT EXISTS monthly_target_hours NUMERIC(6,2) NOT NULL DEFAULT 174
       `);

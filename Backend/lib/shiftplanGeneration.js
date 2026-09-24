@@ -36,6 +36,18 @@ export function isShiftDefinitionApplicable(definition, dayOfWeek) {
   return normalizeApplicableDays(definition?.applicable_days).includes(dayOfWeek);
 }
 
+export function normalizeExclusionWeekdays(value) {
+  let source = value;
+  if (typeof source === 'string') {
+    try { source = JSON.parse(source); } catch { source = null; }
+  }
+  if (!Array.isArray(source)) return [0, 1, 2, 3, 4, 5, 6];
+  const weekdays = [...new Set(source
+    .map((day) => Number.parseInt(String(day), 10))
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((left, right) => left - right);
+  return weekdays.length > 0 ? weekdays : [0, 1, 2, 3, 4, 5, 6];
+}
+
 export function buildStaffingRulesByShiftType(rows = []) {
   const rules = {};
 
@@ -50,7 +62,28 @@ export function buildStaffingRulesByShiftType(rows = []) {
   return rules;
 }
 
-export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOfWeek = null) {
+// Cumulative per-type maximum; types without a configured maximum are unlimited.
+export function buildStaffingMaximumsByShiftType(rows = []) {
+  const maximums = {};
+
+  for (const row of rows) {
+    const key = normalizePlanningShiftTypeKey(row?.shift_type);
+    if (!key || row?.max_count === null || row?.max_count === undefined || row?.max_count === '') continue;
+    const maxCount = Number.parseInt(String(row.max_count), 10);
+    if (!Number.isFinite(maxCount) || maxCount < 0) continue;
+    maximums[key] = Object.prototype.hasOwnProperty.call(maximums, key) ? Math.min(maximums[key], maxCount) : maxCount;
+  }
+
+  return maximums;
+}
+
+function getStaffingMaximum(staffingMaximums, typeKey) {
+  if (!staffingMaximums || !Object.prototype.hasOwnProperty.call(staffingMaximums, typeKey)) return Infinity;
+  const value = Number.parseInt(String(staffingMaximums[typeKey]), 10);
+  return Number.isFinite(value) && value >= 0 ? value : Infinity;
+}
+
+export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOfWeek = null, staffingMaximums = {}) {
   const effectiveDefinitions = Number.isInteger(dayOfWeek)
     ? shiftDefinitions.filter((definition) => isShiftDefinitionApplicable(definition, dayOfWeek))
     : shiftDefinitions;
@@ -75,7 +108,11 @@ export function buildShiftSlots(shiftDefinitions = [], staffingRules = {}, dayOf
     }
 
     const typeKey = normalizePlanningShiftTypeKey(definitions[0]?.shift_type);
-    const targetCount = Math.max(baseCount, Number.parseInt(String(staffingRules[typeKey] ?? 0), 10) || 0);
+    const typeMaximum = getStaffingMaximum(staffingMaximums, typeKey);
+    const targetCount = Math.min(
+      Math.max(baseCount, Number.parseInt(String(staffingRules[typeKey] ?? 0), 10) || 0),
+      Math.max(typeMaximum, baseCount),
+    );
     let remaining = targetCount - baseCount;
 
     while (remaining > 0) {
@@ -438,8 +475,9 @@ export function buildDailyShiftSlots({
   day = 1,
   numDays = 31,
   dayOfWeek = null,
+  staffingMaximums = {},
 } = {}) {
-  const baseSlots = buildShiftSlots(shiftDefinitions, staffingRules, dayOfWeek);
+  const baseSlots = buildShiftSlots(shiftDefinitions, staffingRules, dayOfWeek, staffingMaximums);
   const baselineTotalSlots = baseSlots.reduce((sum, definition) => sum + (definition.planned_slots || 0), 0);
   const avgShiftHours = baseSlots.length > 0
     ? baseSlots.reduce((sum, definition) => sum + getShiftDurationHours(definition, dayOfWeek), 0) / baseSlots.length
@@ -513,6 +551,11 @@ export function buildDailyShiftSlots({
   let remainingExtraSlots = Math.max(clampedTargetSlots - baselineTotalSlots, 0);
 
   const slotCounts = new Map(baseSlots.map((definition) => [definition.code, definition.planned_slots || 0]));
+  const typeSlotCounts = new Map();
+  for (const definition of baseSlots) {
+    const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
+    typeSlotCounts.set(typeKey, (typeSlotCounts.get(typeKey) || 0) + (definition.planned_slots || 0));
+  }
 
   while (remainingExtraSlots > 0) {
     let placedExtraSlot = false;
@@ -523,10 +566,13 @@ export function buildDailyShiftSlots({
       const maxStaff = Number.parseInt(String(definition?.max_staff ?? 0), 10);
       const normalizedMaxStaff = Number.isFinite(maxStaff) && maxStaff >= 0 ? maxStaff : 0;
       const currentCount = slotCounts.get(definition.code) || 0;
+      const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
 
       if (currentCount >= normalizedMaxStaff) continue;
+      if ((typeSlotCounts.get(typeKey) || 0) >= getStaffingMaximum(staffingMaximums, typeKey)) continue;
 
       slotCounts.set(definition.code, currentCount + 1);
+      typeSlotCounts.set(typeKey, (typeSlotCounts.get(typeKey) || 0) + 1);
       remainingExtraSlots -= 1;
       placedExtraSlot = true;
     }

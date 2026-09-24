@@ -10,9 +10,6 @@ import {
   ChevronDown,
   ClipboardList,
   Cloud,
-  CloudLightning,
-  CloudRain,
-  CloudSnow,
   Droplets,
   Expand,
   FileText,
@@ -41,6 +38,8 @@ import { useTheme } from "../ThemeProvider";
 import { PageGuard } from "../../router/PageGuard";
 import HeaderWorldClock from "../HeaderWorldClock";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { AnimatedWeatherIcon, weatherBackdropClass } from "../widgets/AnimatedWeatherIcon";
+import { AnimatedNumber, Sparkline } from "../widgets/MotionWidgets";
 
 const Shiftplan = lazy(() => import("./Shiftplan"));
 const ShiftplanDrafts = lazy(() => import("./ShiftplanDrafts"));
@@ -142,23 +141,20 @@ function localDateKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function WeatherIcon({ code, isDay, className = "h-5 w-5" }: { code?: number | null; isDay: boolean; className?: string }) {
-  const shared = `${className} shrink-0`;
-  if (code === 0 || code === 1) {
-    return isDay
-      ? <Sun className={`${shared} animate-[odin-weather-sun_12s_linear_infinite] text-amber-300`} />
-      : <Moon className={`${shared} animate-[odin-weather-float_3s_ease-in-out_infinite] text-blue-200`} />;
-  }
-  if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].includes(code)) {
-    return <CloudRain className={`${shared} animate-[odin-weather-rain_1.8s_ease-in-out_infinite] text-blue-300`} />;
-  }
-  if ([71, 73, 75, 77, 85, 86].includes(code)) {
-    return <CloudSnow className={`${shared} animate-[odin-weather-float_3s_ease-in-out_infinite] text-cyan-100`} />;
-  }
-  if ([95, 96, 99].includes(code)) {
-    return <CloudLightning className={`${shared} animate-pulse text-violet-300`} />;
-  }
-  return <Cloud className={`${shared} animate-[odin-weather-float_3s_ease-in-out_infinite] text-slate-300`} />;
+function WeatherIcon({ code, isDay, className = "h-5 w-5", detailed = false }: { code?: number | null; isDay: boolean; className?: string; detailed?: boolean }) {
+  return <AnimatedWeatherIcon code={code} isDay={isDay} className={className} detailed={detailed} />;
+}
+
+function formatDegree(value: number | null) {
+  return value === null ? "–" : `${Math.round(value)}°`;
+}
+
+function formatUsd(value: number | null) {
+  return value === null ? "–" : new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+}
+
+function formatCount(value: number | null) {
+  return value === null ? "–" : String(Math.round(value));
 }
 
 function weatherDescription(code?: number | null) {
@@ -188,9 +184,25 @@ function forecastDayLabel(date: string, index: number, language: "de" | "en") {
   return new Date(`${date}T12:00:00`).toLocaleDateString(language === "de" ? "de-DE" : "en-US", { weekday: "short" });
 }
 
-function formatMarketPrice(quote: MarketQuote | null) {
-  if (!quote?.available || typeof quote.price !== "number" || !Number.isFinite(quote.price)) return "–";
-  return new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(quote.price));
+function TemperatureRange({ day, days }: { day: WeatherDay; days: WeatherDay[] }) {
+  const mins = days.map((entry) => entry.temperatureMin).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const maxs = days.map((entry) => entry.temperatureMax).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (!mins.length || !maxs.length || typeof day.temperatureMin !== "number" || typeof day.temperatureMax !== "number") {
+    return <span className="odin-day-track h-1 w-12 rounded-full bg-slate-800" />;
+  }
+  const low = Math.min(...mins);
+  const high = Math.max(...maxs);
+  const span = high - low || 1;
+  const left = ((day.temperatureMin - low) / span) * 100;
+  const width = Math.max(8, ((day.temperatureMax - day.temperatureMin) / span) * 100);
+  return (
+    <span className="odin-day-track relative h-1 w-12 overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+      <span
+        className="odin-day-bar absolute inset-y-0 rounded-full bg-gradient-to-r from-sky-400 via-amber-300 to-orange-400"
+        style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
+      />
+    </span>
+  );
 }
 
 export default function OdinGoWorkspace() {
@@ -214,6 +226,8 @@ export default function OdinGoWorkspace() {
   const [helpTabId, setHelpTabId] = useState<string | null>(null);
   const weatherPanelRef = useRef<HTMLDivElement>(null);
   const marketPanelRef = useRef<HTMLDivElement>(null);
+  const previousPriceRef = useRef<number | null>(null);
+  const [priceFlash, setPriceFlash] = useState<{ direction: "up" | "down"; key: number } | null>(null);
 
   const sendBridgeMessage = useCallback((type: string, payload: Record<string, unknown> = {}) => {
     if (window.parent !== window) window.parent.postMessage({ type, ...payload }, "*");
@@ -260,13 +274,22 @@ export default function OdinGoWorkspace() {
 
   useEffect(() => {
     void refreshHeader();
+    void loadMarketHistory();
     const staffingTimer = window.setInterval(() => void loadStaffing(), 60_000);
     const externalTimer = window.setInterval(() => void loadMarketAndWeather(), 5 * 60_000);
     return () => {
       window.clearInterval(staffingTimer);
       window.clearInterval(externalTimer);
     };
-  }, [loadMarketAndWeather, loadStaffing, refreshHeader]);
+  }, [loadMarketAndWeather, loadMarketHistory, loadStaffing, refreshHeader]);
+
+  useEffect(() => {
+    const price = market?.available && typeof market.price === "number" && Number.isFinite(market.price) ? market.price : null;
+    const previous = previousPriceRef.current;
+    previousPriceRef.current = price;
+    if (price === null || previous === null || price === previous) return;
+    setPriceFlash({ direction: price > previous ? "up" : "down", key: Date.now() });
+  }, [market]);
 
   useEffect(() => {
     if (!weatherOpen) return undefined;
@@ -400,9 +423,18 @@ export default function OdinGoWorkspace() {
         </div>
 
         <div className="ml-auto flex min-w-0 items-center gap-1.5" aria-label="Aktuelle Personalstärke">
-          <span className="rounded-md border border-slate-600 border-l-orange-500 bg-slate-950 px-2 py-1.5 text-[10px] font-bold">Früh {staffing?.early ?? "–"}</span>
-          <span className="rounded-md border border-slate-600 border-l-yellow-400 bg-slate-950 px-2 py-1.5 text-[10px] font-bold">Spät {staffing?.late ?? "–"}</span>
-          <span className="rounded-md border border-slate-600 border-l-blue-500 bg-slate-950 px-2 py-1.5 text-[10px] font-bold">Nacht {staffing?.night ?? "–"}</span>
+          {([
+            { key: "early", label: language === "de" ? "Früh" : "Early", value: staffing?.early, dot: "bg-orange-400", ring: "border-l-orange-500" },
+            { key: "late", label: language === "de" ? "Spät" : "Late", value: staffing?.late, dot: "bg-yellow-300", ring: "border-l-yellow-400" },
+            { key: "night", label: language === "de" ? "Nacht" : "Night", value: staffing?.night, dot: "bg-blue-400", ring: "border-l-blue-500" },
+          ] as const).map((entry) => (
+            <span key={entry.key} className={`odin-chip flex h-11 min-w-[58px] flex-col justify-center rounded-lg border border-slate-700 border-l-2 ${entry.ring} px-2.5 leading-tight`}>
+              <span className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                <span className={`h-1.5 w-1.5 rounded-full ${entry.dot}`} />{entry.label}
+              </span>
+              <AnimatedNumber value={entry.value ?? null} format={formatCount} className="text-sm font-bold tabular-nums text-slate-100" />
+            </span>
+          ))}
         </div>
 
         <div ref={marketPanelRef} className="relative hidden md:block">
@@ -411,19 +443,30 @@ export default function OdinGoWorkspace() {
             aria-expanded={marketOpen}
             aria-haspopup="dialog"
             onClick={toggleMarket}
-            className={`flex h-11 min-w-32 items-center gap-2 rounded-md border bg-slate-950 px-2.5 text-left transition ${marketOpen ? "border-blue-400 ring-2 ring-blue-500/20" : "border-slate-600 hover:border-slate-500 hover:bg-slate-900"}`}
+            className={`odin-chip flex h-11 min-w-32 items-center gap-2 rounded-lg border px-2.5 text-left transition ${marketOpen ? "border-blue-400 ring-2 ring-blue-500/20" : "border-slate-700 hover:border-slate-500"}`}
             title={market?.asOf ? `EQIX · Stand ${new Date(market.asOf).toLocaleString("de-DE")}` : "Equinix Aktienkurs"}
           >
-            {Number(market?.changePercent) >= 0
-              ? <TrendingUp className="h-4 w-4 animate-[odin-market-pulse_2.6s_ease-in-out_infinite] text-emerald-400" />
-              : <TrendingDown className="h-4 w-4 animate-[odin-market-pulse_2.6s_ease-in-out_infinite] text-red-400" />}
-            <div className="min-w-0 flex-1 leading-tight">
-              <div className="text-[9px] font-bold tracking-wider text-slate-400">EQIX</div>
-              <div className="whitespace-nowrap text-[11px] font-bold tabular-nums text-slate-100">
-                ${formatMarketPrice(market)}
-                {typeof market?.changePercent === "number" && Number.isFinite(market.changePercent) ? <span className={`ml-1 ${market.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>{market.changePercent.toFixed(2)}%</span> : null}
+            <div className="min-w-0 leading-tight">
+              <div className="flex items-center gap-1.5 text-[9px] font-bold tracking-wider text-slate-400">
+                <span className={`odin-live-dot ${market?.stale ? "bg-amber-400" : Number(market?.changePercent) >= 0 ? "bg-emerald-400" : "bg-red-400"}`} />
+                EQIX
+                {typeof market?.changePercent === "number" && Number.isFinite(market.changePercent) ? (
+                  <span className={`flex items-center gap-0.5 ${market.changePercent >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    {market.changePercent >= 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
+                    {market.changePercent >= 0 ? "+" : ""}{market.changePercent.toFixed(2)}%
+                  </span>
+                ) : null}
+              </div>
+              <div className="relative -mx-1 mt-0.5 whitespace-nowrap rounded px-1 text-[12px] font-bold tabular-nums text-slate-100">
+                {priceFlash ? <span key={priceFlash.key} aria-hidden="true" className={`absolute inset-0 rounded ${priceFlash.direction === "up" ? "odin-flash-up" : "odin-flash-down"}`} /> : null}
+                <span className="relative">$<AnimatedNumber value={market?.available ? market.price : null} format={formatUsd} initialRatio={0.94} duration={1.2} /></span>
               </div>
             </div>
+            <Sparkline
+              values={(marketHistory?.points || []).slice(-60).map((point) => point.price)}
+              positive={Number(marketHistory?.changePercent ?? market?.changePercent ?? 0) >= 0}
+              className="hidden h-7 w-16 lg:block"
+            />
             <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${marketOpen ? "rotate-180" : ""}`} />
           </button>
 
@@ -440,12 +483,12 @@ export default function OdinGoWorkspace() {
             aria-expanded={weatherOpen}
             aria-haspopup="dialog"
             onClick={() => { setMarketOpen(false); setClockOpen(false); setWeatherOpen((open) => !open); }}
-            className={`flex h-11 min-w-32 items-center gap-2 rounded-md border bg-slate-950 px-2.5 text-left transition ${weatherOpen ? "border-blue-400 ring-2 ring-blue-500/20" : "border-slate-600 hover:border-slate-500 hover:bg-slate-900"}`}
+            className={`odin-chip flex h-11 min-w-32 items-center gap-2 rounded-lg border px-2.5 text-left transition ${weatherOpen ? "border-blue-400 ring-2 ring-blue-500/20" : "border-slate-700 hover:border-slate-500"}`}
             title={weather?.current ? `Gefühlt ${degree(weather.current.apparentTemperature)} · Wind ${degree(weather.current.windSpeed).replace("°", " km/h")}` : "Wetter wird geladen"}
           >
-            {weather?.current ? <WeatherIcon code={weather.current.weatherCode} isDay={weather.current.isDay} /> : <Cloud className="h-5 w-5 text-slate-500" />}
+            {weather?.current ? <WeatherIcon code={weather.current.weatherCode} isDay={weather.current.isDay} className="h-8 w-8" /> : <Cloud className="h-5 w-5 text-slate-500" />}
             <div className="min-w-0 flex-1 leading-tight">
-              <div className="whitespace-nowrap text-[11px] font-bold tabular-nums text-slate-100">{weather?.current ? `${degree(weather.current.temperature)}C` : "Wetter –"}</div>
+              <div className="whitespace-nowrap text-[13px] font-bold tabular-nums text-slate-100">{weather?.current ? <><AnimatedNumber value={weather.current.temperature} format={formatDegree} />C</> : "Wetter –"}</div>
               <div className="flex max-w-24 items-center gap-1 truncate text-[9px] text-slate-400"><MapPin className="h-2.5 w-2.5 shrink-0" />{weather?.location?.city || (language === "de" ? "Standort" : "Location")}</div>
             </div>
             <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${weatherOpen ? "rotate-180" : ""}`} />
@@ -453,30 +496,29 @@ export default function OdinGoWorkspace() {
 
           {weatherOpen ? (
             <section role="dialog" aria-label="Wettervorhersage" className="absolute right-0 top-[52px] z-50 w-[min(520px,calc(100vw-24px))] animate-[odin-weather-panel-in_180ms_ease-out] overflow-hidden rounded-xl border border-slate-600 bg-slate-950 shadow-2xl shadow-black/60">
-              <div className="relative overflow-hidden border-b border-slate-700 bg-gradient-to-br from-slate-800 via-slate-900 to-blue-950 px-5 py-4">
-                <div className="odin-weather-panel-glow absolute -right-8 -top-12 h-36 w-36 rounded-full bg-blue-400/10 blur-2xl" />
+              <div className={`${weatherBackdropClass(weather?.current?.weatherCode, weather?.current?.isDay ?? true)} border-b border-slate-700 px-5 py-4`}>
                 <div className="relative flex items-start justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-400"><MapPin className="h-3 w-3" />{weather?.location?.city || (language === "de" ? "Standort" : "Location")}</div>
-                    <div className="mt-2 text-3xl font-semibold tabular-nums text-white">{degree(weather?.current?.temperature)}C</div>
-                    <div className="mt-1 text-sm font-medium text-slate-200">{weatherDescription(weather?.current?.weatherCode)}</div>
-                    <div className="mt-2 flex gap-3 text-[11px] text-slate-400">
+                  <div className="odin-stagger">
+                    <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-300"><MapPin className="h-3 w-3" />{weather?.location?.city || (language === "de" ? "Standort" : "Location")}</div>
+                    <div className="mt-2 text-4xl font-semibold tabular-nums tracking-tight text-white"><AnimatedNumber value={weather?.current?.temperature ?? null} format={formatDegree} duration={1.1} />C</div>
+                    <div className="mt-1 text-sm font-medium text-slate-100">{weatherDescription(weather?.current?.weatherCode)}</div>
+                    <div className="mt-2 flex gap-3 text-[11px] text-slate-300">
                       <span>Gefühlt {degree(weather?.current?.apparentTemperature)}C</span>
                       <span className="flex items-center gap-1"><Wind className="h-3 w-3" />{degree(weather?.current?.windSpeed).replace("°", " km/h")}</span>
                     </div>
                   </div>
-                  <WeatherIcon code={weather?.current?.weatherCode} isDay={weather?.current?.isDay ?? true} className="h-16 w-16" />
+                  <WeatherIcon code={weather?.current?.weatherCode} isDay={weather?.current?.isDay ?? true} className="h-24 w-24 -my-2 drop-shadow-[0_8px_24px_rgba(0,0,0,0.45)]" detailed />
                 </div>
               </div>
 
               <div className="border-b border-slate-800 px-4 py-3">
                 <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{language === "de" ? "Heute · nächste Stunden" : "Today · next hours"}</div>
                 {upcomingHours.length ? (
-                  <div className="grid grid-cols-6 gap-1.5">
+                  <div className="odin-stagger grid grid-cols-6 gap-1.5">
                     {upcomingHours.map((hour) => (
-                      <div key={hour.time} className="rounded-lg border border-slate-800 bg-slate-900/70 px-1.5 py-2 text-center">
+                      <div key={hour.time} className="rounded-lg border border-slate-800 bg-slate-900/70 px-1.5 py-2 text-center transition hover:-translate-y-0.5 hover:border-slate-600">
                         <div className="text-[9px] font-semibold text-slate-400">{new Date(hour.time).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}</div>
-                        <div className="my-1.5 flex justify-center"><WeatherIcon code={hour.weatherCode} isDay={true} className="h-5 w-5" /></div>
+                        <div className="my-1 flex justify-center"><WeatherIcon code={hour.weatherCode} isDay={(() => { const h = new Date(hour.time).getHours(); return h >= 6 && h < 21; })()} className="h-7 w-7" /></div>
                         <div className="text-xs font-bold tabular-nums text-slate-100">{degree(hour.temperature)}C</div>
                         <div className="mt-1 flex items-center justify-center gap-0.5 text-[9px] text-blue-300"><Droplets className="h-2.5 w-2.5" />{percent(hour.precipitationProbability)}</div>
                       </div>
@@ -487,13 +529,17 @@ export default function OdinGoWorkspace() {
 
               <div className="px-4 py-3">
                 <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{language === "de" ? "Die nächsten Tage" : "Next days"}</div>
-                <div className="space-y-1">
+                <div className="odin-stagger space-y-1">
                   {forecastDays.map((day, index) => (
-                    <div key={day.date} className="grid grid-cols-[64px_28px_1fr_62px_58px] items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-900">
+                    <div key={day.date} className="grid grid-cols-[64px_28px_1fr_110px_48px] items-center gap-2 rounded-md px-2 py-1.5 text-xs transition hover:bg-slate-900">
                       <span className="font-semibold text-slate-200">{forecastDayLabel(day.date, index, language)}</span>
-                      <WeatherIcon code={day.weatherCode} isDay={true} className="h-5 w-5" />
+                      <WeatherIcon code={day.weatherCode} isDay={true} className="h-6 w-6" />
                       <span className="truncate text-[10px] text-slate-400">{weatherDescription(day.weatherCode)}</span>
-                      <span className="whitespace-nowrap text-right font-bold tabular-nums text-slate-100">{degree(day.temperatureMax)} / <span className="text-slate-500">{degree(day.temperatureMin)}</span></span>
+                      <span className="flex items-center justify-end gap-1.5 whitespace-nowrap font-bold tabular-nums text-slate-100">
+                        <span className="text-slate-500">{degree(day.temperatureMin)}</span>
+                        <TemperatureRange day={day} days={forecastDays} />
+                        {degree(day.temperatureMax)}
+                      </span>
                       <span className="flex items-center justify-end gap-1 text-[10px] text-blue-300"><Droplets className="h-3 w-3" />{percent(day.precipitationProbability)}</span>
                     </div>
                   ))}

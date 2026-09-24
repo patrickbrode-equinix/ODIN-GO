@@ -1,7 +1,16 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { ChevronDown, Clock3, RefreshCw } from "lucide-react";
+import { ChevronDown, RefreshCw } from "lucide-react";
+import { MiniClockFace, RollingText } from "./widgets/MotionWidgets";
 
 const WorldClockPanel = lazy(() => import("./WorldClockPanel"));
+
+function isoWeek(date: Date) {
+  const target = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = target.getUTCDay() || 7;
+  target.setUTCDate(target.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(target.getUTCFullYear(), 0, 1));
+  return Math.ceil(((target.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+}
 
 type Props = {
   open: boolean;
@@ -47,13 +56,16 @@ export default function HeaderWorldClock({ open, onOpenChange, onBeforeOpen }: P
         aria-expanded={open}
         aria-haspopup="dialog"
         onClick={toggle}
-        className={`flex h-11 items-center gap-2 rounded-md border bg-slate-950 px-2.5 text-left transition ${open ? "border-blue-400 ring-2 ring-blue-500/20" : "border-slate-600 hover:border-slate-500 hover:bg-slate-900"}`}
+        className={`odin-chip flex h-11 items-center gap-2 rounded-lg border px-2.5 text-left transition ${open ? "border-blue-400 ring-2 ring-blue-500/20" : "border-slate-700 hover:border-slate-500"}`}
         title={`${now.toLocaleDateString("de-DE", { weekday: "long", year: "numeric", month: "long", day: "numeric" })} · Weltzeiten öffnen`}
       >
-        <Clock3 className="h-4 w-4 text-blue-300" />
+        <MiniClockFace className="h-8 w-8" />
         <div className="leading-tight">
-          <div className="whitespace-nowrap font-mono text-[12px] font-bold tabular-nums text-slate-100">{now.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div>
-          <div className="whitespace-nowrap text-[9px] text-slate-400">{now.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" })}</div>
+          <RollingText
+            text={now.toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+            className="font-mono text-[13px] font-bold text-slate-100"
+          />
+          <div className="whitespace-nowrap text-[9px] text-slate-400">{now.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" })} · KW {isoWeek(now)}</div>
         </div>
         <ChevronDown className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`} />
       </button>

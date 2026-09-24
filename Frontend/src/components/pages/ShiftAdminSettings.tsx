@@ -270,9 +270,30 @@ interface ShiftplanExclusion {
   reason: string;
   reason_text: string | null;
   fixed_shift_type: string | null;
+  weekdays?: number[] | null;
   is_active: boolean;
   created_by: string;
   created_at: string;
+}
+
+const ALL_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6];
+
+function normalizeExclusionWeekdays(value: unknown): number[] {
+  const source = Array.isArray(value) ? value : ALL_WEEKDAYS;
+  const weekdays = [...new Set(source.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))];
+  return weekdays.length > 0 ? weekdays : ALL_WEEKDAYS;
+}
+
+function formatExclusionWeekdays(value: unknown, isGerman: boolean): string {
+  const weekdays = normalizeExclusionWeekdays(value);
+  if (weekdays.length === 7) return isGerman ? 'Alle Wochentage' : 'All weekdays';
+  return getWeekdayOptions(isGerman).filter((option) => weekdays.includes(option.value)).map((option) => option.label).join(', ');
+}
+
+interface StaffingRuleRow {
+  shift_type: 'early' | 'late' | 'night';
+  min_count: number;
+  max_count: number | null;
 }
 
 interface SpecialPoolEntry {
@@ -645,7 +666,9 @@ function getShiftDurationPreview(startTime: string, endTime: string, startOffset
   const start = toMinutes(startTime) + startOffset * 1440;
   let end = toMinutes(endTime) + endOffset * 1440;
   if (end <= start) end += 1440;
-  return (end - start) / 60;
+  const presence = (end - start) / 60;
+  // Shifts longer than six hours contain an unpaid one-hour break.
+  return presence > 6 ? presence - 1 : presence;
 }
 
 function SettingsGroup({ title, description }: { title: string; description: string }) {
@@ -688,6 +711,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [newExclusionName, setNewExclusionName] = useState('');
   const [newExclusionFixedShiftType, setNewExclusionFixedShiftType] = useState<FixedShiftTypeValue>('');
+  const [newExclusionWeekdays, setNewExclusionWeekdays] = useState<number[]>(ALL_WEEKDAYS);
+  const [staffingRules, setStaffingRules] = useState<StaffingRuleRow[]>([]);
+  const [shiftDefaults, setShiftDefaults] = useState<Record<string, { start_time: string; end_time: string; duration_hours: number; min_staff: number; max_staff: number }>>({});
   const [newDbsEmployee, setNewDbsEmployee] = useState('');
   const [newDefinition, setNewDefinition] = useState({ code: '', name: '', shift_type: 'early', start_time: '06:30', end_time: '15:00', duration_hours: 8, min_staff: 1, max_staff: 5 });
   const [activeShiftModes, setActiveShiftModes] = useState<Record<string, number>>({});
@@ -706,7 +732,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [defRes, rotRes, fairRes, planRes, exclRes, basisRes, appSettingsRes, usersRes, flagRes, shortNightRes] = await Promise.all([
+      const [defRes, rotRes, fairRes, planRes, exclRes, basisRes, appSettingsRes, usersRes, flagRes, shortNightRes, staffingRes, defaultsRes] = await Promise.all([
         api.get('/shift-config/definitions'),
         api.get('/shift-config/rotation-rules'),
         api.get('/shift-config/fairness-rules'),
@@ -717,6 +743,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         api.get('/admin/users').catch(() => ({ data: [] })),
         api.get('/shift-config/admin-flags').catch(() => ({ data: { flags: [] } })),
         api.get('/shift-config/short-night-options').catch(() => ({ data: { options: null } })),
+        api.get('/shift-config/staffing-rules').catch(() => ({ data: { rules: [] } })),
+        api.get('/shift-config/defaults').catch(() => ({ data: { definitions: {} } })),
       ]);
 
       const userEmployees = (Array.isArray(usersRes.data) ? usersRes.data : [])
@@ -743,6 +771,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           series_days: normalizeSeriesDays(definition.series_days, 1),
         })));
       setRotation(rotRes.data.rules || null);
+      setStaffingRules(staffingRes.data?.rules || []);
+      setShiftDefaults(defaultsRes.data?.definitions || {});
       if (shortNightRes.data?.options) setShortNightOptions(shortNightRes.data.options);
       setFairness(fairRes.data.rules || null);
       setPlanConfig(planRes.data.config || null);
@@ -784,6 +814,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     try {
       await api.put(`/shift-config/definitions/${definition.id}`, {
         ...definition,
+        start_time: String(definition.start_time || '').slice(0, 5),
+        end_time: String(definition.end_time || '').slice(0, 5),
         applicable_days: normalizeApplicableDays(definition.applicable_days),
       });
       showToast(t("shiftAdmin.toastDefSaved"));
@@ -1085,9 +1117,11 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         employee_name: newExclusionName.trim(),
         reason: fixedShiftType ? 'fixed_shift' : 'admin_override',
         fixed_shift_type: fixedShiftType,
+        weekdays: newExclusionWeekdays,
       });
       setNewExclusionName('');
       setNewExclusionFixedShiftType('');
+      setNewExclusionWeekdays(ALL_WEEKDAYS);
       showToast(fixedShiftType
         ? (isGerman ? 'Regel fuer feste Schicht gespeichert.' : 'Fixed shift rule saved.')
         : t("shiftAdmin.toastExclAdded"));
@@ -1099,13 +1133,14 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }
   };
 
-  const updateExclusionRule = async (exclusion: ShiftplanExclusion, fixedShiftType: FixedShiftTypeValue) => {
+  const updateExclusionRule = async (exclusion: ShiftplanExclusion, fixedShiftType: FixedShiftTypeValue, weekdays: number[] = normalizeExclusionWeekdays(exclusion.weekdays)) => {
     setSaving(`excl-${exclusion.id}`);
     try {
       const { data } = await api.patch(`/shift-config/exclusions/${exclusion.id}`, {
         reason: fixedShiftType ? 'fixed_shift' : 'admin_override',
         reason_text: exclusion.reason_text,
         fixed_shift_type: fixedShiftType || null,
+        weekdays,
       });
       setExclusions((current) => current.map((entry) => entry.id === exclusion.id ? data.exclusion : entry));
       showToast(isGerman ? 'Regel aktualisiert.' : 'Rule updated.');
@@ -1123,6 +1158,52 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       await loadAll();
     } catch (error: any) {
       showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
+    }
+  };
+
+  const toggleWeekdayInList = (weekdays: number[], weekday: number) => {
+    const current = normalizeExclusionWeekdays(weekdays);
+    const next = current.includes(weekday) ? current.filter((day) => day !== weekday) : [...current, weekday];
+    return next.length > 0 ? next.sort((left, right) => left - right) : current;
+  };
+
+  const updateStaffingRule = (shiftType: StaffingRuleRow['shift_type'], field: 'min_count' | 'max_count', value: number | null) => {
+    setStaffingRules((current) => {
+      const existing = current.find((rule) => rule.shift_type === shiftType) || { shift_type: shiftType, min_count: 0, max_count: null };
+      const nextRule = { ...existing, [field]: value };
+      return current.some((rule) => rule.shift_type === shiftType)
+        ? current.map((rule) => rule.shift_type === shiftType ? nextRule : rule)
+        : [...current, nextRule];
+    });
+  };
+
+  const saveStaffingRules = async () => {
+    setSaving('staffing-rules');
+    try {
+      const { data } = await api.put('/shift-config/staffing-rules', { rules: staffingRules });
+      setStaffingRules(data.rules || staffingRules);
+      showToast(isGerman ? 'Besetzung je Schichtart gespeichert' : 'Staffing per shift type saved');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  const resetToDefaults = async (scope: 'all' | 'definitions' | 'staffing', code?: string) => {
+    const label = code
+      ? (isGerman ? `${code} auf Standardwerte zurücksetzen? Wochentagsabweichungen dieser Schicht werden entfernt.` : `Reset ${code} to defaults? Weekday exceptions of this shift are removed.`)
+      : (isGerman ? 'Alle Standardwerte wiederherstellen? Eigene Zeiten und Besetzungen werden überschrieben.' : 'Restore all defaults? Custom times and staffing are overwritten.');
+    if (!window.confirm(label)) return;
+    setSaving(`reset-${scope}-${code || 'all'}`);
+    try {
+      await api.post('/shift-config/defaults/reset', { scope, code });
+      showToast(isGerman ? 'Standardwerte wiederhergestellt' : 'Defaults restored');
+      await loadAll();
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
+    } finally {
+      setSaving('');
     }
   };
 
@@ -1312,6 +1393,52 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             : 'Half-day shifts are intentionally hidden here. They remain available for ad-hoc adjustments, but are no longer used for automatic draft planning.'}
         </div>
 
+        <div className="mb-4 rounded-3xl border border-emerald-400/20 bg-emerald-500/5 p-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-emerald-100">{isGerman ? 'Besetzung je Schichtart (kumuliert)' : 'Staffing per shift type (cumulative)'}</div>
+              <div className="mt-1 text-xs text-slate-400">
+                {isGerman
+                  ? 'Summe aller Schichten einer Art pro Tag, z. B. Früh = E1 + E2. Leeres Maximum bedeutet unbegrenzt. Standard: Früh min 6 / unbegrenzt, Spät min 4 / max 8, Nacht min 4 / max 5.'
+                  : 'Sum of all shifts of one type per day, e.g. early = E1 + E2. Empty maximum means unlimited. Default: early min 6 / unlimited, late min 4 / max 8, night min 4 / max 5.'}
+              </div>
+            </div>
+            <button type="button" onClick={() => void resetToDefaults('all')} disabled={saving.startsWith('reset-')} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
+              <RotateCcw className="h-4 w-4" />
+              {isGerman ? 'Alle Standardwerte wiederherstellen' : 'Restore all defaults'}
+            </button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {(['early', 'late', 'night'] as const).map((shiftType) => {
+              const rule = staffingRules.find((entry) => entry.shift_type === shiftType) || { shift_type: shiftType, min_count: 0, max_count: null };
+              const label = shiftType === 'early' ? (isGerman ? 'Früh' : 'Early') : shiftType === 'late' ? (isGerman ? 'Spät' : 'Late') : (isGerman ? 'Nacht' : 'Night');
+              return (
+                <div key={shiftType} className="rounded-2xl border border-white/10 bg-slate-950/50 p-3">
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">{label}</div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[10px] text-slate-400">{isGerman ? 'Mindestens' : 'Minimum'}
+                      <input type="number" min="0" value={rule.min_count} onChange={(event) => updateStaffingRule(shiftType, 'min_count', Math.max(Number.parseInt(event.target.value, 10) || 0, 0))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-sm text-slate-100" />
+                    </label>
+                    <label className="text-[10px] text-slate-400">{isGerman ? 'Maximal' : 'Maximum'}
+                      <input type="number" min="0" value={rule.max_count ?? ''} placeholder={isGerman ? 'unbegrenzt' : 'unlimited'} onChange={(event) => updateStaffingRule(shiftType, 'max_count', event.target.value === '' ? null : Math.max(Number.parseInt(event.target.value, 10) || 0, 0))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500" />
+                    </label>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => void resetToDefaults('staffing')} disabled={saving.startsWith('reset-')} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
+              <RotateCcw className="h-4 w-4" />
+              {isGerman ? 'Besetzung auf Standard' : 'Reset staffing'}
+            </button>
+            <button type="button" onClick={() => void saveStaffingRules()} disabled={saving === 'staffing-rules'} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:opacity-50">
+              <Save className="h-4 w-4" />
+              {saving === 'staffing-rules' ? '…' : (isGerman ? 'Besetzung speichern' : 'Save staffing')}
+            </button>
+          </div>
+        </div>
+
         <div className="space-y-4">
           {definitions.map((definition) => {
             const applicableDays = normalizeApplicableDays(definition.applicable_days);
@@ -1420,7 +1547,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                                 <label className="text-[10px] text-slate-400">{isGerman ? 'Von' : 'From'}<input type="time" value={String(fieldValue.start_time).slice(0, 5)} onChange={(event) => updateDayOverride(definition.id, option.value, 'start_time', event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100" /></label>
                                 <label className="text-[10px] text-slate-400">{isGerman ? 'Bis' : 'To'}<input type="time" value={String(fieldValue.end_time).slice(0, 5)} onChange={(event) => updateDayOverride(definition.id, option.value, 'end_time', event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-xs text-slate-100" /></label>
                               </div>
-                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400"><span>{isGerman ? 'Dauer' : 'Duration'}: {getShiftDurationPreview(String(fieldValue.start_time), String(fieldValue.end_time), Number(fieldValue.start_day_offset || 0), Number(fieldValue.end_day_offset || 0)).toFixed(1)}h</span><span>{isGerman ? 'wird berechnet' : 'calculated'}</span></div>
+                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-slate-400"><span>{isGerman ? 'Dauer' : 'Duration'}: {getShiftDurationPreview(String(fieldValue.start_time), String(fieldValue.end_time), Number(fieldValue.start_day_offset || 0), Number(fieldValue.end_day_offset || 0)).toFixed(1)}h</span><span>{isGerman ? 'abzgl. 1h Pause' : 'minus 1h break'}</span></div>
                               <div className="mt-2 flex gap-2"><button type="button" onClick={() => void saveDayOverride(definition, option.value)} disabled={busy} className="rounded-lg bg-violet-400 px-2 py-1 text-xs font-medium text-slate-950 disabled:opacity-50">{busy ? '…' : (isGerman ? 'Speichern' : 'Save')}</button><button type="button" onClick={() => void removeDayOverride(definition, option.value)} disabled={busy} className="rounded-lg border border-white/10 px-2 py-1 text-xs text-slate-300 hover:bg-white/5 disabled:opacity-50">{isGerman ? 'Standard' : 'Default'}</button></div>
                             </>
                           ) : (
@@ -1494,6 +1621,15 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                       <Save className="h-4 w-4" />
                       {saving === `def-${definition.id}` ? t("shiftAdmin.defSaving") : t("shiftAdmin.defSave")}
                     </button>
+                    {shiftDefaults[String(definition.code || '').trim().toUpperCase()] ? (() => {
+                      const defaults = shiftDefaults[String(definition.code || '').trim().toUpperCase()];
+                      return (
+                        <button type="button" onClick={() => void resetToDefaults('definitions', definition.code)} disabled={saving.startsWith('reset-')} title={`${isGerman ? 'Standard' : 'Default'}: ${defaults.start_time}–${defaults.end_time}, ${defaults.duration_hours}h, Min ${defaults.min_staff} / Max ${defaults.max_staff}`} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
+                          <RotateCcw className="h-4 w-4" />
+                          {isGerman ? `Standard (${defaults.start_time}–${defaults.end_time})` : `Default (${defaults.start_time}–${defaults.end_time})`}
+                        </button>
+                      );
+                    })() : null}
                     {!BUILT_IN_SHIFT_CODES.has(String(definition.code || '').trim().toUpperCase()) ? (
                       <button type="button" onClick={() => void deleteDefinition(definition)} disabled={saving === `delete-def-${definition.id}`} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20 disabled:opacity-50">
                         <Trash2 className="h-4 w-4" />
@@ -2214,7 +2350,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       {/* ── Employee exclusions ── */}
       <Section title={t("shiftAdmin.sectionExclusions")} icon={UserX} helpKey="shiftAdmin.helpSectionExclusions" t={t}>
         <div className="mb-2 text-xs text-slate-400">
-          {isGerman ? 'Leer laesst den Mitarbeiter komplett draussen. Frueh, Spaet oder Nacht erzwingt genau diese Schichtart im Draft.' : 'Leave empty to exclude the employee completely. Early, late, or night enforces that shift type in the draft.'}
+          {isGerman ? 'Schicht wählen (Früh, Spät oder Nacht) und die Tage Mo–So markieren: Der Mitarbeiter wird nur an diesen Tagen und nur in dieser Schicht eingeplant. Ohne Schicht wird er an den markierten Tagen gar nicht eingeplant.' : 'Leave empty to exclude the employee on the selected weekdays. Early, late, or night plans the employee only on the selected weekdays and only with that shift type.'}
         </div>
         <div className="mb-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_auto]">
           <select value={newExclusionName} onChange={(event) => setNewExclusionName(event.target.value)} className="flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
@@ -2232,6 +2368,17 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               ? (isGerman ? 'Speichert...' : 'Saving...')
               : (newExclusionFixedShiftType ? (isGerman ? 'Regel anlegen' : 'Add rule') : t("shiftAdmin.exclExclude"))}
           </button>
+          <div className="flex flex-wrap items-center gap-2 xl:col-span-3">
+            <span className="text-xs text-slate-400">{newExclusionFixedShiftType ? (isGerman ? 'Einplanen an:' : 'Plan on:') : (isGerman ? 'Nicht einplanen an:' : 'Do not plan on:')}</span>
+            {weekdayOptions.map((option) => {
+              const active = newExclusionWeekdays.includes(option.value);
+              return (
+                <button key={`new-excl-${option.value}`} type="button" onClick={() => setNewExclusionWeekdays((current) => toggleWeekdayInList(current, option.value))} className={`rounded-full px-3 py-1 text-xs font-medium transition ${active ? 'bg-sky-400/20 text-sky-200 ring-1 ring-sky-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {exclusions.length === 0 ? (
@@ -2244,8 +2391,31 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               <div key={exclusion.id} className={`flex flex-col gap-3 rounded-2xl border p-4 xl:flex-row xl:items-center xl:justify-between ${isFixedShiftRule ? 'border-blue-400/20 bg-blue-500/5' : 'border-red-400/20 bg-red-500/5'}`}>
                 <div className="space-y-1">
                   <div className="text-sm font-medium text-slate-100">{exclusion.employee_name}</div>
-                  <div className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${isFixedShiftRule ? 'border-blue-400/30 bg-blue-500/10 text-blue-200' : 'border-red-400/30 bg-red-500/10 text-red-200'}`}>
-                    {formatFixedShiftType(exclusion.fixed_shift_type, isGerman)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${isFixedShiftRule ? 'border-blue-400/30 bg-blue-500/10 text-blue-200' : 'border-red-400/30 bg-red-500/10 text-red-200'}`}>
+                      {formatFixedShiftType(exclusion.fixed_shift_type, isGerman)}
+                    </div>
+                    <div className="inline-flex rounded-full border border-slate-400/30 bg-slate-500/10 px-2 py-0.5 text-[11px] font-semibold text-slate-200">
+                      {formatExclusionWeekdays(exclusion.weekdays, isGerman)}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    <span className="text-[11px] text-slate-400">{isFixedShiftRule ? (isGerman ? 'Einplanen an:' : 'Plan on:') : (isGerman ? 'Nicht einplanen an:' : 'Do not plan on:')}</span>
+                    {weekdayOptions.map((option) => {
+                      const ruleWeekdays = normalizeExclusionWeekdays(exclusion.weekdays);
+                      const active = ruleWeekdays.includes(option.value);
+                      return (
+                        <button
+                          key={`${exclusion.id}-weekday-${option.value}`}
+                          type="button"
+                          disabled={saving === `excl-${exclusion.id}`}
+                          onClick={() => void updateExclusionRule(exclusion, (exclusion.fixed_shift_type || '') as FixedShiftTypeValue, toggleWeekdayInList(ruleWeekdays, option.value))}
+                          className={`rounded-full px-2.5 py-0.5 text-[11px] font-medium transition disabled:opacity-50 ${active ? 'bg-sky-400/20 text-sky-200 ring-1 ring-sky-300/30' : 'bg-white/5 text-slate-500 ring-1 ring-white/10 hover:bg-white/10'}`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
                   </div>
                   <div className="text-xs text-slate-400">{t("shiftAdmin.exclCreatedBy")} {exclusion.created_by} {isGerman ? 'am' : 'on'} {new Date(exclusion.created_at).toLocaleDateString(isGerman ? 'de-DE' : 'en-US', { timeZone: 'Europe/Berlin' })}</div>
                 </div>
