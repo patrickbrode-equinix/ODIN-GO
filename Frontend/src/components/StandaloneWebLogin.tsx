@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
+import { LockKeyhole, ShieldCheck } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 
@@ -7,22 +7,19 @@ export default function StandaloneWebLogin() {
   const { loginToWeb } = useAuth();
   const { language } = useLanguage();
   const isGerman = language === "de";
-  const [apiKey, setApiKey] = useState(() => sessionStorage.getItem("shiftplanner_api_key") || localStorage.getItem("shiftplanner_vm_key") || "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!apiKey.trim() || !password || submitting) return;
+    if (!password || submitting) return;
     setSubmitting(true);
     setError("");
     try {
-      sessionStorage.setItem("shiftplanner_api_key", apiKey.trim());
       await loginToWeb(password);
       setPassword("");
     } catch (requestError: any) {
-      sessionStorage.removeItem("shiftplanner_api_key");
       setError(requestError?.response?.data?.message || (isGerman ? "Anmeldung fehlgeschlagen." : "Sign-in failed."));
     } finally {
       setSubmitting(false);
@@ -39,26 +36,11 @@ export default function StandaloneWebLogin() {
         <h1 className="mt-2 text-2xl font-bold">{isGerman ? "Web-Zugang" : "Web access"}</h1>
         <p className="mt-2 text-sm leading-6 text-slate-400">
           {isGerman
-            ? "Notzugang und Zugang für Vorgesetzte. Gib den lokalen App-Schlüssel und dasselbe Passwort wie für den geschützten Bereich in der Extension ein."
-            : "Emergency and supervisor access. Enter the local application key and the same password used for the protected Extension area."}
+            ? "Admin-Zugang für Übersicht und Administration. Gib das Admin-Passwort ein, das auch für den geschützten Bereich in der Extension gilt. Persönliche Einstellungen sind nur in der Extension verfügbar."
+            : "Admin access for overview and administration. Enter the admin password used for the protected Extension area. Personal settings are only available in the Extension."}
         </p>
-        <label htmlFor="odin-web-api-key" className="mt-6 block text-xs font-semibold uppercase tracking-wider text-slate-400">
-          {isGerman ? "Lokaler App-Schlüssel" : "Local application key"}
-        </label>
-        <div className="relative mt-2">
-          <KeyRound className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-500" />
-          <input
-            id="odin-web-api-key"
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            onChange={(event) => setApiKey(event.target.value)}
-            className="h-10 w-full rounded-lg border border-slate-600 bg-slate-900 pl-10 pr-3 text-sm text-white outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-500/20"
-            required
-          />
-        </div>
         <label htmlFor="odin-web-password" className="mt-6 block text-xs font-semibold uppercase tracking-wider text-slate-400">
-          {isGerman ? "Passwort" : "Password"}
+          {isGerman ? "Admin-Passwort" : "Admin password"}
         </label>
         <div className="relative mt-2">
           <LockKeyhole className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-500" />
@@ -75,7 +57,7 @@ export default function StandaloneWebLogin() {
         {error ? <div className="mt-3 rounded-lg border border-red-500/35 bg-red-500/10 px-3 py-2 text-sm text-red-200">{error}</div> : null}
         <button
           type="submit"
-          disabled={!apiKey.trim() || !password || submitting}
+          disabled={!password || submitting}
           className="mt-5 flex h-11 w-full items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-bold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {submitting ? (isGerman ? "Anmeldung wird geprüft…" : "Checking sign-in…") : (isGerman ? "ODIN GO öffnen" : "Open ODIN GO")}

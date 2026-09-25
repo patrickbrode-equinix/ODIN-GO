@@ -866,7 +866,7 @@ export function Header() {
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className={`${headerDropdownClass} w-48`}>
-                  <DropdownMenuItem onClick={() => navigate("/settings")} className={headerDropdownItemClass}>{t("common.settings")}</DropdownMenuItem>
+                  {canAccess("settings") && <DropdownMenuItem onClick={() => navigate("/settings")} className={headerDropdownItemClass}>{t("common.settings")}</DropdownMenuItem>}
                   {!IS_SHIFTPLANNER_MODE && <DropdownMenuSeparator />}
                 </DropdownMenuContent>
               </DropdownMenu>
