@@ -43,9 +43,12 @@ import {
   getMonthBoundarySeriesRemaining,
   getNightSeriesDaysForModel,
   isDayBlockedByEmployeePreference,
+  isDbsRosterWeekday,
   isNightShiftRefused,
   NIGHT_MODELS,
-  normalizeNightModel,
+  NIGHT_PLANNING_MODES,
+  normalizeNightPlanningMode,
+  resolveEmployeeNightModel,
   normalizePreferenceDayValues,
   isShiftDefinitionDraftPlannable,
   normalizePlanningShiftTypeKey,
@@ -885,6 +888,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     min_free_weekends_per_month: 2, min_recovery_days_after_shift_change: 1,
     short_night_mode_enabled: false,
     short_night_free_days_after: 2,
+    night_planning_mode: NIGHT_PLANNING_MODES.MIXED,
   };
   const baseNightDefinition = shiftDefs.find((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'night');
   // N and NK are two models of the same operational night coverage. They must
@@ -1223,10 +1227,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const getEmployeeNightModel = (employeeName) => {
-    // The central NK switch plans short nights for everyone; otherwise an
-    // explicit employee wish for short night blocks is honoured individually.
-    if (rotation.short_night_mode_enabled) return NIGHT_MODELS.SHORT;
-    return normalizeNightModel(empPrefsMap.get(employeeName)?.night_model);
+    return resolveEmployeeNightModel({
+      planningMode: rotation.night_planning_mode,
+      employeeNightModel: empPrefsMap.get(employeeName)?.night_model,
+    });
   };
   // A seven-night block carried over from the previous month must not turn
   // into four or more consecutive NK shifts for a short-night employee.
@@ -1452,10 +1456,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return demand;
   };
 
-  // DBS is planned as a weekly rotation before the regular shifts: each Monday
-  // week belongs to one pool member (in pool order), weekdays outside that
-  // member's DBS pattern are covered by the previous week's member. Reserved
-  // days are protected against regular blocks and their recovery days.
+  // DBS is planned before the regular shifts. A weekday disabled in the weekly
+  // owner's DBS pattern remains a normal operations day; it must never be
+  // reassigned to another DBS pool member.
   const dbsDefinitionForRoster = shiftDefs.find(isDbsDefinition);
   const dbsPoolEntries = dbsPlanningConfig.enabled && dbsDefinitionForRoster
     ? [...(specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.entries() || [])].filter(([name]) => activeEmployees.includes(name))
@@ -1557,6 +1560,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (owner) rotationIndex = (poolNames.indexOf(owner) + 1) % poolNames.length;
       const nextOwner = owner ? poolNames[rotationIndex] : null;
       for (const day of days) {
+        const ownerWorksThisWeekday = owner
+          && isDbsRosterWeekday(poolEntryByName.get(owner), dayOfWeek(year, mon, day));
+        if (!ownerWorksThisWeekday) {
+          advanceRosterDay(day);
+          continue;
+        }
         const ownerRunBroken = owner
           && days.some((current) => current < day && dbsRoster.get(current) === owner)
           && dbsRoster.get(day - 1) !== owner;
@@ -1703,6 +1712,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     );
 
     for (const shiftDef of shiftSlots) {
+      // A missing DBS roster entry is intentional (for example Peter's free
+      // Sunday). Regular early/weekend staffing covers that day instead.
+      if (isDbsDefinition(shiftDef) && !dbsRoster.has(day)) continue;
       const continuingEmployees = availableForDay
         .filter((employee) => !assignedToday.has(employee)
           && empSeriesRemaining[employee] > 0
@@ -2879,7 +2891,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           maxConsecutiveWorkdays: rotation.max_consecutive_workdays,
           maxWeekendsPerMonth: rotation.max_weekends_per_month,
           maxNightsPerMonth: shiftType === 'night'
-            ? (rotation.short_night_mode_enabled ? Number(rotation.max_nights_per_month || 0) * 3 : rotation.max_nights_per_month)
+            ? (normalizeNightPlanningMode(rotation.night_planning_mode) === NIGHT_PLANNING_MODES.SEVEN_DAY_ONLY
+              ? rotation.max_nights_per_month
+              : Number(rotation.max_nights_per_month || 0) * 3)
             : null,
           restrictedPool,
         },

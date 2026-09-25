@@ -158,11 +158,37 @@ export const NIGHT_MODELS = Object.freeze({
   SHORT: 'SHORT',
 });
 
+export const NIGHT_PLANNING_MODES = Object.freeze({
+  SEVEN_DAY_ONLY: 'SEVEN_DAY_ONLY',
+  SHORT_ONLY: 'SHORT_ONLY',
+  MIXED: 'MIXED',
+});
+
 // Existing night planning used seven-day blocks. Keep that behavior as the
 // default for migrated and incomplete preference records.
 export function normalizeNightModel(value) {
   const normalized = String(value || '').trim().toUpperCase();
   return normalized === NIGHT_MODELS.SHORT ? NIGHT_MODELS.SHORT : NIGHT_MODELS.SEVEN_DAY;
+}
+
+export function isDbsRosterWeekday(poolEntry, dayOfWeek) {
+  if (!Number.isInteger(Number(dayOfWeek))) return false;
+  const workingWeekdays = normalizeApplicableDays(poolEntry?.workingWeekdays ?? poolEntry?.working_weekdays ?? []);
+  return workingWeekdays.includes(Number(dayOfWeek));
+}
+
+export function normalizeNightPlanningMode(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return Object.values(NIGHT_PLANNING_MODES).includes(normalized)
+    ? normalized
+    : NIGHT_PLANNING_MODES.MIXED;
+}
+
+export function resolveEmployeeNightModel({ planningMode, employeeNightModel } = {}) {
+  const mode = normalizeNightPlanningMode(planningMode);
+  if (mode === NIGHT_PLANNING_MODES.SHORT_ONLY) return NIGHT_MODELS.SHORT;
+  if (mode === NIGHT_PLANNING_MODES.SEVEN_DAY_ONLY) return NIGHT_MODELS.SEVEN_DAY;
+  return normalizeNightModel(employeeNightModel);
 }
 
 export function getNightSeriesDaysForModel({ nightModel, remainingDays = 7 } = {}) {

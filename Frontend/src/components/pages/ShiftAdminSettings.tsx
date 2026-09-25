@@ -239,6 +239,7 @@ interface RotationRules {
 }
 
 interface ShortNightOptions {
+  mode: 'SEVEN_DAY_ONLY' | 'SHORT_ONLY' | 'MIXED';
   enabled: boolean;
   start_time: string;
   end_time: string;
@@ -693,7 +694,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const shiftDayOffsetOptions = getShiftDayOffsetOptions(isGerman);
   const [definitions, setDefinitions] = useState<ShiftDefinition[]>([]);
   const [rotation, setRotation] = useState<RotationRules | null>(null);
-  const [shortNightOptions, setShortNightOptions] = useState<ShortNightOptions>({ enabled: false, start_time: '21:45', end_time: '06:45', free_days_after: 2 });
+  const [shortNightOptions, setShortNightOptions] = useState<ShortNightOptions>({ mode: 'MIXED', enabled: true, start_time: '21:45', end_time: '06:45', free_days_after: 2 });
   const [fairness, setFairness] = useState<FairnessRules | null>(null);
   const [planConfig, setPlanConfig] = useState<PlanningConfig | null>(null);
   const [exclusions, setExclusions] = useState<ShiftplanExclusion[]>([]);
@@ -959,7 +960,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       setShortNightOptions(next);
       setRotation((current) => current ? {
         ...current,
-        short_night_mode_enabled: next.enabled,
+        short_night_mode_enabled: next.mode === 'SHORT_ONLY',
         short_night_free_days_after: next.free_days_after,
       } : current);
       showToast(isGerman ? 'Kurze Nachtschicht gespeichert' : 'Short night shift saved');
@@ -1933,10 +1934,17 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <span className="flex items-center">{t("shiftAdmin.rotLateToEarlyForbidden")} <HelpTooltip textKey="shiftAdmin.helpRotLateToEarlyForbidden" t={t} /></span>
               </label>
               <div className="rounded-2xl border border-violet-300/25 bg-violet-500/10 px-4 py-3 text-sm text-slate-100">
-                <div className="flex items-start gap-2">
-                  <input type="checkbox" checked={shortNightOptions.enabled} disabled={saving === 'short-night'} onChange={(event) => { const enabled = event.target.checked; setShortNightOptions({ ...shortNightOptions, enabled }); void saveShortNightOptions({ enabled }); }} className="mt-0.5 rounded border-white/20 bg-slate-950" />
-                  <span><span className="block font-medium">{isGerman ? 'Kurze Nachtschicht (NK) für alle' : 'Short night shift (NK) for everyone'}</span><span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Wird sofort gespeichert. Aktiv: alle Nachtdienste werden als NK-Blöcke (max. 3 Nächte) geplant. Aus: nur Mitarbeiter, die in ihren Wünschen „Kurze Nachtblöcke“ gewählt haben, bekommen NK.' : 'Saved immediately. On: all night duties are planned as NK blocks (max. 3 nights). Off: only employees who chose short night blocks in their preferences get NK.'}</span></span>
-                </div>
+                <label className="block">
+                  <span className="block font-medium">{isGerman ? 'Nachtplanungsmodell' : 'Night planning model'}</span>
+                  <select value={shortNightOptions.mode} disabled={saving === 'short-night'} onChange={(event) => { const mode = event.target.value as ShortNightOptions['mode']; setShortNightOptions({ ...shortNightOptions, mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); void saveShortNightOptions({ mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); }} className="mt-2 w-full rounded-lg border border-violet-300/25 bg-slate-950/80 px-3 py-2 text-xs text-slate-100">
+                    <option value="SEVEN_DAY_ONLY">{isGerman ? 'Nur normale 7-Tage-Nachtschicht' : 'Normal seven-night blocks only'}</option>
+                    <option value="SHORT_ONLY">{isGerman ? 'Nur kurze Nachtschichten (NK)' : 'Short night blocks (NK) only'}</option>
+                    <option value="MIXED">{isGerman ? 'Mischmodus nach Mitarbeiterwunsch' : 'Mixed mode by employee preference'}</option>
+                  </select>
+                  <span className="mt-2 block text-xs text-slate-400">{isGerman
+                    ? 'Im Mischmodus erhalten Mitarbeitende mit 7-Tage-Wunsch einen vollständigen Nachtblock. Mitarbeitende mit Kurzblock-Wunsch werden in bis zu drei zusammenhängenden Nächten ergänzend und nacheinander geplant.'
+                    : 'In mixed mode, employees preferring seven nights receive a full block. Employees preferring short blocks are added in consecutive blocks of up to three nights.'}</span>
+                </label>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Start' : 'Start'}<input type="time" value={shortNightOptions.start_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, start_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Ende' : 'End'}<input type="time" value={shortNightOptions.end_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, end_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>

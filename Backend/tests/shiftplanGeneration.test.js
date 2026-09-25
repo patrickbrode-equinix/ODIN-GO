@@ -13,6 +13,7 @@ import {
   getExclusivePreferredShiftType,
   getMonthBoundarySeriesRemaining,
   getNightSeriesDaysForModel,
+  isDbsRosterWeekday,
   getPreferenceShiftCode,
   isShiftPreferredByEmployeePreference,
   getTargetHoursScore,
@@ -21,7 +22,10 @@ import {
   isNightShiftRefused,
   keepsShiftTypeCohesion,
   NIGHT_MODELS,
+  NIGHT_PLANNING_MODES,
   normalizeNightModel,
+  normalizeNightPlanningMode,
+  resolveEmployeeNightModel,
   normalizePreferenceDayValues,
   normalizePlanningShiftTypeKey,
   rankSafeSubstituteCandidates,
@@ -227,6 +231,20 @@ describe('shiftplanGeneration helpers', () => {
     assert.equal(getNightSeriesDaysForModel({ nightModel: NIGHT_MODELS.SEVEN_DAY, remainingDays: 12 }), 7);
     assert.equal(getNightSeriesDaysForModel({ nightModel: NIGHT_MODELS.SHORT, remainingDays: 12 }), 3);
     assert.equal(getNightSeriesDaysForModel({ nightModel: NIGHT_MODELS.SHORT, remainingDays: 2 }), 2);
+  });
+
+  it('resolves global night planning modes without overriding mixed employee wishes', () => {
+    assert.equal(normalizeNightPlanningMode('invalid'), NIGHT_PLANNING_MODES.MIXED);
+    assert.equal(resolveEmployeeNightModel({ planningMode: NIGHT_PLANNING_MODES.SEVEN_DAY_ONLY, employeeNightModel: NIGHT_MODELS.SHORT }), NIGHT_MODELS.SEVEN_DAY);
+    assert.equal(resolveEmployeeNightModel({ planningMode: NIGHT_PLANNING_MODES.SHORT_ONLY, employeeNightModel: NIGHT_MODELS.SEVEN_DAY }), NIGHT_MODELS.SHORT);
+    assert.equal(resolveEmployeeNightModel({ planningMode: NIGHT_PLANNING_MODES.MIXED, employeeNightModel: NIGHT_MODELS.SHORT }), NIGHT_MODELS.SHORT);
+    assert.equal(resolveEmployeeNightModel({ planningMode: NIGHT_PLANNING_MODES.MIXED, employeeNightModel: NIGHT_MODELS.SEVEN_DAY }), NIGHT_MODELS.SEVEN_DAY);
+  });
+
+  it('leaves a DBS weekday unplanned when the weekly owner does not work that day', () => {
+    const peter = { workingWeekdays: [1, 2, 3, 4, 5, 6] };
+    assert.equal(isDbsRosterWeekday(peter, 6), true);
+    assert.equal(isDbsRosterWeekday(peter, 0), false);
   });
 
   it('treats every selected unwanted shift as a hard exclusion, including weekend variants', () => {

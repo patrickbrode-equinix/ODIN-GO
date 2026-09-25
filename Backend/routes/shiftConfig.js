@@ -232,14 +232,15 @@ router.delete('/definitions/:id/day-overrides/:weekday', requirePageAccess('shif
 router.get('/short-night-options', async (_req, res) => {
   try {
     const [rotationResult, definitionResult] = await Promise.all([
-      pool.query('SELECT short_night_mode_enabled, short_night_free_days_after FROM shift_rotation_rules WHERE id = 1'),
+      pool.query('SELECT short_night_mode_enabled, short_night_free_days_after, night_planning_mode FROM shift_rotation_rules WHERE id = 1'),
       pool.query("SELECT id, code, name, short_name, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, color_hex FROM shift_definitions WHERE UPPER(code) = 'NK' LIMIT 1"),
     ]);
     const definition = definitionResult.rows[0] || null;
     res.json({
       ok: true,
       options: {
-        enabled: Boolean(rotationResult.rows[0]?.short_night_mode_enabled),
+        mode: String(rotationResult.rows[0]?.night_planning_mode || (rotationResult.rows[0]?.short_night_mode_enabled ? 'SHORT_ONLY' : 'MIXED')),
+        enabled: String(rotationResult.rows[0]?.night_planning_mode || '') !== 'SEVEN_DAY_ONLY',
         free_days_after: Number(rotationResult.rows[0]?.short_night_free_days_after ?? 2),
         start_time: String(definition?.start_time || '21:45').slice(0, 5),
         end_time: String(definition?.end_time || '06:45').slice(0, 5),
@@ -259,7 +260,11 @@ router.put('/short-night-options', requirePageAccess('shiftplan_control', 'write
     const start_time = String(req.body?.start_time || '21:45').slice(0, 5);
     const end_time = String(req.body?.end_time || '06:45').slice(0, 5);
     const free_days_after = Math.max(0, Math.min(14, Number.parseInt(String(req.body?.free_days_after), 10) || 0));
-    const enabled = Boolean(req.body?.enabled);
+    const requestedMode = String(req.body?.mode || '').trim().toUpperCase();
+    const mode = ['SEVEN_DAY_ONLY', 'SHORT_ONLY', 'MIXED'].includes(requestedMode)
+      ? requestedMode
+      : (req.body?.enabled === true ? 'SHORT_ONLY' : req.body?.enabled === false ? 'SEVEN_DAY_ONLY' : 'MIXED');
+    const enabled = mode !== 'SEVEN_DAY_ONLY';
     const validationError = validateShiftDefinitionInput({
       shift_type: 'night', start_time, end_time, duration_hours: getDurationHours({ startTime: start_time, endTime: end_time, startDayOffset: 0, endDayOffset: 1 }), min_staff: 1, max_staff: 3, applicable_days: [0, 1, 2, 3, 4, 5, 6],
     });
@@ -269,8 +274,8 @@ router.put('/short-night-options', requirePageAccess('shiftplan_control', 'write
     client = await pool.connect();
     await client.query('BEGIN');
     await client.query(
-      'UPDATE shift_rotation_rules SET short_night_mode_enabled = $1, short_night_free_days_after = $2, updated_at = NOW() WHERE id = 1',
-      [enabled, free_days_after]
+      'UPDATE shift_rotation_rules SET short_night_mode_enabled = $1, short_night_free_days_after = $2, night_planning_mode = $3, updated_at = NOW() WHERE id = 1',
+      [mode === 'SHORT_ONLY', free_days_after, mode]
     );
     const { rows } = await client.query(
       `INSERT INTO shift_definitions (code, name, short_name, shift_type, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, is_active, sort_order, applicable_days)
@@ -280,7 +285,7 @@ router.put('/short-night-options', requirePageAccess('shiftplan_control', 'write
       [start_time, end_time, duration_hours, enabled]
     );
     await client.query('COMMIT');
-    res.json({ ok: true, options: { enabled, free_days_after, start_time, end_time, start_day_offset: 0, end_day_offset: 1, duration_hours }, definition: rows[0] });
+    res.json({ ok: true, options: { mode, enabled, free_days_after, start_time, end_time, start_day_offset: 0, end_day_offset: 1, duration_hours }, definition: rows[0] });
   } catch (err) {
     if (client) await client.query('ROLLBACK');
     res.status(500).json({ ok: false, error: err.message });
