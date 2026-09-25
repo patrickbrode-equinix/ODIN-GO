@@ -353,16 +353,18 @@ export default function Users() {
     const rows = await Promise.all(users.map(async (user) => {
       try {
         const response = await api.get(`/admin/users/${user.id}/preferences`);
-        return { user, preferences: response.data?.preferences || null };
+        return { user, preferences: response.data?.preferences || null, colleaguesEnabled: response.data?.preferredColleaguesEnabled === true };
       } catch {
-        return { user, preferences: null };
+        return { user, preferences: null, colleaguesEnabled: false };
       }
     }));
+    const preferredColleaguesEnabled = rows.some((row) => row.colleaguesEnabled);
     const lines = [
       "# Mitarbeiterwünsche",
       "",
       `Export erstellt: ${new Date().toLocaleString(locale)}`,
       `Anzahl Mitarbeiter: ${rows.length}`,
+      `Wunschkollegen im Generator: ${preferredColleaguesEnabled ? "aktiv" : "deaktiviert (Auswahl gespeichert, wird ignoriert)"}`,
       "",
     ];
     for (const { user, preferences } of rows) {
@@ -378,7 +380,10 @@ export default function Users() {
         ["Bevorzugte Tage", preferences.preferredDays],
         ["Gesperrte Tage", preferences.blockedDays],
         ["Zu vermeidende Kollegen", preferences.avoidColleagues],
+        ["Wunschkollegen", Array.isArray(preferences.preferredColleagues) ? preferences.preferredColleagues.map((colleague: any) => colleague?.name || `#${colleague?.id}`) : []],
         ["Max. Nachtschichten/Monat", preferences.maxNightsPerMonth],
+        ["Nachtschicht-Modell", preferences.nightModel === "SHORT" ? "Kurze Nachtschicht" : preferences.nightModel ? "7-Tage-Nachtblock" : null],
+        ["Max. Wochenenden/Monat", preferences.maxWeekendsPerMonth],
         ["Monatliche Präferenzen", preferences.monthlyPreferences],
         ["Notizen", preferences.notes],
         ["Zuletzt geändert", preferences.updatedAt ? formatAbsoluteDateTime(preferences.updatedAt, locale) : null],

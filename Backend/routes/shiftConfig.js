@@ -792,9 +792,25 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
       canUseBlockedWeekdayPreferences(req.user),
     ]);
     const preference = preferenceResult.rows[0] || null;
+    const [colleagueOptionsResult, colleagueSettingResult] = await Promise.all([
+      pool.query(
+        `SELECT id, first_name, last_name
+           FROM users
+          WHERE approved = TRUE AND id <> $1
+            AND (COALESCE(first_name, '') <> '' OR COALESCE(last_name, '') <> '')
+          ORDER BY last_name, first_name`,
+        [userId]
+      ),
+      pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.preferred_colleagues_enabled' LIMIT 1"),
+    ]);
     res.json({
       ok: true,
       canSelectBlockedDays,
+      preferredColleaguesEnabled: String(colleagueSettingResult.rows[0]?.value ?? 'false') === 'true',
+      colleagueOptions: colleagueOptionsResult.rows.map((row) => ({
+        id: row.id,
+        name: [row.last_name, row.first_name].filter(Boolean).join(', '),
+      })),
       preferences: preference && !canSelectBlockedDays ? { ...preference, blocked_days: [] } : preference,
     });
   } catch (err) {
@@ -848,9 +864,21 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         }]))
       : {};
 
+    const requestedColleagueIds = Array.isArray(req.body.preferred_colleagues)
+      ? [...new Set(req.body.preferred_colleagues.map((id) => Number.parseInt(String(id), 10)).filter((id) => Number.isInteger(id) && id > 0 && id !== userId))]
+      : [];
+    if (requestedColleagueIds.length > 4) {
+      return res.status(400).json({ ok: false, error: 'Es können maximal vier Wunschkollegen ausgewählt werden.' });
+    }
+    const existingColleagues = requestedColleagueIds.length
+      ? await pool.query('SELECT id FROM users WHERE id = ANY($1::int[])', [requestedColleagueIds])
+      : { rows: [] };
+    const existingColleagueIds = new Set(existingColleagues.rows.map((row) => row.id));
+    const preferredColleagues = requestedColleagueIds.filter((id) => existingColleagueIds.has(id));
+
     const { rows } = await pool.query(
-      `INSERT INTO employee_preferences (user_id, preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, max_weekends_per_month, preferred_days, blocked_days, avoid_colleagues, workload_preference, notes, monthly_preferences, night_model, updated_at)
-       VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb, $13, NOW())
+      `INSERT INTO employee_preferences (user_id, preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, max_weekends_per_month, preferred_days, blocked_days, avoid_colleagues, workload_preference, notes, monthly_preferences, night_model, preferred_colleagues, updated_at)
+       VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12::jsonb, $13, COALESCE($14::jsonb, '[]'::jsonb), NOW())
        ON CONFLICT (user_id) DO UPDATE SET
          preferred_shifts = $2::jsonb,
          unwanted_shifts = $3::jsonb,
@@ -864,6 +892,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
           notes = employee_preferences.notes,
           monthly_preferences = $12::jsonb,
           night_model = $13,
+          preferred_colleagues = COALESCE($14::jsonb, employee_preferences.preferred_colleagues),
           updated_at = NOW()
        RETURNING *`,
       [
@@ -880,6 +909,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
         null,
         JSON.stringify(monthly_preferences),
         normalizedNightModel,
+        req.body.preferred_colleagues === undefined ? null : JSON.stringify(preferredColleagues),
       ]
     );
     res.json({ ok: true, preferences: rows[0] });
