@@ -12,6 +12,19 @@ import { config } from "../config/index.js";
 const LAST_SEEN_TOUCH_INTERVAL_MS = 60 * 1000;
 const lastSeenTouchCache = new Map();
 
+// The web version signs in with the admin password only. A valid signed admin
+// session therefore replaces the application key; the key stays mandatory for
+// the Jarvis extension, whose identity check has no password.
+function hasValidAdminSession(req) {
+  const adminToken = String(req.headers["x-shiftplanner-admin"] || "");
+  if (!adminToken) return false;
+  try {
+    return jwt.verify(adminToken, config.JWT_SECRET)?.scope === "shiftplanner_admin";
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Protect low-risk operational data that does not need a named employee
  * session (weather and market data). Production requests still need the VM
@@ -27,7 +40,7 @@ export function requireApplicationKey(req, res, next) {
     && suppliedKey.length > 0
     && crypto.timingSafeEqual(Buffer.from(suppliedKey), Buffer.from(expectedKey));
 
-  if (!keyMatches && !localDevelopmentRequest) {
+  if (!keyMatches && !localDevelopmentRequest && !hasValidAdminSession(req)) {
     return res.status(401).json({ message: "Invalid local application key" });
   }
   return next();
@@ -80,9 +93,10 @@ export async function requireAuth(req, res, next) {
         && crypto.timingSafeEqual(Buffer.from(suppliedKey), Buffer.from(expectedKey));
 
       // Local development is intentionally usable without copying a secret into
-      // every unpacked Chrome extension. A VM/production deployment always
-      // requires the configured application key.
-      if (!keyMatches && !localDevelopmentRequest) {
+      // every unpacked Chrome extension. A VM/production deployment requires
+      // the configured application key, unless the web admin session is valid.
+      const keyless = !keyMatches && !localDevelopmentRequest;
+      if (keyless && !hasValidAdminSession(req)) {
         return res.status(401).json({ message: "Invalid local application key" });
       }
 
@@ -100,7 +114,7 @@ export async function requireAuth(req, res, next) {
 
       let verifiedIdentity = null;
       let identityError = null;
-      const identityToken = String(req.headers["x-shiftplanner-identity"] || "");
+      const identityToken = keyless ? "" : String(req.headers["x-shiftplanner-identity"] || "");
       if (identityToken) {
         try {
           const decoded = jwt.verify(identityToken, config.JWT_SECRET);

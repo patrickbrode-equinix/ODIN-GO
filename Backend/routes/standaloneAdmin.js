@@ -39,16 +39,32 @@ export async function resetStandaloneAdminPasswordIfRequested() {
   return true;
 }
 
+// The web version signs in with the admin password only (no application key),
+// so repeated wrong passwords per client are slowed down.
+const UNLOCK_WINDOW_MS = 15 * 60 * 1000;
+const UNLOCK_MAX_FAILURES = 10;
+const unlockFailures = new Map();
+
+function getUnlockClientKey(req) {
+  return String(req.ip || req.socket?.remoteAddress || "unknown");
+}
+
 router.post("/unlock", async (req, res) => {
   if (!config.isShiftplannerMode) return res.status(404).json({ message: "Not found" });
 
-  if (!keysMatch(req.headers["x-shiftplanner-key"], config.SHIFTPLANNER_API_KEY)) {
-    return res.status(401).json({ message: "Invalid local application key" });
+  const clientKey = getUnlockClientKey(req);
+  const now = Date.now();
+  const failures = (unlockFailures.get(clientKey) || []).filter((timestamp) => now - timestamp < UNLOCK_WINDOW_MS);
+  if (failures.length >= UNLOCK_MAX_FAILURES) {
+    unlockFailures.set(clientKey, failures);
+    return res.status(429).json({ message: "Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen." });
   }
 
   if (!await verifyAdminPassword(req.body?.password)) {
+    unlockFailures.set(clientKey, [...failures, now]);
     return res.status(401).json({ message: "Admin-Passwort ist falsch." });
   }
+  unlockFailures.delete(clientKey);
 
   const token = jwt.sign(
     { scope: "shiftplanner_admin" },

@@ -31,6 +31,8 @@ type AuthContextType = {
   canView: (pageKey: string) => boolean;
   canWrite: (pageKey: string) => boolean;
   webLoginRequired: boolean;
+  /** Browser access outside the Jarvis extension: admin overview only, no personal settings. */
+  isWebSession: boolean;
   loginToWeb: (password: string) => Promise<void>;
   unlockAdmin: (password: string) => Promise<void>;
 };
@@ -102,10 +104,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const normalizedEmployeeName = extensionContext.employeeName.trim().toLocaleLowerCase("de-DE").replace(/\s+/g, " ");
     const patrickBypass = normalizedEmployeeName === "patrick brode";
     const adminUnlocked = Boolean(adminToken || extensionContext.adminUnlocked || patrickBypass);
-    const webHasApplicationKey = Boolean(
-      sessionStorage.getItem("shiftplanner_api_key") || localStorage.getItem("shiftplanner_vm_key"),
-    );
-    const webLoginRequired = !extensionContext.embedded && (!adminUnlocked || !webHasApplicationKey);
+    // The web version only needs the admin password; the application key is
+    // required for the Jarvis extension, which identifies employees without a password.
+    const webLoginRequired = !extensionContext.embedded && !adminUnlocked;
 
     const user: User = {
       id: 0,
@@ -125,8 +126,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       accessPolicy: {},
     };
 
-    const canAccess = (pageKey: string) => adminUnlocked || !ADMIN_PAGE_KEYS.has(pageKey);
-    const canWrite = (pageKey: string) => adminUnlocked || pageKey === "settings";
+    const isWebSession = !extensionContext.embedded;
+    // Personal settings belong to the identified employee in the extension.
+    const canAccess = (pageKey: string) => !(isWebSession && pageKey === "settings") && (adminUnlocked || !ADMIN_PAGE_KEYS.has(pageKey));
+    const canWrite = (pageKey: string) => canAccess(pageKey) && (adminUnlocked || pageKey === "settings");
 
     return {
       user,
@@ -137,6 +140,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       canView: canAccess,
       canWrite,
       webLoginRequired,
+      isWebSession,
       loginToWeb,
       unlockAdmin,
     };

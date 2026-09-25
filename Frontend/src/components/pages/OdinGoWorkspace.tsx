@@ -206,7 +206,7 @@ function TemperatureRange({ day, days }: { day: WeatherDay; days: WeatherDay[] }
 }
 
 export default function OdinGoWorkspace() {
-  const { user } = useAuth();
+  const { user, isWebSession } = useAuth();
   const { language, languages, setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
   const location = useLocation();
@@ -592,7 +592,7 @@ export default function OdinGoWorkspace() {
           {PRIMARY_TABS.map(renderWorkspaceTab)}
         </div>
         <div className="flex items-center gap-1.5 overflow-x-auto border-t border-slate-800 bg-slate-950/45 px-3 py-1.5">
-          {SUPPORT_TABS.map(renderWorkspaceTab)}
+          {SUPPORT_TABS.filter((tab) => !(isWebSession && tab.id === "preferences")).map(renderWorkspaceTab)}
           <span aria-hidden="true" className="mx-1 h-7 w-px bg-red-500/30" />
           <span className="flex shrink-0 items-center gap-1.5 px-1 text-[9px] font-bold uppercase tracking-[0.15em] text-red-400/80"><LockKeyhole className="h-3 w-3" />{language === "de" ? "Administration" : "Administration"}</span>
           {ADMIN_TABS.map(renderWorkspaceTab)}
@@ -609,7 +609,7 @@ export default function OdinGoWorkspace() {
             <Route path="day" element={<PageGuard pageKey="shiftplan"><div className="h-full min-h-0 overflow-hidden"><TagesplanungPage /></div></PageGuard>} />
             <Route path="handover" element={<ShiftHandover />} />
             <Route path="team-handovers" element={<TeamHandovers />} />
-            <Route path="preferences" element={<PageGuard pageKey="settings"><UserPreferencesPage /></PageGuard>} />
+            <Route path="preferences" element={isWebSession ? <Navigate to={`../shiftplan${location.search}`} replace /> : <PageGuard pageKey="settings"><UserPreferencesPage /></PageGuard>} />
             <Route path="admin-settings" element={<PageGuard pageKey="admin_settings" min="write"><AdminSettings /></PageGuard>} />
             <Route path="generator" element={<PageGuard pageKey="shiftplan_control" min="write"><ShiftplanControlCenter /></PageGuard>} />
             <Route path="users" element={<PageGuard pageKey="user_management" min="write"><Users /></PageGuard>} />
