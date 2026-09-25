@@ -317,6 +317,13 @@ router.get(
            avoid_colleagues AS "avoidColleagues",
            workload_preference AS "workloadPreference",
            monthly_preferences AS "monthlyPreferences",
+           max_weekends_per_month AS "maxWeekendsPerMonth",
+           night_model AS "nightModel",
+           COALESCE((
+             SELECT json_agg(json_build_object('id', colleague.id, 'name', concat_ws(', ', colleague.last_name, colleague.first_name)) ORDER BY colleague.last_name, colleague.first_name)
+               FROM users colleague
+              WHERE colleague.id IN (SELECT value::int FROM jsonb_array_elements_text(COALESCE(employee_preferences.preferred_colleagues, '[]'::jsonb)))
+           ), '[]'::json) AS "preferredColleagues",
            notes,
            updated_at AS "updatedAt"
          FROM employee_preferences
@@ -324,9 +331,14 @@ router.get(
         [targetUserId]
       );
 
+      const { rows: colleagueSetting } = await db.query(
+        "SELECT value FROM app_settings WHERE key = 'shiftplan.preferred_colleagues_enabled' LIMIT 1"
+      );
+
       res.json({
         user: users[0],
         preferences: rows[0] || null,
+        preferredColleaguesEnabled: String(colleagueSetting[0]?.value ?? 'false') === 'true',
       });
     } catch (err) {
       console.error("USER PREFERENCES READ ERROR:", err);

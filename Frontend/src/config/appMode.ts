@@ -21,6 +21,7 @@ const SHIFTPLANNER_ADMIN_TABS = new Set([
   "shiftplan",
   "wellbeing",
   "audit",
+  "security",
 ]);
 
 export function isPageEnabledInCurrentMode(pageKey: string): boolean {

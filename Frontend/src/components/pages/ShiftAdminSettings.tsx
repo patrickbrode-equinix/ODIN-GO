@@ -323,6 +323,7 @@ interface AdvancedPlanningSettings {
   issuePriorityMode: 'staffing_first' | 'balanced' | 'fairness_first';
   blockedWeekdayEmployees: string[];
   adminFlagsEnabled: boolean;
+  preferredColleaguesEnabled: boolean;
 }
 
 interface DbsConfig {
@@ -363,6 +364,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   issuePriorityMode: 'balanced',
   blockedWeekdayEmployees: [],
   adminFlagsEnabled: false,
+  preferredColleaguesEnabled: false,
 };
 
 const DEFAULT_DBS_CONFIG: DbsConfig = {
@@ -447,6 +449,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     issuePriorityMode: (settings['shiftplan.issue_priority_mode'] as AdvancedPlanningSettings['issuePriorityMode']) || DEFAULT_ADVANCED_SETTINGS.issuePriorityMode,
     blockedWeekdayEmployees: parseEmployeePoolSetting(settings['shiftplan.blocked_weekday_employee_pool']),
     adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
+    preferredColleaguesEnabled: parseBooleanSetting(settings['shiftplan.preferred_colleagues_enabled'], DEFAULT_ADVANCED_SETTINGS.preferredColleaguesEnabled),
   };
 }
 
@@ -896,6 +899,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
         'shiftplan.blocked_weekday_employee_pool': JSON.stringify(advancedSettings.blockedWeekdayEmployees),
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
+        'shiftplan.preferred_colleagues_enabled': advancedSettings.preferredColleaguesEnabled,
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
     } catch (error: any) {
@@ -2266,6 +2270,21 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             <option value="balanced">{t("shiftAdmin.issueModeBalanced")}</option>
             <option value="fairness_first">{t("shiftAdmin.issueModeFairness")}</option>
           </select>
+        </div>
+      </Section>
+
+      {/* ── Preferred colleagues ── */}
+      <Section title={isGerman ? 'Wunschkollegen' : 'Preferred colleagues'} icon={Users} defaultOpen={false}>
+        <div className="space-y-3">
+          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={advancedSettings.preferredColleaguesEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, preferredColleaguesEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+            <span>{isGerman ? 'Wunschkollegen im Generator berücksichtigen' : 'Use preferred colleagues in the generator'}</span>
+          </label>
+          <p className="text-xs leading-5 text-slate-400">
+            {isGerman
+              ? 'Mitarbeitende können in ihren Einstellungen bis zu vier Wunschkollegen wählen. Die Auswahl bleibt immer gespeichert; ist der Schalter aus, ignoriert der Generator sie.               Speichern über „Leitstand & Autopilot speichern“ unten.'
+                            : 'Employees can pick up to four preferred colleagues in their settings. Selections are always stored; while this switch is off the generator ignores them. Save with “Save control & autopilot” below.'}
+          </p>
         </div>
       </Section>
 

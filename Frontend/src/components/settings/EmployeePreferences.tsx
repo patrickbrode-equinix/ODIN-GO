@@ -122,6 +122,7 @@ interface Preferences {
   max_weekends_per_month: number | null;
   preferred_days: number[];
   blocked_days: number[];
+  preferred_colleagues: number[];
 }
 
 const SHIFT_CODES = ['E1', 'E2', 'L1', 'L2', 'N'];
@@ -193,6 +194,7 @@ const DEFAULTS: Preferences = {
   monthly_preferences: {},
   preferred_days: [], blocked_days: [],
   max_weekends_per_month: null,
+  preferred_colleagues: [],
 };
 
 function applyEmployeeSelectableShiftDefinitions(
@@ -277,6 +279,8 @@ export default function EmployeePreferences() {
   const [shiftOptions, setShiftOptions] = useState<string[]>(SHIFT_CODES);
   const [shiftNameMap, setShiftNameMap] = useState<Record<string, string>>({});
   const [canSelectBlockedDays, setCanSelectBlockedDays] = useState(false);
+  const [colleagueOptions, setColleagueOptions] = useState<Array<{ id: number; name: string }>>([]);
+  const [preferredColleaguesEnabled, setPreferredColleaguesEnabled] = useState(false);
 
   const refreshShiftOptions = useCallback(async () => {
     try {
@@ -301,6 +305,8 @@ export default function EmployeePreferences() {
       ]);
       applyEmployeeSelectableShiftDefinitions(definitionsRes.data?.definitions || [], setShiftOptions, setShiftNameMap);
       setCanSelectBlockedDays(prefRes.data?.canSelectBlockedDays === true);
+      setColleagueOptions(Array.isArray(prefRes.data?.colleagueOptions) ? prefRes.data.colleagueOptions : []);
+      setPreferredColleaguesEnabled(prefRes.data?.preferredColleaguesEnabled === true);
       if (prefRes.data.preferences) {
         const stored = prefRes.data.preferences;
         const allowed = (value: unknown) => (Array.isArray(value) ? value.filter((code) => {
@@ -311,7 +317,8 @@ export default function EmployeePreferences() {
         setPrefs({
           preferred_shifts: allowed(stored.preferred_shifts), unwanted_shifts: allowed(stored.unwanted_shifts), monthly_preferences: monthly,
           preferred_holidays: stored.preferred_holidays || [], max_nights_per_month: normalizeNightBlockLimit(stored.max_nights_per_month), night_model: stored.night_model === 'SHORT' ? 'SHORT' : 'SEVEN_DAY', max_weekends_per_month: stored.max_weekends_per_month ?? null, preferred_days: [], blocked_days: stored.blocked_days || [],
-        });
+                    preferred_colleagues: Array.isArray(stored.preferred_colleagues) ? stored.preferred_colleagues.map((id: unknown) => Number(id)).filter((id: number) => Number.isInteger(id)).slice(0, 4) : [],
+                  });
       } else {
         setPrefs(DEFAULTS);
       }
@@ -636,6 +643,48 @@ export default function EmployeePreferences() {
         </div>
         <p className="text-[10px] text-muted-foreground mt-2">{copy.weekDayLegend}</p>
       </EnterpriseCard>}
+
+      {/* Preferred colleagues */}
+      <EnterpriseCard>
+        <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3">
+          <Heart className="w-4 h-4 text-pink-400" />
+          {isGerman ? 'Wunschkollegen' : 'Preferred colleagues'}
+          <HelpTip text={isGerman
+            ? 'Wähle bis zu vier Kollegen, mit denen du gerne in derselben Schicht arbeitest. Die Planung versucht, euch gemeinsam einzuteilen, ohne Ruhezeiten, Stundenziele oder deine Schichtwünsche zu verletzen.'
+            : 'Choose up to four colleagues you like to work the same shift with. Planning tries to schedule you together without breaking rest rules, target hours or your shift wishes.'} />
+        </h3>
+        {!preferredColleaguesEnabled && (
+          <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-300">
+            {isGerman
+              ? 'Die Berücksichtigung von Wunschkollegen ist aktuell vom Admin deaktiviert. Deine Auswahl bleibt gespeichert und wird genutzt, sobald die Funktion aktiviert wird.'
+              : 'Preferred colleagues are currently disabled by the administrator. Your selection is kept and used once the feature is enabled.'}
+          </p>
+        )}
+        <div className="grid gap-2 sm:grid-cols-2">
+          {[0, 1, 2, 3].map((slot) => {
+            const selectedId = prefs.preferred_colleagues[slot];
+            return (
+              <select
+                key={slot}
+                value={selectedId ?? ''}
+                onChange={(event) => {
+                  const nextId = Number.parseInt(event.target.value, 10);
+                  const next = prefs.preferred_colleagues.filter((_, index) => index !== slot);
+                  if (Number.isInteger(nextId)) next.splice(Math.min(slot, next.length), 0, nextId);
+                  update('preferred_colleagues', next.slice(0, 4));
+                }}
+                disabled={slot > prefs.preferred_colleagues.length}
+                className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="">{isGerman ? `Wunschkollege ${slot + 1} – keiner` : `Colleague ${slot + 1} – none`}</option>
+                {colleagueOptions
+                  .filter((option) => option.id === selectedId || !prefs.preferred_colleagues.includes(option.id))
+                  .map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+              </select>
+            );
+          })}
+        </div>
+      </EnterpriseCard>
 
       {/* Save */}
       <div className="flex justify-end">

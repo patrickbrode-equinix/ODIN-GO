@@ -1034,6 +1034,42 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empPrefsMap.set(employeeName, blockedWeekdayAccessEmployees.has(employeeName) ? row : { ...row, blocked_days: [] });
   }
 
+  // Preferred colleagues stay stored per user, but are only used for planning
+  // while the admin switch is on. Wishes are treated symmetrically: if A wants
+  // to work with B, B also profits from sharing a shift with A.
+  const preferredColleaguesSetting = await pool.query(
+    "SELECT value FROM app_settings WHERE key = 'shiftplan.preferred_colleagues_enabled' LIMIT 1"
+  );
+  const preferredColleaguesEnabled = String(preferredColleaguesSetting.rows[0]?.value ?? 'false') === 'true';
+  const preferredColleagueMap = new Map();
+  const preferredColleagueWishes = [];
+  if (preferredColleaguesEnabled) {
+    const colleagueIds = [...new Set(empPrefRes.rows.flatMap((row) => (Array.isArray(row.preferred_colleagues) ? row.preferred_colleagues : [])
+      .map((id) => Number.parseInt(String(id), 10)).filter(Number.isInteger)))];
+    const colleagueUsers = colleagueIds.length
+      ? await pool.query('SELECT id, first_name, last_name FROM users WHERE id = ANY($1::int[])', [colleagueIds])
+      : { rows: [] };
+    const colleagueNameById = new Map(colleagueUsers.rows.map((row) => [
+      row.id,
+      resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup),
+    ]));
+    const addColleaguePair = (left, right) => {
+      if (!preferredColleagueMap.has(left)) preferredColleagueMap.set(left, new Set());
+      preferredColleagueMap.get(left).add(right);
+    };
+    for (const row of empPrefRes.rows) {
+      const employeeName = resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup);
+      if (!employeeName) continue;
+      for (const rawId of (Array.isArray(row.preferred_colleagues) ? row.preferred_colleagues : []).slice(0, 4)) {
+        const colleagueName = colleagueNameById.get(Number.parseInt(String(rawId), 10));
+        if (!colleagueName || colleagueName === employeeName) continue;
+        preferredColleagueWishes.push({ employee: employeeName, colleague: colleagueName });
+        addColleaguePair(employeeName, colleagueName);
+        addColleaguePair(colleagueName, employeeName);
+      }
+    }
+  }
+
   const preferencesForDate = (employeeName, dateStr) => {
     const base = empPrefsMap.get(employeeName);
     if (!base) return base;
@@ -2083,6 +2119,24 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             && (!planConfig.respect_employee_wishes || preferredShiftList.length === 0 || preferenceMatch);
           if (coloBoost) reasons.push(`Colo-Kompetenz: deckt Colo-Bedarf in ${shiftDef.shift_type} (Wunsch passt)`);
 
+          let colleagueMatches = 0;
+          const wishedColleagues = preferredColleaguesEnabled ? preferredColleagueMap.get(employee) : null;
+          if (wishedColleagues && !hardBlocked) {
+            const currentShiftType = normalizePlanningShiftTypeKey(shiftDef.shift_type);
+            const matchedColleagues = [...wishedColleagues].filter((colleague) => {
+              if (colleague === employee) return false;
+              const todayCode = String(empDayAssignment[colleague]?.[day] || '').trim().toUpperCase();
+              if (todayCode) return coloShiftTypeByCode.get(todayCode) === currentShiftType;
+              const runningSeriesCode = String(empSeriesCode[colleague] || '').trim().toUpperCase();
+              return Boolean(runningSeriesCode) && empSeriesRemaining[colleague] > 0 && coloShiftTypeByCode.get(runningSeriesCode) === currentShiftType;
+            });
+            colleagueMatches = matchedColleagues.length;
+            if (colleagueMatches > 0) {
+              score += colleagueMatches * 300;
+              reasons.push(`Wunschkollege in derselben Schicht: ${matchedColleagues.join(', ')}`);
+            }
+          }
+
           return {
             emp: employee,
             score: hardBlocked ? Number.NEGATIVE_INFINITY : score,
@@ -2090,6 +2144,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             hardBlocked,
             preferenceMatch,
             coloBoost,
+            colleagueMatches,
             dbsRoster: isRosterDbsAssignment,
             targetHoursGap: Math.max(remainingToTarget, 0),
           };
@@ -2124,6 +2179,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           // A stated preferred shift is then the first tie-breaker after all
           // hard safety, recovery, absence and staffing rules have applied.
           if (left.preferenceMatch !== right.preferenceMatch) return left.preferenceMatch ? -1 : 1;
+          // Preferred colleagues come right after the employee's own shift wish.
+          if (left.colleagueMatches !== right.colleagueMatches) return right.colleagueMatches - left.colleagueMatches;
           if (right.score !== left.score) return right.score - left.score;
           const leftRank = getDeterministicRotationRank({ employee: left.emp, year, month: mon, weekKey: rotationWeekKey, shiftCode: shiftDef.code });
           const rightRank = getDeterministicRotationRank({ employee: right.emp, year, month: mon, weekKey: rotationWeekKey, shiftCode: shiftDef.code });
@@ -3041,6 +3098,25 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   planReport.conflictsCount = conflicts.length;
+  const shiftCodeByEmployeeDay = new Map(shifts.map((entry) => [`${entry.employee_name}|${entry.day}`, String(entry.shift_code || '').trim().toUpperCase()]));
+  planReport.preferredColleagues = {
+    enabled: preferredColleaguesEnabled,
+    wishes: preferredColleagueWishes
+      .filter((wish) => activeEmployees.includes(wish.employee) && activeEmployees.includes(wish.colleague))
+      .map((wish) => {
+        let sharedDays = 0;
+        let employeeDays = 0;
+        for (let day = 1; day <= numDays; day++) {
+          const ownCode = shiftCodeByEmployeeDay.get(`${wish.employee}|${day}`);
+          if (!ownCode) continue;
+          employeeDays += 1;
+          const colleagueCode = shiftCodeByEmployeeDay.get(`${wish.colleague}|${day}`);
+          if (colleagueCode && coloShiftTypeByCode.get(ownCode) === coloShiftTypeByCode.get(colleagueCode)) sharedDays += 1;
+        }
+        return { ...wish, sharedDays, employeeDays };
+      }),
+  };
+  const fulfilledColleagueWishes = planReport.preferredColleagues.wishes.filter((wish) => wish.sharedDays > 0).length;
   planReport.rulesApplied = [
     `Rotationsregeln: Max ${rotation.max_consecutive_workdays} Arbeitstage, ${rotation.max_nights_per_month} Nächte/Monat`,
     `Serienplanung aktiv: ${shiftDefs.map((definition) => `${definition.code}=${getShiftSeriesDays(definition)} Tage`).join(', ')}`,
@@ -3056,6 +3132,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     coloPlanningConfig.enabled
       ? `Colo-Kompetenzplanung: ${coloRolePlan.summary.assigned}/${coloRolePlan.summary.requiredAssignments} Aufgaben aus ${coloRolePlan.summary.poolSize} Pool-Mitarbeitern besetzt`
       : 'Colo-Kompetenzplanung: deaktiviert',
+    preferredColleaguesEnabled
+      ? `Wunschkollegen: ${fulfilledColleagueWishes}/${planReport.preferredColleagues.wishes.length} Wünsche mit gemeinsamen Schichten`
+      : 'Wunschkollegen: vom Admin deaktiviert (gespeicherte Auswahl wird ignoriert)',
     `Harte Regeln Priorität: ${planConfig.hard_rules_priority}%`,
     `Fairness Priorität: ${planConfig.fairness_priority}%`,
   ];
