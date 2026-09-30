@@ -1,5 +1,5 @@
 const DEFAULTS = {
-  plannerUrl: "http://127.0.0.1:5173",
+  plannerUrl: "https://eqx-portal.corp.equinix.com",
   apiKey: "",
 };
 const ADMIN_SESSION_KEY = "odinGoAdminSession";
@@ -8,9 +8,25 @@ const notificationClaims = new Map();
 
 function logConnection(event, details = {}) { console.info("[ODIN GO]", event, details); }
 
+function validatePlannerUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    if (url.protocol !== "https:") {
+      return { ok: false, message: "ODIN GO muss innerhalb von Jarvis über HTTPS erreichbar sein. Die konfigurierte Planner-URL verwendet HTTP." };
+    }
+    if (url.username || url.password || url.search || url.hash) {
+      return { ok: false, message: "Die Planner-URL darf keine Zugangsdaten, Query-Parameter oder Fragmente enthalten." };
+    }
+    return { ok: true, url: url.origin + url.pathname.replace(/\/+$/, "") };
+  } catch {
+    return { ok: false, message: "Ungültige Planner-Adresse." };
+  }
+}
+
 async function testConnection(plannerUrl, apiKey) {
-  const baseUrl = normalizeBaseUrl(plannerUrl);
-  if (!/^https?:\/\//i.test(baseUrl)) return { ok: false, status: 0, message: "Ungültige Planner-Adresse." };
+  const validation = validatePlannerUrl(plannerUrl);
+  if (!validation.ok) return { ok: false, status: 0, message: validation.message };
+  const baseUrl = validation.url;
   const url = `${baseUrl}/api/health/ready`;
   logConnection("Verbindungsversuch", { url });
   const controller = new AbortController();
@@ -27,7 +43,9 @@ async function testConnection(plannerUrl, apiKey) {
 }
 
 function normalizeBaseUrl(value) {
-  return String(value || DEFAULTS.plannerUrl).trim().replace(/\/+$/, "");
+  const validation = validatePlannerUrl(value || DEFAULTS.plannerUrl);
+  if (!validation.ok) throw new Error(validation.message);
+  return validation.url;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

@@ -1,7 +1,7 @@
 (() => {
   if (document.getElementById("shiftplanner-jarvis-host")) return;
 
-  const DEFAULTS = { plannerUrl: "", apiKey: "", employeeName: "" };
+  const DEFAULTS = { plannerUrl: "https://eqx-portal.corp.equinix.com", apiKey: "", employeeName: "" };
   const log = (...args) => console.info("[ODIN GO]", ...args);
   log("Content-Script gestartet", { page: location.href });
   const host = document.createElement("div");
@@ -410,6 +410,18 @@
   const noticeTabs = [["notices", "Notifications", "/jarvis-notifications"]];
 
   function normalizeBaseUrl() { return String(settings.plannerUrl || DEFAULTS.plannerUrl).replace(/\/+$/, ""); }
+  function plannerUrlError() {
+    try {
+      const url = new URL(normalizeBaseUrl());
+      if (location.protocol === "https:" && url.protocol !== "https:") {
+        return "ODIN GO muss innerhalb von Jarvis über HTTPS erreichbar sein. Die konfigurierte Planner-URL verwendet HTTP.";
+      }
+      if (url.protocol !== "https:") return "Die Planner-URL muss HTTPS verwenden.";
+      return "";
+    } catch {
+      return "Die konfigurierte Planner-URL ist ungültig.";
+    }
+  }
   function hasPasswordlessAdminAccess() {
     return String(verifiedUser?.displayName || "")
       .trim()
@@ -477,6 +489,15 @@
       iframe.style.display = "none";
       window.setTimeout(() => adminPasswordInput.focus(), 0);
     } else if (path) {
+      const urlError = plannerUrlError();
+      if (urlError) {
+        iframe.removeAttribute("src");
+        iframe.style.display = "none";
+        notice.textContent = urlError;
+        notice.classList.add("open");
+        renderTabs();
+        return;
+      }
       adminLogin.classList.remove("open");
       iframe.style.display = "block";
       offlineFallback.classList.remove("open");
@@ -510,11 +531,11 @@
     settings = await chrome.storage.sync.get(DEFAULTS);
     log("Einstellungen geladen", { plannerUrl: settings.plannerUrl, hasApiKey: Boolean(settings.apiKey) });
     renderVerifiedEmployee();
-    const localPlanner = /^https?:\/\/(localhost|127\.0\.0\.1)(?::\d+)?(?:\/|$)/i.test(settings.plannerUrl || "");
-    const missingSettings = !settings.plannerUrl || (!settings.apiKey && !localPlanner);
-    notice.textContent = !settings.plannerUrl
-      ? "Bitte zuerst die VM-Adresse in den Erweiterungsoptionen eintragen."
-      : !settings.apiKey && !localPlanner
+    const urlError = plannerUrlError();
+    const missingSettings = Boolean(urlError) || !settings.apiKey;
+    notice.textContent = urlError
+      ? urlError
+      : !settings.apiKey
       ? "Bitte den lokalen App-Schlüssel in den Erweiterungsoptionen hinterlegen."
       : "";
     notice.classList.toggle("open", missingSettings);

@@ -7,7 +7,12 @@
 3. `Entpackte Erweiterung laden` waehlen.
 4. Diesen Ordner `ChromeExtension` auswaehlen.
 5. In den Erweiterungsdetails `Erweiterungsoptionen` oeffnen.
-6. VM-Adresse des Schichtplaners speichern.
+6. `https://eqx-portal.corp.equinix.com` als ODIN-GO-Adresse speichern und den
+   App-Schluessel hinterlegen.
+
+Die Erweiterung akzeptiert fuer Jarvis ausschliesslich HTTPS. Eine HTTP-Adresse
+wird mit einer verstaendlichen Mixed-Content-Warnung abgelehnt und weder fuer
+das iframe noch fuer API-Aufrufe verwendet.
 
 Danach erscheint auf `https://jarvis-emea.equinix.com/` der runde Button
 `GO`. Er kann mit gedrueckter Maustaste frei verschoben werden. Die Position

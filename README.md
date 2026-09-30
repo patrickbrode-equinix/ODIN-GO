@@ -47,38 +47,26 @@ Frontend automatisch installiert. Danach ist die Anwendung unter
 Der Backend-Status ist unter `http://localhost:8001/api/health` erreichbar und
 liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
 
-### Clean installation on Ubuntu with Portainer
+### Produktivbetrieb auf der internen VM mit Portainer
 
-This stack is designed to start with an empty, independent `shiftplanner`
-database. It never reads an existing ODIN database. Import employees and plans
-afterwards through the application Excel upload.
+Nginx Proxy Manager ist der einzige TLS-Endpunkt auf Port 443. Der Frontend-
+Server liefert die SPA inklusive `/odin-go/*` aus und leitet `/api/*` sowie
+`/uploads/*` im Docker-Netz an `backend:8001` weiter. Ein zusaetzlicher Caddy-
+Container ist daher nicht erforderlich.
 
-The Git repository contains application code, database schema, migrations, and
-planning rules only. It does not contain employee records, shift plans, drafts,
-Excel uploads, database dumps, or production secrets. A fresh installation
-creates only the technical schema and the local administrator with password
-`root`.
+1. Den vorhandenen Git-verwalteten Stack nicht loeschen und keine Volumes
+   entfernen.
+2. `CORS_ORIGINS` auf
+   `https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com` und
+   `COC_PUBLIC_URL` auf `https://eqx-portal.corp.equinix.com` setzen.
+3. Nginx Proxy Manager fuer `eqx-portal.corp.equinix.com` per HTTP an
+   `fr2lxcops01.corp.equinix.com:8080` weiterleiten lassen.
+4. In Portainer **Pull and redeploy** ausfuehren. PostgreSQL- und Upload-
+   Volumes bleiben erhalten.
+5. `https://eqx-portal.corp.equinix.com/api/health/ready` und
+   `https://eqx-portal.corp.equinix.com/odin-go/shiftplan` testen.
 
-1. In Portainer remove the old `odin_go` stack and select **Remove volumes**.
-   This is required for a clean start; it deletes only the old ODIN GO database
-   and upload volumes.
-2. Create the stack from this Git repository with `docker-compose.yml`.
-3. In Portainer provide only `DB_PASSWORD`, `JWT_SECRET`,
-   `SHIFTPLANNER_API_KEY`, and `ODIN_HOSTNAME`. Do not add
-   `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `DB_HOST`, `DB_PORT`,
-   `DB_NAME`, or `DB_USER`: these values are fixed consistently by the stack.
-   Do not add a custom `CADDY_CONFIG` variable.
-4. Deploy the stack. PostgreSQL creates `shiftplanner` and `shiftplanner_app`
-   automatically, then backend, frontend, and Caddy start in that order.
-   The current stack uses a versioned empty database volume, so an earlier
-   failed installation with different database credentials is not reused.
-5. Open `https://<ODIN_HOSTNAME>:8443/api/health`. The normal app URL is
-   `https://<ODIN_HOSTNAME>:8443`.
-
-The default standalone admin password is `root`. Change it after the first
-login in the application admin settings. Internal hostnames use Caddy's
-internal CA; managed clients must trust that CA before Chrome can embed ODIN GO
-inside HTTPS Jarvis.
+Die exakten NPM-Felder und Tests stehen in `DEPLOYMENT_NPM.md`.
 
 For later upgrades, keep the volumes. The `scripts/reset-clean-install.sh`
 script intentionally removes them only when started with `RESET_ODIN_GO=YES`.
@@ -97,9 +85,10 @@ seitliches Kontextfenster mit Dienstplan, Wochenplan, Tagesplan und persoenliche
 Wuenschen. Der mit Passwort geschuetzte Adminbereich enthaelt Planer-Einstellungen,
 Generator und User Management.
 
-In den Chrome-Erweiterungsoptionen wird nur die VM-Adresse gespeichert. Name und
+In den Chrome-Erweiterungsoptionen wird die HTTPS-Adresse
+`https://eqx-portal.corp.equinix.com` gespeichert. Name und
 E-Mail werden aus dem angemeldeten Jarvis-SSO-Profil uebernommen. Die Erweiterung
-greift ausschliesslich auf die HTTP-API des Schichtplaners zu.
+greift ausschliesslich per HTTPS auf die API des Schichtplaners zu.
 Datenbankzugangsdaten werden niemals im Browser hinterlegt.
 
 Die aktuelle Erweiterung uebernimmt die im sichtbaren Jarvis-SSO-Profil
