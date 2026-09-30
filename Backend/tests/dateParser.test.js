@@ -23,14 +23,36 @@ import { parseCommitDateToMs, parseAnyDateToIso, formatRemainingFromCommit } fro
 function roundS(ms) { return Math.round(ms / 1000) * 1000; }
 
 /**
- * Expected UTC ms for a given LOCAL datetime on the machine running the test.
- * Uses the same new Date(y, m-1, d, h, mi, s) convention as dateParser.js.
+ * Expected UTC ms for a date/time in the configured operational timezone.
+ * This must not depend on the test runner's host timezone (GitHub uses UTC).
  */
 function localMs(y, mo, d, h = 0, mi = 0, s = 0) {
-  return new Date(y, mo - 1, d, h, mi, s).getTime();
+  const faceUtcMs = Date.UTC(y, mo - 1, d, h, mi, s);
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Europe/Berlin",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hourCycle: "h23",
+  });
+  const parts = Object.fromEntries(
+    formatter.formatToParts(new Date(faceUtcMs))
+      .filter(({ type }) => type !== "literal")
+      .map(({ type, value }) => [type, Number(value)]),
+  );
+  const timezoneViewUtcMs = Date.UTC(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    parts.second,
+  );
+  return faceUtcMs - (timezoneViewUtcMs - faceUtcMs);
 }
-
-const TZ_OFFSET_H = -new Date(2026, 2, 6).getTimezoneOffset() / 60; // e.g. +1 for CET
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  parseCommitDateToMs                                                         */
