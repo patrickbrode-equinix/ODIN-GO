@@ -17,7 +17,7 @@ jobs:
           SHIFTPLANNER_API_KEY: ci-only-application-key
         run: docker compose config --quiet
       - name: Validate Caddy configuration
-        run: docker run --rm -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+        run: docker run --rm -v "$PWD/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
       - uses: actions/setup-node@v4
         with:
           node-version: 20
