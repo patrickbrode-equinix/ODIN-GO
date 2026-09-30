@@ -4,14 +4,17 @@
 
 ```text
 Jarvis / Browser -> HTTPS :443 -> Nginx Proxy Manager (TLS)
-  -> HTTP :8080 -> ODIN frontend (SPA + interner API-Proxy)
-  -> HTTP backend:8001 im Docker-Netz -> ODIN backend
+  -> HTTP :8081 -> ODIN Caddy (interner HTTP-Router)
+  -> /api/* und /uploads/* -> backend:8001
+  -> alle anderen Pfade -> frontend:8000
   -> postgres:5432 im Docker-Netz
 ```
 
-Der Frontend-Server verarbeitet `/odin-go/*` als SPA-Route und proxied
-`/api/*` sowie `/uploads/*` zum Backend. NPM benoetigt deshalb genau einen
-Upstream. Caddy und ein zweites TLS-Setup sind nicht erforderlich.
+NPM benoetigt genau einen Upstream. Caddy nutzt kein eigenes TLS und mountet
+den versionierten Repository-Caddyfile read-only nach
+`/etc/caddy/Caddyfile`. Der Pfad `/odin-go/*` wird unveraendert an den
+Frontend-Server weitergegeben; `/api/*` und `/uploads/*` gehen direkt an das
+Backend.
 
 ## Nginx Proxy Manager
 
@@ -19,8 +22,8 @@ Unter **Hosts -> Proxy Hosts -> Add Proxy Host** eintragen:
 
 - Domain Names: `eqx-portal.corp.equinix.com`
 - Scheme: `http`
-- Forward Hostname / IP: `fr2lxcops01.corp.equinix.com`
-- Forward Port: `8080`
+- Forward Hostname / IP: `10.144.148.202`
+- Forward Port: `8081`
 - Cache Assets: aus
 - Block Common Exploits: ein
 - Websockets Support: ein
@@ -38,7 +41,7 @@ Unter **SSL**:
 - HSTS Subdomains: aus
 
 Im Feld **Advanced** ist keine zusaetzliche Location und kein `proxy_pass`
-notwendig. NPM soll Pfad und Query unveraendert an Port 8080 weiterreichen.
+notwendig. NPM soll Pfad und Query unveraendert an Port 8081 weiterreichen.
 
 ## Portainer
 
@@ -46,13 +49,16 @@ notwendig. NPM soll Pfad und Query unveraendert an Port 8080 weiterreichen.
 2. `CORS_ORIGINS` exakt auf
    `https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com` setzen.
 3. `COC_PUBLIC_URL` auf `https://eqx-portal.corp.equinix.com` setzen.
-4. Veraltete Variablen `ODIN_HOSTNAME`, `HTTP_PORT`, `HTTPS_PORT` und
-   `BACKEND_PORT` duerfen entfernt werden; sie werden nicht mehr ausgewertet.
+4. `ODIN_PROXY_PORT` auf `8081` setzen. Veraltete Variablen `ODIN_HOSTNAME`,
+   `HTTP_PORT`, `HTTPS_PORT`, `FRONTEND_PORT` und `BACKEND_PORT` duerfen
+   entfernt werden; sie werden nicht mehr ausgewertet.
 5. **Pull and redeploy** ausfuehren. Keine Volumes entfernen.
 
 ## Pruefungen
 
 ```text
+http://10.144.148.202:8081/api/health/ready
+http://10.144.148.202:8081/odin-go/shiftplan
 https://eqx-portal.corp.equinix.com/api/health/ready
 https://eqx-portal.corp.equinix.com/odin-go/shiftplan
 ```

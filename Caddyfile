@@ -1,0 +1,22 @@
+{
+	# Nginx Proxy Manager is the only public TLS endpoint. Caddy is an
+	# intentionally plain-HTTP router reachable through host port 8081.
+	auto_https off
+}
+
+:80 {
+	encode gzip zstd
+
+	# Keep the original path. The backend routes are mounted below /api and
+	# uploaded files below /uploads, so handle_path/strip_prefix must not be used.
+	@backend path /api /api/* /uploads /uploads/*
+	handle @backend {
+		reverse_proxy backend:8001
+	}
+
+	# React Router expects the complete /odin-go/... path. The frontend server
+	# returns index.html for these routes and also owns every remaining SPA path.
+	handle {
+		reverse_proxy frontend:8000
+	}
+}

@@ -88,8 +88,8 @@ services:
     # Keep the embedded application in sync with the checked-out Git revision.
     pull_policy: build
     restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-8080}:8000"
+    expose:
+      - "8000"
     environment:
       NODE_ENV: production
       PORT: 8000
@@ -106,6 +106,29 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 15s
+
+  # Internal HTTP router for the single Nginx Proxy Manager upstream.
+  # TLS terminates in NPM; Caddy must never publish host ports 80 or 443.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${ODIN_PROXY_PORT:-8081}:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      - shiftplanner-net
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/api/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
       start_period: 15s
 
 volumes:
