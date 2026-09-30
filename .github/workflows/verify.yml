@@ -28,6 +28,11 @@ jobs:
       - name: Install backend dependencies
         run: npm ci --prefix Backend
       - name: Run backend tests
+        env:
+          APP_MODE: shiftplanner
+          JWT_SECRET: ci-only-jwt-secret
+          SHIFTPLANNER_API_KEY: ci-only-application-key
+          OPERATIONAL_TIMEZONE: Europe/Berlin
         run: npm test --prefix Backend
       - name: Install frontend dependencies
         run: npm ci --prefix Frontend
