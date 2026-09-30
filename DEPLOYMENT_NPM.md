@@ -11,7 +11,7 @@ Jarvis / Browser -> HTTPS :443 -> Nginx Proxy Manager (TLS)
 ```
 
 NPM benoetigt genau einen Upstream. Caddy nutzt kein eigenes TLS und mountet
-den versionierten Repository-Caddyfile read-only nach
+den versionierten Repository-Caddyfile aus `caddy/Caddyfile` read-only nach
 `/etc/caddy/Caddyfile`. Der Pfad `/odin-go/*` wird unveraendert an den
 Frontend-Server weitergegeben; `/api/*` und `/uploads/*` gehen direkt an das
 Backend.
