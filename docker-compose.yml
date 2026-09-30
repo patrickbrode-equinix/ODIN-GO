@@ -116,11 +116,9 @@ services:
     ports:
       - "${ODIN_PROXY_PORT:-8081}:80"
     volumes:
-      # Keep the source below a dedicated repository directory. This avoids a
-      # collision with a stale /data/compose/<id>/Caddyfile directory that
-      # Docker may have created when an earlier Managed-by-Git checkout did
-      # not contain the source file.
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Mount the repository directory instead of an individual file. This is
+      # robust against stale file/directory paths in Portainer Git checkouts.
+      - ./caddy:/etc/caddy:ro
     networks:
       - shiftplanner-net
     depends_on:
