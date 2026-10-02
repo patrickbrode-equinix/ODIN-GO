@@ -44,15 +44,15 @@ Frontend automatisch installiert. Danach ist die Anwendung unter
 
 3. Die Anwendung unter `http://localhost:8080` oeffnen.
 
-Der Backend-Status ist unter `http://localhost:8001/api/health` erreichbar und
+Der Backend-Status ist ueber `http://localhost:8080/api/health` erreichbar und
 liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
 
 ### Produktivbetrieb auf der internen VM mit Portainer
 
-Nginx Proxy Manager ist der einzige TLS-Endpunkt auf Port 443. Caddy ist der
-interne HTTP-Router auf Host-Port 8081: `/api/*` und `/uploads/*` gehen an
-`backend:8001`, alle anderen Pfade einschliesslich `/odin-go/*` unveraendert an
-`frontend:8000`. Caddy verwendet kein eigenes TLS.
+Nginx Proxy Manager ist der TLS-Endpunkt auf Port 443 und leitet per HTTP an
+das Frontend auf Host-Port 8080 weiter (`8080:8000`). Der Frontend-Server
+proxyt `/api/*` und `/uploads/*` mit unveraendertem Pfad an `backend:8001`.
+Das Backend ist nur im Docker-Netz erreichbar. `/odin-go/*` liefert die SPA.
 
 1. Den vorhandenen Git-verwalteten Stack nicht loeschen und keine Volumes
    entfernen.
@@ -60,7 +60,7 @@ interne HTTP-Router auf Host-Port 8081: `/api/*` und `/uploads/*` gehen an
    `https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com` und
    `COC_PUBLIC_URL` auf `https://eqx-portal.corp.equinix.com` setzen.
 3. Nginx Proxy Manager fuer `eqx-portal.corp.equinix.com` per HTTP an
-   `10.144.148.202:8081` weiterleiten lassen.
+   `10.144.148.202:8080` weiterleiten lassen.
 4. In Portainer **Pull and redeploy** ausfuehren. PostgreSQL- und Upload-
    Volumes bleiben erhalten.
 5. `https://eqx-portal.corp.equinix.com/api/health/ready` und

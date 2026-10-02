@@ -10,8 +10,8 @@ const path = require("path");
 const app = express();
 const PORT = parseInt(process.env.PORT || "8000", 10);
 
-// Backend URL: In host-networking mode, backend is on localhost:8001
-const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8001";
+// Docker service DNS on shiftplanner-net; local runs can override BACKEND_URL.
+const BACKEND_URL = process.env.BACKEND_URL || "http://backend:8001";
 
 /* ------------------------------------------------ */
 /* LOCAL HEALTHCHECK (does NOT proxy to backend)     */
@@ -34,8 +34,8 @@ app.get("/healthz", (_req, res) => {
 /* ------------------------------------------------ */
 
 app.use(
-    "/api",
-    createProxyMiddleware({
+    // Mount at the root so Express cannot strip /api from req.url.
+    createProxyMiddleware("/api", {
         target: BACKEND_URL,
         changeOrigin: true,
         xfwd: true,
@@ -44,21 +44,18 @@ app.use(
         // timeout: 0       => no timeout on inactive socket (SSE keepalive pings every 25s).
         proxyTimeout: 0,
         timeout: 0,
-        on: {
-            error: (err, req, res) => {
-                // Swallow connection-reset errors from SSE client disconnects
-                if (res && !res.headersSent) {
-                    res.writeHead(502, { "Content-Type": "application/json" });
-                    res.end(JSON.stringify({ error: "Proxy error" }));
-                }
-            },
+        onError: (err, req, res) => {
+            // Swallow connection-reset errors from SSE client disconnects
+            if (res && !res.headersSent) {
+                res.writeHead(502, { "Content-Type": "application/json" });
+                res.end(JSON.stringify({ error: "Proxy error" }));
+            }
         },
     })
 );
 
 app.use(
-    "/uploads",
-    createProxyMiddleware({
+    createProxyMiddleware("/uploads", {
         target: BACKEND_URL,
         changeOrigin: true,
         xfwd: true,
@@ -84,7 +81,11 @@ app.get("*", (_req, res) => {
 /* START                                             */
 /* ------------------------------------------------ */
 
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(`[FRONTEND] Listening on http://0.0.0.0:${PORT}`);
-    console.log(`[FRONTEND] Proxying /api/* => ${BACKEND_URL}`);
-});
+if (require.main === module) {
+    app.listen(PORT, "0.0.0.0", () => {
+        console.log(`[FRONTEND] Listening on http://0.0.0.0:${PORT}`);
+        console.log(`[FRONTEND] Proxying /api/* => ${BACKEND_URL}`);
+    });
+}
+
+module.exports = app;

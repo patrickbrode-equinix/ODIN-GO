@@ -4,75 +4,97 @@
 
 ```text
 Jarvis / Browser -> HTTPS :443 -> Nginx Proxy Manager (TLS)
-  -> HTTP :8081 -> ODIN Caddy (interner HTTP-Router)
-  -> /api/* und /uploads/* -> backend:8001
-  -> alle anderen Pfade -> frontend:8000
-  -> postgres:5432 im Docker-Netz
+  -> HTTP 10.144.148.202:8080 -> frontend:8000
+  -> /odin-go/* -> Frontend SPA
+  -> /api/* und /uploads/* -> backend:8001 (intern)
+  -> postgres:5432 (intern)
 ```
 
-NPM benoetigt genau einen Upstream. Caddy nutzt kein eigenes TLS und mountet
-das versionierte Repository-Verzeichnis `caddy/` read-only nach `/etc/caddy`.
-Darin liegt `Caddyfile` als regulaere Datei. Der Pfad `/odin-go/*` wird unveraendert an den
-Frontend-Server weitergegeben; `/api/*` und `/uploads/*` gehen direkt an das
-Backend.
+Nur das Frontend veroeffentlicht `8080:8000`. Backend und Frontend verwenden
+`shiftplanner-net`; das Backend hat nur `expose: ["8001"]`, keine Host-Ports.
+Der Frontend-Produktionsserver verwendet `BACKEND_URL=http://backend:8001`.
+Sein Proxy wird am Root eingehaengt und behaelt Pfad und Query unveraendert:
+`/api/health/ready` erreicht das Backend als `/api/health/ready`.
+`/healthz` wird lokal beantwortet; `/odin-go/shiftplan` liefert die Frontend-SPA.
 
 ## Nginx Proxy Manager
 
-Unter **Hosts -> Proxy Hosts -> Add Proxy Host** eintragen:
+Den vorhandenen Proxy Host unter **Hosts -> Proxy Hosts** bearbeiten:
 
 - Domain Names: `eqx-portal.corp.equinix.com`
 - Scheme: `http`
 - Forward Hostname / IP: `10.144.148.202`
-- Forward Port: `8081`
+- Forward Port: `8080`
 - Cache Assets: aus
 - Block Common Exploits: ein
 - Websockets Support: ein
-- Access List: die bereits fuer das interne Portal vorgesehene Zugriffsliste;
-  falls keine existiert, `Publicly Accessible` nur im internen Firmennetz
+- Access List: die vorhandene Zugriffsliste beibehalten
 
-Unter **SSL**:
+Unter **SSL** das vorhandene Unternehmenszertifikat fuer die Domain auswaehlen:
 
-- das fuer `eqx-portal.corp.equinix.com` ausgestellte interne
-  Unternehmenszertifikat auswaehlen oder importieren
-- Force SSL: ein
-- HTTP/2 Support: ein
-- HSTS: erst einschalten, nachdem Zertifikat und HTTPS-Aufruf auf allen
-  verwalteten Clients erfolgreich getestet wurden
-- HSTS Subdomains: aus
+- Force SSL: **ON**
+- HTTP/2 Support: **ON**
 
-Im Feld **Advanced** ist keine zusaetzliche Location und kein `proxy_pass`
-notwendig. NPM soll Pfad und Query unveraendert an Port 8081 weiterreichen.
+NPM uebernimmt TLS auf den bestehenden produktiven Ports 80/443.
+Keine Custom Locations fuer `/api` oder `/odin-go` hinzufuegen. Vorhandene
+ODIN-spezifische Custom Locations und eigene `proxy_pass`-Overrides entfernen,
+damit alle Requests mit unveraendertem Pfad und Query denselben Upstream nutzen.
 
-## Portainer
+## Portainer: bestehenden Stack aktualisieren
 
-1. Im Git-verwalteten Stack die vorhandenen Secrets unveraendert lassen.
-2. `CORS_ORIGINS` exakt auf
-   `https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com` setzen.
-3. `COC_PUBLIC_URL` auf `https://eqx-portal.corp.equinix.com` setzen.
-4. `ODIN_PROXY_PORT` auf `8081` setzen. Veraltete Variablen `ODIN_HOSTNAME`,
-   `HTTP_PORT`, `HTTPS_PORT`, `FRONTEND_PORT` und `BACKEND_PORT` duerfen
-   entfernt werden; sie werden nicht mehr ausgewertet.
-5. **Pull and redeploy** ausfuehren. Keine Volumes entfernen.
+1. Git-Referenz `main` und Compose-Datei `docker-compose.yml` verwenden.
+   Den vorhandenen Stack, seinen Namen und seine Volumes beibehalten.
+2. `DB_PASSWORD`, `JWT_SECRET` und PostgreSQL-Zugangsdaten unveraendert lassen.
+   `DB_PASSWORD` kommt weiterhin ausschliesslich aus der vorhandenen Environment;
+   kein Passwort in Git hinterlegen. `shiftplanner_postgres_data_v2` und
+   `shiftplanner_uploads_data` bleiben erhalten.
+3. Environment pruefen:
+   `CORS_ORIGINS=https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com`
+   und `COC_PUBLIC_URL=https://eqx-portal.corp.equinix.com`.
+   Die obsolete Proxy-Port-Variable aus der Stack-Environment entfernen.
+4. Nur `SHIFTPLANNER_API_KEY` bei der geplanten manuellen Rotation aendern;
+   den passenden Key auch in den Jarvis-Erweiterungsoptionen aktualisieren.
+   Bis dahin den vorhandenen Key beibehalten.
+5. **Pull and redeploy** mit Neubau der lokalen Frontend-/Backend-Images
+   ausfuehren. Kein Reset-Skript und kein `docker compose down -v` verwenden.
+   Falls Portainer den alten Proxy-Container als verwaisten Container behaelt,
+   nur diesen alten Proxy-Container entfernen, keine Volumes.
+6. NPM auf den oben beschriebenen Upstream umstellen und die Pfade pruefen.
 
-## Pruefungen
+## Validierung
+
+```sh
+docker compose config --quiet
+npm test --prefix Backend
+npm run build --prefix Frontend
+npm test --prefix Frontend
+docker compose exec frontend wget -qO- http://frontend:8000/healthz
+docker compose exec frontend wget -qO- http://frontend:8000/api/health/ready
+docker compose exec frontend wget -qO- http://frontend:8000/odin-go/shiftplan
+```
+
+Der Frontend-Servertest prueft echte HTTP-Requests gegen einen lokalen
+Backend-Testserver, inklusive unveraendertem API-/Upload-Pfad, Query und Key,
+sowie Healthcheck und SPA-Fallback mit dem Production Build.
+Die Docker-Pruefungen nach dem Redeploy pruefen zusaetzlich das echte
+Docker-Netz und die Bereitschaft des produktiven Backends.
+
+Auch ueber VM und TLS testen:
 
 ```text
-http://10.144.148.202:8081/api/health/ready
-http://10.144.148.202:8081/odin-go/shiftplan
+http://10.144.148.202:8080/healthz
+http://10.144.148.202:8080/api/health/ready
+http://10.144.148.202:8080/odin-go/shiftplan
 https://eqx-portal.corp.equinix.com/api/health/ready
 https://eqx-portal.corp.equinix.com/odin-go/shiftplan
 ```
 
-Der Health-Endpunkt muss HTTP 200 und `ready: true` liefern. Danach in Jarvis
-das ODIN-GO-Fenster oeffnen und DevTools auf Mixed Content, TLS-, CORS- und
+Der Ready-Endpunkt muss HTTP 200 und `ready: true` liefern; der SPA-Pfad HTML.
+Danach das ODIN-GO-Fenster in Jarvis oeffnen und auf TLS-, CORS- und
 Timeout-Fehler pruefen.
 
-## Security-Hinweis
+## Proxy-Logs
 
-API-Key, Identity-Token und Admin-Token werden heute beim ersten iframe-Aufruf
-als Query-Parameter an das Frontend uebergeben und dort sofort in
-`sessionStorage` uebernommen. Die Extension loggt diese Werte nicht. Die
-Umstellung auf einen kurzlebigen Bootstrap-Code oder einen bestaetigten
-`postMessage`-Handshake betrifft Extension, Frontend und Backend gemeinsam und
-sollte als separate, getestete Auth-Migration erfolgen. Bis dahin duerfen
-Proxy-Access-Logs keine Query-Strings persistieren.
+API-Key, Identity-Token und Admin-Token werden beim ersten iframe-Aufruf
+als Query-Parameter uebergeben und im Frontend sofort in `sessionStorage`
+uebernommen. Proxy-Access-Logs duerfen keine Query-Strings persistieren.
