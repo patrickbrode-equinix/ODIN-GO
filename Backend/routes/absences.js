@@ -20,7 +20,7 @@ const router = express.Router();
 router.get('/', requireAuth, async (req, res) => {
     try {
         const { year, month } = req.query;
-        let query = 'SELECT * FROM absences';
+        let query = "SELECT id, employee_name, employee_id, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date, type, note, created_at FROM absences";
         const params = [];
 
         if (year && month) {
@@ -113,7 +113,7 @@ router.get('/conflicts', requireAuth, async (req, res) => {
 });
 
 // Internal Helper for Conflict Logic
-async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr) {
+export async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr, database = db) {
     const GERMAN_MONTHS = [
         "Januar", "Februar", "März", "April", "Mai", "Juni",
         "Juli", "August", "September", "Oktober", "November", "Dezember"
@@ -121,9 +121,15 @@ async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr
 
     try {
         // 1. Delete existing conflicts in range for this emp
-        await db.query(
+        await database.query(
             `DELETE FROM absence_conflicts 
              WHERE employee_name = $1 AND date >= $2 AND date <= $3`,
+            [employeeName, startDateStr, endDateStr]
+        );
+
+        const remainingAbsences = await database.query(
+            `SELECT to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date
+             FROM absences WHERE employee_name = $1 AND start_date <= $3 AND end_date >= $2`,
             [employeeName, startDateStr, endDateStr]
         );
 
@@ -132,14 +138,16 @@ async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr
         const end = new Date(endDateStr);
 
         // Loop through dates
-        for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-            const dayNum = d.getDate();
-            const monthIdx = d.getMonth(); // 0-11
-            const year = d.getFullYear();
+        for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+            const dateKey = d.toISOString().slice(0, 10);
+            if (!remainingAbsences.rows.some(absence => dateKey >= absence.start_date && dateKey <= absence.end_date)) continue;
+            const dayNum = d.getUTCDate();
+            const monthIdx = d.getUTCMonth(); // 0-11
+            const year = d.getUTCFullYear();
             const monthLabel = `${GERMAN_MONTHS[monthIdx]} ${year}`; // "Mai 2026"
 
             // Check if shift exists
-            const { rows } = await db.query(
+            const { rows } = await database.query(
                 `SELECT shift_code FROM shifts 
                  WHERE employee_name = $1 AND month = $2 AND day = $3`,
                 [employeeName, monthLabel, dayNum]
@@ -147,7 +155,7 @@ async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr
 
             if (rows.length > 0) {
                 const shiftCode = rows[0].shift_code;
-                if (!shiftCode) continue;
+                if (!shiftCode || ['ABW', 'FS', 'U', 'K', 'S', 'SEMINAR'].includes(String(shiftCode).toUpperCase())) continue;
 
                 // Create Conflict
                 const dateStr = d.toISOString().split('T')[0];
@@ -157,7 +165,7 @@ async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr
                     shift_code: shiftCode
                 };
 
-                await db.query(
+                await database.query(
                     `INSERT INTO absence_conflicts (employee_name, date, conflict_type, details)
                      VALUES ($1, $2, $3, $4)
                      ON CONFLICT (employee_name, date, conflict_type) DO UPDATE SET details = EXCLUDED.details, created_at = NOW()`,

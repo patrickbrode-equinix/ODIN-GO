@@ -19,6 +19,7 @@ import {
   getTargetHoursScore,
   isDayBlockedByEmployeePreference,
   isShiftUnwantedByEmployeePreference,
+  isShiftBlockedByEmployeePreference,
   isNightShiftRefused,
   keepsShiftTypeCohesion,
   NIGHT_MODELS,
@@ -32,6 +33,38 @@ import {
 } from '../lib/shiftplanGeneration.js';
 
 describe('shiftplanGeneration helpers', () => {
+  it('never fills staffing or target-hour gaps with a shift outside an explicit wish', () => {
+    const prefs = { preferred_shifts: ['E1'], unwanted_shifts: [] };
+    assert.equal(isShiftBlockedByEmployeePreference(prefs, 'L1'), true);
+    assert.equal(isShiftBlockedByEmployeePreference(prefs, 'E2'), true);
+    assert.equal(isShiftBlockedByEmployeePreference(prefs, 'E1WE'), false);
+    assert.equal(isShiftBlockedByEmployeePreference({ preferred_shifts: ['N'] }, 'NK'), false);
+    assert.equal(isShiftBlockedByEmployeePreference({ preferred_shifts: [], unwanted_shifts: ['N'] }, 'NK'), true);
+    assert.equal(isShiftBlockedByEmployeePreference({ preferred_shifts: ['E1'], unwanted_shifts: ['E1'] }, 'E1'), true);
+    assert.equal(isShiftBlockedByEmployeePreference(prefs, 'L1', false), false);
+    assert.equal(isShiftBlockedByEmployeePreference({ preferred_shifts: ['COLO'] }, 'E1'), false);
+  });
+
+  it('returns no substitute instead of overriding every available employee shift wish', () => {
+    const options = {
+      shiftType: 'late', shiftCode: 'L1WE', coverageDays: [6, 7], weekendDays: [6, 7],
+      candidates: [
+        { employee: 'Early Only', preferences: { preferred_shifts: ['E1'] } },
+        { employee: 'Night Only', preferences: { preferred_shifts: ['N'] } },
+      ],
+    };
+    assert.deepEqual(rankSafeSubstituteCandidates(options), []);
+    assert.deepEqual(rankSafeSubstituteCandidates({ ...options,
+      candidates: [...options.candidates, { employee: 'Late Wish', preferences: { preferred_shifts: ['L1'] } }],
+    }).map(entry => entry.employee), ['Late Wish']);
+  });
+
+  it('never suggests a seven-night substitute block for the short-night model', () => {
+    assert.deepEqual(rankSafeSubstituteCandidates({
+      shiftType: 'night', shiftCode: 'N', coverageDays: [1, 2, 3, 4, 5, 6, 7],
+      candidates: [{ employee: 'Short Nights', preferences: { preferred_shifts: ['N'], night_model: 'SHORT' } }],
+    }), []);
+  });
   it('normalizes staffing rule keys from legacy E/L/N format', () => {
     assert.equal(normalizePlanningShiftTypeKey('E'), 'early');
     assert.equal(normalizePlanningShiftTypeKey('L'), 'late');
@@ -265,6 +298,20 @@ describe('shiftplanGeneration helpers', () => {
     });
 
     assert.deepEqual(suggestions.map((entry) => entry.employee), ['Available']);
+  });
+
+  it('excludes vacation days from replacement blocks including weekends', () => {
+    const suggestions = rankSafeSubstituteCandidates({
+      shiftType: 'early',
+      coverageDays: [2, 3, 4, 5, 6],
+      weekendDays: [3, 4],
+      candidates: [
+        { employee: 'Vacation Weekday', absenceDays: [2], preferences: {} },
+        { employee: 'Vacation Weekend', absenceDays: [4], preferences: {} },
+        { employee: 'Available', absenceDays: [], preferences: {} },
+      ],
+    });
+    assert.deepEqual(suggestions.map(entry => entry.employee), ['Available']);
   });
 
   it('excludes night refusals and blocked weekend days from substitute suggestions', () => {

@@ -25,6 +25,7 @@ import { useLanguage, getLanguageLocale } from "../../context/LanguageContext";
 import { formatAbsoluteDateTime, formatRelativeTime } from "../../utils/loginStatus";
 
 import { AddUserModal } from "../users/AddUserModal";
+import { UserVacationDialog } from "../users/UserVacationDialog";
 
 /* ------------------------------------------------ */
 /* TYPES                                           */
@@ -258,6 +259,7 @@ export default function Users() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [addUserOpen, setAddUserOpen] = useState(false);
+  const [vacationUser, setVacationUser] = useState<User | null>(null);
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [editingDraft, setEditingDraft] = useState<{ firstName: string; lastName: string; email: string; } | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -685,6 +687,10 @@ export default function Users() {
                       </TableCell>
 
                       <TableCell className="text-right space-x-1">
+                        <Button size="sm" variant="ghost" onClick={() => setVacationUser(user)}>
+                          <CalendarHeart className="w-4 h-4 mr-1 text-amber-500" />
+                          {language === "de" ? "Urlaubstage" : "Vacation days"}
+                        </Button>
                         {editError && isEditing ? (
                           <div className="mb-2 text-xs text-red-400">{editError}</div>
                         ) : null}
@@ -842,6 +848,8 @@ export default function Users() {
         }}
         onCreated={loadUsers}
       />
+      {vacationUser && <UserVacationDialog key={vacationUser.id} userId={vacationUser.id}
+        name={getDisplayName(vacationUser)} canEdit={canManageUsers} onClose={() => setVacationUser(null)} />}
 
     </EnterprisePageShell>
   );

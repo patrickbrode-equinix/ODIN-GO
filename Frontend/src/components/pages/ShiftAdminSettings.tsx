@@ -2227,6 +2227,11 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <label className="text-xs text-slate-400">{t("shiftAdmin.planSoftWishes")}</label>
                 <input type="range" min="0" max="100" value={planConfig.soft_wishes_priority} onChange={(event) => setPlanConfig({ ...planConfig, soft_wishes_priority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
                 <div className="mt-1 text-xs text-slate-400">{planConfig.soft_wishes_priority}%</div>
+                <p className="mt-2 text-xs text-slate-400">
+                  {isGerman
+                    ? 'Bei aktivierter Wunschberücksichtigung bleiben ausgewählte Schichten und freie Feiertage verbindlich. Das Gewicht beeinflusst die Auswahl zwischen zulässigen Einsätzen. Unlösbare Wünsche führen zu offenen Diensten oder fehlenden Sollstunden.'
+                    : 'When employee wishes are enabled, selected shifts and holidays off remain binding. This weight ranks eligible assignments. Infeasible wishes leave shifts unfilled or target hours unmet.'}
+                </p>
               </div>
               <div>
                 <label className="text-xs text-slate-400">{t("shiftAdmin.planFairness")}</label>

@@ -19,9 +19,11 @@ import { logActivity } from "./activity.js";
 import { buildBaseAccessPolicy } from "../auth/accessControl.js";
 import { resolveUserRole } from "../auth/accessControl.js";
 import { isLoginNameConflictError } from "../lib/loginName.js";
+import { createVacationRouter } from "./userVacations.js";
 import { areEquivalentEmployeeNames, chooseCanonicalEmployeeName, generateEmailFromName } from "../lib/employeeIdentity.js";
 
 const router = express.Router();
+router.use('/:userId/vacations', createVacationRouter(db));
 const EQUINIX_EMAIL = /^[^\s@]+@(?:[a-z0-9-]+\.)*equinix\.com$/i;
 
 /* ———————————————— */

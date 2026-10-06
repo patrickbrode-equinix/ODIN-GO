@@ -718,8 +718,8 @@ export function ShiftplanTable({
                                 <Badge variant="outline" className={`
                                         h-6 px-1.5 text-[10px] border-dashed
                                         ${absence ? 'bg-slate-800 text-slate-300 border-slate-600' : ''}
-                                    `} title={absence.note}>
-                                  {absence.type === 'VACATION' ? 'U' :
+                                    `} title={absence.type === 'VACATION' ? `Abwesend · Urlaub${absence.note ? ` · ${absence.note}` : ''}` : absence.note}>
+                                  {absence.type === 'VACATION' ? 'ABW' :
                                     absence.type === 'SICK' ? 'K' :
                                       absence.type === 'TRAINING' ? 'T' : 'O'}
                                 </Badge>
@@ -730,7 +730,7 @@ export function ShiftplanTable({
                             <div className="flex items-center justify-center" title={String(shift)}>
                               <ShiftBadge code={shift} hasWarning={hasWarning} />
                             </div>
-                            ) : (
+                            ) : absence ? null : (
                               <div className="text-[12px] font-bold text-white/10 group-hover:text-white/20 transition-colors select-none flex items-center justify-center w-full h-[22px]">—</div>
                             )}
                           </td>

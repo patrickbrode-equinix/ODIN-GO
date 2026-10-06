@@ -313,6 +313,7 @@ export function getPreferenceShiftCode(code) {
   const normalized = String(code || '').trim().toUpperCase();
   if (normalized === 'E1SA' || normalized === 'E1WE') return 'E1';
   if (normalized === 'L1WE') return 'L1';
+  if (normalized === 'NK') return 'N';
   return normalized;
 }
 
@@ -326,8 +327,7 @@ export function isShiftUnwantedByEmployeePreference(preferences, shiftCode) {
   return unwanted.has(getPreferenceShiftCode(shiftCode));
 }
 
-// A preferred shift remains a soft wish, but must win over an equally safe
-// alternative. Weekend variants intentionally map back to their base code.
+// Weekend and short-night variants map back to the employee's base wish.
 export function isShiftPreferredByEmployeePreference(preferences, shiftCode) {
   if (!preferences) return false;
   const preferred = new Set(
@@ -336,6 +336,15 @@ export function isShiftPreferredByEmployeePreference(preferences, shiftCode) {
       .filter(Boolean)
   );
   return preferred.has(getPreferenceShiftCode(shiftCode));
+}
+
+// An explicit shift selection takes precedence over staffing and target hours.
+// With no selection, every shift except the unwanted ones remains eligible.
+export function isShiftBlockedByEmployeePreference(preferences, shiftCode, respectWishes = true) {
+  if (isShiftUnwantedByEmployeePreference(preferences, shiftCode)) return true;
+  const preferred = (Array.isArray(preferences?.preferred_shifts) ? preferences.preferred_shifts : [])
+    .map(getPreferenceShiftCode).filter((code) => code && code !== 'COLO');
+  return respectWishes && preferred.length > 0 && !isShiftPreferredByEmployeePreference(preferences, shiftCode);
 }
 
 function getPreferenceShiftType(code) {
@@ -422,8 +431,10 @@ export function rankSafeSubstituteCandidates({
       if ([...requiredDays].some((day) => absences.has(day))) return null;
       if ([...requiredDays].some((day) => recoveryDays.has(day))) return null;
       if (fixedShiftType && fixedShiftType !== normalizedType) return null;
-      if (isShiftUnwantedByEmployeePreference(preferences, shiftCode)) return null;
+      if (isShiftBlockedByEmployeePreference(preferences, shiftCode, rules.respectEmployeeWishes !== false)) return null;
       if (normalizedType === 'night' && isNightShiftRefused(preferences)) return null;
+      if (normalizedType === 'night' && normalizeNightModel(preferences.night_model) === NIGHT_MODELS.SHORT
+        && requiredDays.size > 3) return null;
 
       // The substitute must not break a neighbouring shift: rest periods,
       // recovery after nights/weekends and the consecutive-workday limit.

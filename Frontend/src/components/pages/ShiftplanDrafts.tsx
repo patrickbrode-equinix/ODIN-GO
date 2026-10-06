@@ -2,7 +2,6 @@ import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarRange,
   CheckCircle2,
-  ChevronDown,
   Clock3,
   FileSpreadsheet,
   LayoutGrid,
@@ -22,6 +21,8 @@ import { getShiftColorKind, getShiftColorStyle, getShiftKindStyle, SHIFT_COLOR_L
 import { isColoEmployee } from "../../utils/colo";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
+import { GroupedDraftList } from "../shiftplan/GroupedDraftList";
+import type { PlanningDraftGroup } from "../../api/planningPeriods";
 
 type DraftSummary = {
   id: number;
@@ -56,7 +57,7 @@ type DraftFeedback = {
   created_at: string;
 };
 type VoteSummary = { approve: number; needs_changes: number; total: number };
-type ViewMode = "month" | "year";
+type ViewMode = "month" | "quarter" | "year";
 
 function formatMonth(value: string) {
   const [year, month] = value.split("-").map(Number);
@@ -196,10 +197,11 @@ function LazyYearDraftTable({ draft }: { draft: DraftSummary }) {
 export default function ShiftplanDrafts() {
   const initialParams = new URLSearchParams(window.location.search);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
+  const [draftGroups, setDraftGroups] = useState<PlanningDraftGroup<DraftSummary>[]>([]);
+  const draftListLoaded = useRef(false);
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
-  const [yearDrafts, setYearDrafts] = useState<DraftSummary[]>([]);
-  const [yearPlanExpanded, setYearPlanExpanded] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>(initialParams.get("view") === "year" ? "year" : "month");
+  const [viewMode, setViewMode] = useState<ViewMode>(initialParams.get("view") === "year" ? "year" : initialParams.get("view") === "quarter" ? "quarter" : "month");
+  const [selectedQuarter, setSelectedQuarter] = useState(Math.min(4, Math.max(1, Number(initialParams.get('quarter')) || 1)));
   const [selectedYear, setSelectedYear] = useState(Number(initialParams.get("year")) || 2027);
   const [feedback, setFeedback] = useState<DraftFeedback[]>([]);
   const [votes, setVotes] = useState<VoteSummary>({ approve: 0, needs_changes: 0, total: 0 });
@@ -240,33 +242,26 @@ export default function ShiftplanDrafts() {
     }
   };
 
-  const loadYear = async (year: number) => {
-    setLoading(true);
-    setError("");
-    try {
-      const result = await api.get(`/shiftplan-control/drafts/year/${year}`);
-      setYearDrafts(result.data.drafts || result.data.generated || []);
-    } catch (requestError: any) {
-      setError(requestError.response?.data?.error || "Die Jahresansicht konnte nicht geladen werden.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const loadDrafts = async () => {
     setLoading(true);
     setError("");
     try {
-      const result = await api.get("/shiftplan-control/drafts");
+      const result = await api.get("/shiftplan-control/drafts?grouped=true");
       const rows = (result.data.drafts || []) as DraftSummary[];
       setDrafts(rows);
-      if (viewMode === "year") {
-        await loadYear(selectedYear);
+      setDraftGroups(result.data.groups || []);
+      if (viewMode !== "month") {
+        setLoading(false);
         return;
       }
-      const preferredId = activeDraft && rows.some((item) => item.id === activeDraft.id) ? activeDraft.id : rows[0]?.id;
-      if (preferredId) await loadDraft(preferredId);
-      else setActiveDraft(null);
+      const preferredId = activeDraft && Number(activeDraft.month.slice(0, 4)) === selectedYear && rows.some(item => item.id === activeDraft.id)
+        ? activeDraft.id : rows.find(item => Number(item.month.slice(0, 4)) === selectedYear)?.id
+          ?? (!draftListLoaded.current && !initialParams.has('year') ? rows[0]?.id : undefined);
+      draftListLoaded.current = true;
+      if (preferredId) {
+        if (!initialParams.get('year')) setSelectedYear(Number(rows.find(row => row.id === preferredId)?.month.slice(0, 4)));
+        await loadDraft(preferredId);
+      } else { setActiveDraft(null); setLoading(false); }
     } catch (requestError: any) {
       setError(requestError.response?.data?.error || "Drafts konnten nicht geladen werden.");
       setLoading(false);
@@ -283,22 +278,30 @@ export default function ShiftplanDrafts() {
     return new Date(year, month, 0).getDate();
   }, [activeDraft]);
   const availableYears = useMemo(() => {
-    const values = new Set(drafts.map((draft) => Number(draft.month.slice(0, 4))).filter((year) => year >= 2027));
+    const values = new Set(drafts.map((draft) => Number(draft.month.slice(0, 4))).filter(Number.isFinite));
     values.add(selectedYear);
     return [...values].sort((left, right) => left - right);
   }, [drafts, selectedYear]);
 
   const switchView = async (mode: ViewMode) => {
     setViewMode(mode);
-    if (mode === "year") await loadYear(selectedYear);
-    else if (!activeDraft && drafts[0]) await loadDraft(drafts[0].id);
+    if (mode === 'month' && (!activeDraft || Number(activeDraft.month.slice(0, 4)) !== selectedYear)) {
+      const first = drafts.find(draft => Number(draft.month.slice(0, 4)) === selectedYear);
+      if (first) await loadDraft(first.id); else setActiveDraft(null);
+    }
   };
 
   const selectYear = async (year: number) => {
     setSelectedYear(year);
-    setYearPlanExpanded(false);
-    if (viewMode === "year") await loadYear(year);
+    if (viewMode === 'month') {
+      const first = drafts.find(draft => Number(draft.month.slice(0, 4)) === year);
+      if (first) await loadDraft(first.id); else setActiveDraft(null);
+    }
   };
+
+  const visibleGroups = draftGroups.filter(group => group.year === selectedYear && (viewMode !== 'quarter'
+    || (group.type === 'quarter' && group.quarter === selectedQuarter)
+    || (group.type === 'month' && Math.ceil(Number(group.drafts[0].month.slice(5)) / 3) === selectedQuarter)));
 
   const submitFeedback = async () => {
     if (!activeDraft || suggestion.trim().length < 5) return;
@@ -339,7 +342,7 @@ export default function ShiftplanDrafts() {
     }
   };
 
-  const exportDraft = async (draft: Draft) => {
+  const exportDraft = async (draft: DraftSummary) => {
     setExportingId(draft.id);
     setError("");
     try {
@@ -374,13 +377,17 @@ export default function ShiftplanDrafts() {
           <div className="max-w-3xl">
             <div className="liquid-eyebrow"><Sparkles className="h-3.5 w-3.5" /> Gemeinsam planen</div>
             <h1 className="mt-4 text-3xl font-black tracking-tight text-foreground md:text-5xl">Dienstplan-Drafts</h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">Monate einzeln oder als vollständiges Planungsjahr prüfen, abstimmen und kommentieren.</p>
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground md:text-base">Monate, Quartale und Jahresplanungen ausklappen, prüfen und mit einem Excel-Reiter je Monat exportieren.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <select value={selectedYear} onChange={(event) => void selectYear(Number(event.target.value))} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm">
               {availableYears.map((year) => <option key={year} value={year}>{year}</option>)}
             </select>
             <Button type="button" variant={viewMode === "month" ? "default" : "outline"} onClick={() => void switchView("month")}><List className="mr-2 h-4 w-4" />Monat</Button>
+            <Button type="button" variant={viewMode === "quarter" ? "default" : "outline"} onClick={() => void switchView("quarter")}><CalendarRange className="mr-2 h-4 w-4" />Quartal</Button>
+            {viewMode === 'quarter' && <select aria-label="Quartal" value={selectedQuarter} onChange={event => setSelectedQuarter(Number(event.target.value))} className="rounded-lg border border-slate-600 bg-slate-950 px-3 py-2 text-sm">
+              {[1, 2, 3, 4].map(quarter => <option key={quarter} value={quarter}>Q{quarter}</option>)}
+            </select>}
             <Button type="button" variant={viewMode === "year" ? "default" : "outline"} onClick={() => void switchView("year")}><LayoutGrid className="mr-2 h-4 w-4" />Ganzes Jahr</Button>
             <Button onClick={loadDrafts} disabled={loading} className="liquid-button"><RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} /> Aktualisieren</Button>
           </div>
@@ -389,48 +396,21 @@ export default function ShiftplanDrafts() {
 
       {error ? <div className="mt-4 rounded-xl border border-red-400/20 bg-red-500/10 p-3 text-sm text-red-200">{error}</div> : null}
 
-      {viewMode === "year" ? (
+      {viewMode !== "month" ? (
         <div className="mt-5 space-y-5">
-          <section className="overflow-hidden rounded-xl border border-slate-700 bg-slate-900">
-            <button
-              type="button"
-              onClick={() => setYearPlanExpanded((current) => !current)}
-              aria-expanded={yearPlanExpanded}
-              className="flex w-full items-center justify-between gap-4 p-5 text-left transition hover:bg-white/[0.03]"
-            >
-              <div>
-                <h2 className="text-xl font-bold text-foreground">Jahresplanung {selectedYear}</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {yearDrafts.length} Monats-Drafts · {yearPlanExpanded ? "Monate einklappen" : "Monate ausklappen"}
-                </p>
-              </div>
-              <ChevronDown className={`h-5 w-5 shrink-0 text-muted-foreground transition-transform ${yearPlanExpanded ? "rotate-180" : ""}`} />
-            </button>
-          </section>
-          {yearPlanExpanded ? yearDrafts.map((draft) => (
-            <section key={draft.id} className="liquid-panel overflow-hidden rounded-[22px]">
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/8 p-4">
-                <div><h3 className="text-lg font-bold text-foreground">{draft.title || formatMonth(draft.month)} <span className="text-xs font-normal text-muted-foreground">v{draft.version}</span></h3><div className="mt-1 text-xs text-muted-foreground">{draft.feedback_count || 0} Kommentare · {draft.approve_votes || 0} Zustimmung · {draft.needs_changes_votes || 0} Änderungswünsche</div></div>
-                <Button type="button" variant="outline" onClick={() => void openMonthFromYear(draft)}>Monat öffnen</Button>
-              </div>
-              <LazyYearDraftTable draft={draft} />
-            </section>
-          )) : null}
-          {!yearDrafts.length && !loading ? <div className="liquid-panel rounded-[26px] p-12 text-center text-muted-foreground">Für {selectedYear} sind noch keine gespeicherten Drafts vorhanden.</div> : null}
+          <GroupedDraftList groups={visibleGroups} activeId={activeDraft?.id}
+            onOpen={draft => void openMonthFromYear(draft)} onExportMonth={draft => void exportDraft(draft)} onError={setError}
+            renderMonth={draft => <LazyYearDraftTable draft={draft} />} />
+          {!visibleGroups.length && !loading && <p className="p-8 text-center text-muted-foreground">Für diesen Zeitraum sind noch keine Drafts vorhanden.</p>}
         </div>
       ) : (
         <div className="mt-5 grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
           <aside className="liquid-panel h-fit rounded-[26px] p-3">
             <div className="px-3 pb-3 pt-2 text-xs font-bold uppercase tracking-[0.2em] text-cyan-300/80">Verfügbare Drafts</div>
             <div className="space-y-2">
-              {drafts.map((draft) => (
-                <button key={draft.id} onClick={() => void loadDraft(draft.id)} className={`liquid-list-item w-full rounded-2xl p-3 text-left ${activeDraft?.id === draft.id ? "active" : ""}`}>
-                  <div className="flex items-center justify-between gap-2"><span className="font-bold text-foreground">{formatMonth(draft.month)}</span><span className="rounded-full bg-white/8 px-2 py-1 text-[10px] text-muted-foreground">v{draft.version}</span></div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground"><span>{statusLabel(draft.status)}</span><span>{draft.feedback_count || 0} Kommentare</span></div>
-                  <div className="mt-2 flex gap-3 text-[10px] text-muted-foreground"><span>✓ {draft.approve_votes || 0}</span><span>△ {draft.needs_changes_votes || 0}</span></div>
-                </button>
-              ))}
-              {!drafts.length && !loading ? <div className="px-3 py-8 text-center text-sm text-muted-foreground">Noch keine Drafts vorhanden.</div> : null}
+              <GroupedDraftList groups={visibleGroups} activeId={activeDraft?.id}
+                onOpen={draft => void loadDraft(draft.id)} onExportMonth={draft => void exportDraft(draft)} onError={setError} />
+              {!visibleGroups.length && !loading && <p className="px-3 py-8 text-center text-sm text-muted-foreground">Noch keine Drafts für dieses Jahr vorhanden.</p>}
             </div>
           </aside>
 
