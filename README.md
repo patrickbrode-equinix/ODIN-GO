@@ -51,7 +51,7 @@ liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
 
 Nginx Proxy Manager ist der TLS-Endpunkt auf Port 443 und leitet per HTTP an
 das Frontend auf Host-Port 8080 weiter (`8080:8000`). Der Frontend-Server
-proxyt `/api/*` und `/uploads/*` mit unveraendertem Pfad an `backend:8001`.
+proxyt `/api/*` und `/uploads/*` mit unveraendertem Pfad an `odin-backend:8001`.
 Das Backend ist nur im Docker-Netz erreichbar. `/odin-go/*` liefert die SPA.
 
 1. Den vorhandenen Git-verwalteten Stack nicht loeschen und keine Volumes

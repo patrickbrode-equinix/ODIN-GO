@@ -6,13 +6,13 @@
 Jarvis / Browser -> HTTPS :443 -> Nginx Proxy Manager (TLS)
   -> HTTP 10.144.148.202:8080 -> frontend:8000
   -> /odin-go/* -> Frontend SPA
-  -> /api/* und /uploads/* -> backend:8001 (intern)
+  -> /api/* und /uploads/* -> odin-backend:8001 (intern)
   -> postgres:5432 (intern)
 ```
 
 Nur das Frontend veroeffentlicht `8080:8000`. Backend und Frontend verwenden
 `shiftplanner-net`; das Backend hat nur `expose: ["8001"]`, keine Host-Ports.
-Der Frontend-Produktionsserver verwendet `BACKEND_URL=http://backend:8001`.
+Der Frontend-Produktionsserver verwendet `BACKEND_URL=http://odin-backend:8001`.
 Sein Proxy wird am Root eingehaengt und behaelt Pfad und Query unveraendert:
 `/api/health/ready` erreicht das Backend als `/api/health/ready`.
 `/healthz` wird lokal beantwortet; `/odin-go/shiftplan` liefert die Frontend-SPA.
@@ -65,6 +65,8 @@ damit alle Requests mit unveraendertem Pfad und Query denselben Upstream nutzen.
 
 ```sh
 docker compose config --quiet
+docker compose exec frontend getent hosts odin-backend
+docker compose exec frontend wget -S -O- http://odin-backend:8001/api/health/ready
 npm test --prefix Backend
 npm run build --prefix Frontend
 npm test --prefix Frontend
@@ -77,7 +79,9 @@ Der Frontend-Servertest prueft echte HTTP-Requests gegen einen lokalen
 Backend-Testserver, inklusive unveraendertem API-/Upload-Pfad, Query und Key,
 sowie Healthcheck und SPA-Fallback mit dem Production Build.
 Die Docker-Pruefungen nach dem Redeploy pruefen zusaetzlich das echte
-Docker-Netz und die Bereitschaft des produktiven Backends.
+Docker-Netz und die Bereitschaft des produktiven Backends. Der Alias
+`odin-backend` muss aufloesbar sein; der direkte Ready-Aufruf muss HTTP 200
+und `database: ok` liefern.
 
 Auch ueber VM und TLS testen:
 

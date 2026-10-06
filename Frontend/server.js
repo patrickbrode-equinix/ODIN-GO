@@ -11,7 +11,7 @@ const app = express();
 const PORT = parseInt(process.env.PORT || "8000", 10);
 
 // Docker service DNS on shiftplanner-net; local runs can override BACKEND_URL.
-const BACKEND_URL = process.env.BACKEND_URL || "http://backend:8001";
+const BACKEND_URL = process.env.BACKEND_URL || "http://odin-backend:8001";
 
 /* ------------------------------------------------ */
 /* LOCAL HEALTHCHECK (does NOT proxy to backend)     */

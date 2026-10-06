@@ -65,7 +65,9 @@ services:
     volumes:
       - shiftplanner_uploads_data:/app/uploads
     networks:
-      - shiftplanner-net
+      shiftplanner-net:
+        aliases:
+          - odin-backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,7 +95,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 8000
-      BACKEND_URL: http://backend:8001
+      BACKEND_URL: http://odin-backend:8001
       VITE_API_BASE_URL: /api
       VITE_APP_MODE: shiftplanner
     networks:
