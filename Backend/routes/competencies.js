@@ -80,7 +80,7 @@ router.post("/", requireAuth, requirePageAccess("shiftplan", "write"), async (re
        ON CONFLICT (employee_name, capability)
        DO UPDATE SET level = $3, notes = $4, updated_at = NOW()
        RETURNING *`,
-      [employee_name, capability, level, notes || null, req.user?.name || req.user?.email || "system"]
+      [employee_name, capability, level, notes || null, req.user?.displayName || req.user?.email || "system"]
     );
 
     res.status(201).json(rows[0]);
@@ -130,7 +130,7 @@ router.post("/customer-access", requireAuth, requirePageAccess("shiftplan", "wri
        ON CONFLICT (employee_name, customer_name)
        DO UPDATE SET approved = $3, valid_until = $4, approved_by = $5
        RETURNING *`,
-      [employee_name, customer_name, approved, valid_until || null, req.user?.name || "system"]
+      [employee_name, customer_name, approved, valid_until || null, req.user?.displayName || req.user?.email || "system"]
     );
 
     res.status(201).json(rows[0]);

@@ -188,7 +188,7 @@ router.post("/compute", requireAuth, async (req, res) => {
             let type = null;
             if (s.startsWith('E')) type = 'E';
             if (s.startsWith('L')) type = 'L';
-            if (s === 'N') type = 'N';
+            if (s === 'N' || s === 'NK') type = 'N';
 
             if (type && days[d][type]) {
                 days[d][type].push(row.employee_name);
@@ -246,7 +246,7 @@ router.post("/compute", requireAuth, async (req, res) => {
         res.json({ success: true });
 
     } catch (err) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         console.error("COVERAGE COMPUTE ERROR:", err);
         res.status(500).json({ error: "Compute failed" });
     } finally {

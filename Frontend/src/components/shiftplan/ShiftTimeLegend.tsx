@@ -8,7 +8,7 @@ const DEFAULT_SHIFT_TIMES: Record<(typeof CORE_SHIFT_CODES)[number], string> = {
   E2: "07:00-16:00",
   L1: "13:00-22:00",
   L2: "15:00-00:00",
-  N: "21:45-06:45",
+  N: "21:15-06:45",
   NK: "21:45-06:45",
 };
 

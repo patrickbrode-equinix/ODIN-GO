@@ -85,7 +85,7 @@ async function applyMigration(filename) {
     await client.query("COMMIT");
     console.log(`[MIGRATIONS] Applied: ${filename}`);
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     console.error(`[MIGRATIONS] FAILED: ${filename} — ${err.message}`);
     throw err;
   } finally {
@@ -97,7 +97,22 @@ async function applyMigration(filename) {
 /* Main entry point                                 */
 /* ------------------------------------------------ */
 
+// Serialises migrations across processes (e.g. two backends during a redeploy).
+const MIGRATION_ADVISORY_LOCK_KEY = 17042027;
+
 export async function runMigrations() {
+  const lockClient = await pool.connect();
+  try {
+    await lockClient.query("SELECT pg_advisory_lock($1)", [MIGRATION_ADVISORY_LOCK_KEY]);
+    await runMigrationsLocked();
+  } finally {
+    // Releasing the connection to the pool keeps the session; unlock explicitly.
+    await lockClient.query("SELECT pg_advisory_unlock($1)", [MIGRATION_ADVISORY_LOCK_KEY]).catch(() => {});
+    lockClient.release();
+  }
+}
+
+async function runMigrationsLocked() {
   console.log("[MIGRATIONS] Starting migration runner...");
 
   await ensureMigrationsTable();

@@ -56,7 +56,7 @@ router.put("/", async (req, res) => {
       return res.status(400).json({ error: "departure_time must be HH:MM format" });
     }
 
-    const createdBy = req.user?.name || req.user?.username || "system";
+    const createdBy = req.user?.displayName || req.user?.email || "system";
 
     const result = await dbQuery(
       `INSERT INTO attendance (employee_name, date, arrival_time, departure_time, note, created_by, updated_at)

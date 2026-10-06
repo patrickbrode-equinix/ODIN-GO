@@ -9,7 +9,7 @@ import { requireAuth } from "../middleware/authMiddleware.js";
 import { requirePageAccess } from "../middleware/requirePageAccess.js";
 import { recomputeConstraintsInternal } from "./constraints.js"; // [NEW]
 import { parseMonthLabel } from "../lib/monthParser.js";
-import { syncEmployeeContacts } from "./employeeContacts.js";
+import { syncEmployeeContacts } from "../lib/employeeContactsSync.js";
 import {
   provisionUsersForEmployees,
   provisionUsersFromShiftplan,
@@ -617,7 +617,7 @@ router.delete(
       );
 
       if (deleteManualEmployeeRes.rowCount === 0) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         return res.status(404).json({ error: "Manual employee not found" });
       }
 
@@ -644,7 +644,7 @@ router.delete(
 
       res.json({ success: true });
     } catch (err) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       console.error("MANUAL EMPLOYEE DELETE ERROR:", err);
       res.status(500).json({ error: "Failed to delete manual employee" });
     } finally {
@@ -788,7 +788,7 @@ router.post(
 
       res.json({ success: true, contactSync, userProvisioning });
     } catch (err) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       console.error("IMPORT ERROR:", err);
       res.status(500).json({ error: "Import failed" });
     } finally {
@@ -953,7 +953,7 @@ router.post(
 
           await client.query("COMMIT");
         } catch (cleanupBatchErr) {
-          await client.query("ROLLBACK");
+          await client.query("ROLLBACK").catch(() => {});
           cleanupResults.push({ error: cleanupBatchErr.message });
         }
       }
@@ -1012,7 +1012,7 @@ router.post(
         },
       });
     } catch (err) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       console.error("IMPORT MERGE ERROR:", err);
       res.status(500).json({ error: "Merge import failed: " + err.message });
     } finally {
@@ -1102,7 +1102,7 @@ router.put(
       await client.query("COMMIT");
       res.json({ success: true });
     } catch (e) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       console.error("SCHEDULE CELL UPDATE ERROR:", e);
       res.status(500).json({ error: "Update failed" });
     } finally {
@@ -1161,7 +1161,7 @@ router.post(
         .filter((change) => change.oldShift !== change.newShift);
 
       if (changes.length === 0) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         return res.json({ success: true, changes: [] });
       }
 
@@ -1192,7 +1192,7 @@ router.post(
       recomputeConstraintsInternal(month).catch((error) => console.error("Constraint recompute after manual change failed:", error));
       res.json({ success: true, changes });
     } catch (error) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       console.error("BULK SCHEDULE CHANGE ERROR:", error);
       res.status(500).json({ error: "Shift changes could not be saved" });
     } finally {
@@ -1274,7 +1274,7 @@ router.post(
       await client.query("COMMIT");
       res.json({ success: true, swapped: true });
     } catch (e) {
-      await client.query("ROLLBACK");
+      await client.query("ROLLBACK").catch(() => {});
       console.error("SCHEDULE SWAP ERROR:", e);
       res.status(500).json({ error: "Swap failed" });
     } finally {

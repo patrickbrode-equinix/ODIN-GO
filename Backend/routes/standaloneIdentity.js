@@ -27,7 +27,15 @@ function isLocalDevelopmentRequest(req) {
 }
 
 router.post("/verify", async (req, res) => {
-  if (!config.isShiftplannerMode) return res.status(404).json({ message: "Not found" });
+  try {
+    return await verifyIdentity(req, res);
+  } catch (error) {
+    console.error("STANDALONE IDENTITY VERIFY ERROR:", error);
+    if (!res.headersSent) res.status(500).json({ message: "Die Identität konnte nicht geprüft werden." });
+  }
+});
+
+async function verifyIdentity(req, res) {
   if (!keysMatch(req.headers["x-shiftplanner-key"], config.SHIFTPLANNER_API_KEY) && !isLocalDevelopmentRequest(req)) {
     return res.status(401).json({ message: "Invalid local application key" });
   }
@@ -99,6 +107,6 @@ router.post("/verify", async (req, res) => {
     user: { id: user.id, displayName, email: verifiedEmail, isAdmin: user.is_admin === true || user.is_root === true },
     verificationMethod: "jarvis_sso_session",
   });
-});
+}
 
 export default router;

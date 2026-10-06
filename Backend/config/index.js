@@ -14,16 +14,17 @@ import "dotenv/config"; // Must be first — all process.env reads happen below.
 
 const NODE_ENV = process.env.NODE_ENV || "development";
 const isProd = NODE_ENV === "production";
-const APP_MODE = (process.env.APP_MODE || "odin").trim().toLowerCase();
-const isShiftplannerMode = APP_MODE === "shiftplanner";
 
 /* ─────────────────────────────────────────────────────────────────────────── */
 /*  Fail-fast: required vars in production                                      */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
-const REQUIRED_IN_PROD = isShiftplannerMode
-    ? ["JWT_SECRET", "SHIFTPLANNER_API_KEY", "DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"]
-    : ["JWT_SECRET", "QUEUE_INGEST_KEY"];
+// DB_* vars are only mandatory when DATABASE_URL (preferred) is not provided.
+const REQUIRED_IN_PROD = [
+    "JWT_SECRET",
+    "SHIFTPLANNER_API_KEY",
+    ...(process.env.DATABASE_URL ? [] : ["DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"]),
+];
 
 if (isProd) {
     const missing = REQUIRED_IN_PROD.filter((k) => !process.env[k]);
@@ -72,8 +73,6 @@ export const config = {
     PORT: parseInt(process.env.PORT || "5055", 10),
     NODE_ENV,
     isProd,
-    APP_MODE,
-    isShiftplannerMode,
 
     // Database
     DATABASE_URL,
@@ -85,32 +84,16 @@ export const config = {
 
     // Auth
     JWT_SECRET: process.env.JWT_SECRET || (isProd ? "" : "dev-only-insecure-secret"),
-    JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || "8h",
 
     // Security
-    QUEUE_INGEST_KEY: process.env.QUEUE_INGEST_KEY || "",
     SHIFTPLANNER_API_KEY: process.env.SHIFTPLANNER_API_KEY || "",
     SHIFTPLANNER_ADMIN_PASSWORD: process.env.SHIFTPLANNER_ADMIN_PASSWORD || "root",
     // One-time operational recovery switch. It is deliberately opt-in so a
     // password selected by an administrator is not overwritten on restart.
     SHIFTPLANNER_RESET_ADMIN_PASSWORD: String(process.env.SHIFTPLANNER_RESET_ADMIN_PASSWORD || "false").toLowerCase() === "true",
 
-    // CoC external review links + email notifications
-    COC_PUBLIC_URL: String(process.env.COC_PUBLIC_URL || "").replace(/\/+$/, ""),
-    COC_REVIEW_TOKEN_TTL: process.env.COC_REVIEW_TOKEN_TTL || "14d",
-    SMTP_HOST: process.env.SMTP_HOST || "",
-    SMTP_PORT: Number.parseInt(process.env.SMTP_PORT || "587", 10),
-    SMTP_SECURE: String(process.env.SMTP_SECURE || "false").toLowerCase() === "true",
-    SMTP_USER: process.env.SMTP_USER || "",
-    SMTP_PASS: process.env.SMTP_PASS || "",
-    SMTP_FROM: process.env.SMTP_FROM || "",
-
     // CORS
     CORS_ORIGINS,
-
-    // Teams Integration (optional — set in .env)
-    TEAMS_CHANNEL_WEBHOOK: process.env.TEAMS_CHANNEL_WEBHOOK || "",
-    TEAMS_PERSONAL_WEBHOOK: process.env.TEAMS_PERSONAL_WEBHOOK || "",
 };
 
 /* ─────────────────────────────────────────────────────────────────────────── */
@@ -119,13 +102,11 @@ export const config = {
 
 console.log("\n[CONFIG] ── Startup Configuration ──────────────────────");
 console.log(`  NODE_ENV   : ${config.NODE_ENV}`);
-console.log(`  APP_MODE   : ${config.APP_MODE}`);
 console.log(`  PORT       : ${config.PORT}`);
 console.log(`  TIMEZONE   : ${config.OPERATIONAL_TIMEZONE}`);
 console.log(`  DATABASE   : ${DATABASE_URL ? "DATABASE_URL (set)" : `${db.host}:${db.port}/${db.database} (user: ${db.user})`}`);
 console.log(`  DB_PASS    : ${db.password ? "****" : "⚠ MISSING"}`);
 console.log(`  JWT_SECRET : ${config.JWT_SECRET && config.JWT_SECRET !== "dev-only-insecure-secret" ? "****" : (isProd ? "⚠ MISSING" : "dev (insecure)")}`);
-console.log(`  INGEST_KEY : ${config.QUEUE_INGEST_KEY ? "****" : "⚠ MISSING"}`);
 const corsMode = (process.env.CORS_ORIGINS || process.env.CORS_ORIGIN) ? `strict [${config.CORS_ORIGINS.join(", ")}]` : "proxy-mode (allow all — set CORS_ORIGINS to restrict)";
 console.log(`  CORS       : ${corsMode}`);
 console.log("─────────────────────────────────────────────────────────\n");

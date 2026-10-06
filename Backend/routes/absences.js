@@ -51,6 +51,11 @@ router.post('/', requireAuth, requirePageAccess('shiftplan', 'write'), async (re
         return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    const spanDays = (Date.parse(end_date) - Date.parse(start_date)) / 86_400_000;
+    if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > 366) {
+        return res.status(400).json({ error: 'Invalid date range (max. 366 days)' });
+    }
+
     try {
         // Resolve employee_id if possible (optional)
         const userRes = await db.query('SELECT id FROM users WHERE username = $1 OR first_name || \' \' || last_name = $1 LIMIT 1', [employee_name]);
@@ -77,7 +82,10 @@ router.post('/', requireAuth, requirePageAccess('shiftplan', 'write'), async (re
 router.delete('/:id', requireAuth, requirePageAccess('shiftplan', 'write'), async (req, res) => {
     const { id } = req.params;
     try {
-        const { rows } = await db.query('DELETE FROM absences WHERE id = $1 RETURNING *', [id]);
+        const { rows } = await db.query(
+            "DELETE FROM absences WHERE id = $1 RETURNING employee_name, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date",
+            [id]
+        );
         if (rows.length > 0) {
             // Recompute conflicts for the removed range
             const abs = rows[0];
@@ -113,7 +121,17 @@ router.get('/conflicts', requireAuth, async (req, res) => {
 });
 
 // Internal Helper for Conflict Logic
-export async function recomputeConflictsInternal(employeeName, startDateStr, endDateStr, database = db) {
+export async function recomputeConflictsInternal(employeeName, startDateInput, endDateInput, database = db) {
+    // pg returns DATE columns as local-midnight Date objects: read local calendar parts, never toISOString().
+    const toDateKey = (value) => {
+        if (value instanceof Date) {
+            const pad = (n) => String(n).padStart(2, '0');
+            return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
+        }
+        return String(value ?? '').slice(0, 10);
+    };
+    const startDateStr = toDateKey(startDateInput);
+    const endDateStr = toDateKey(endDateInput);
     const GERMAN_MONTHS = [
         "Januar", "Februar", "März", "April", "Mai", "Juni",
         "Juli", "August", "September", "Oktober", "November", "Dezember"

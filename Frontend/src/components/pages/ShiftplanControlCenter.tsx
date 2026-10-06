@@ -1,4 +1,4 @@
-/* ================================================ */
+﻿/* ================================================ */
 /* Shiftplan Control Center – Schichtplaner          */
 /* Draft generation, review, activation             */
 /* ================================================ */
@@ -12,11 +12,11 @@ import { ShiftplanTable } from '../shiftplan/ShiftplanTable';
 import type { EmployeeMonthlyStats } from '../shiftplan/shiftplan.hours';
 import type { Absence } from '../../api/absences';
 import { GroupedDraftList } from '../shiftplan/GroupedDraftList';
-import { exportPlanningGroup, type PlanningDraftGroup } from '../../api/planningPeriods';
+import type { PlanningDraftGroup } from '../../api/planningPeriods';
 import {
-  CalendarClock, Play, Download, Check, X, RefreshCw, ChevronDown, ChevronUp,
-  AlertTriangle, CheckCircle2, Clock, FileSpreadsheet, Eye, Trash2,
-  ArrowRight, Users, Calendar, CalendarRange, ShieldAlert, BarChart3, List, Info, HelpCircle
+  CalendarClock, Play, ChevronDown, ChevronUp,
+  AlertTriangle, CheckCircle2, FileSpreadsheet, Eye, Trash2,
+  ArrowRight, Users, Calendar, ShieldAlert, BarChart3, List, Info
 } from 'lucide-react';
 
 /* ------------------------------------------------ */
@@ -34,6 +34,7 @@ interface Draft {
   fairness: Record<string, any>;
   config_snapshot: any;
   title: string | null;
+  description?: string | null;
   note: string | null;
   created_by: string;
   created_at: string;
@@ -65,6 +66,7 @@ interface DraftSummary {
   version: number;
   status: string;
   title: string | null;
+  description?: string | null;
   note: string | null;
   created_by: string;
   created_at: string;
@@ -88,7 +90,7 @@ function getStatusLabels(t: (key: any) => string): Record<string, { label: strin
   };
 }
 
-type TabKey = 'overview' | 'draft' | 'conflicts' | 'explanations' | 'fairness' | 'history' | 'basis' | 'help';
+type TabKey = 'overview' | 'draft' | 'conflicts' | 'explanations' | 'fairness' | 'basis';
 
 /* ------------------------------------------------ */
 /* HELPERS                                          */
@@ -145,18 +147,13 @@ export default function ShiftplanControlCenter() {
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
-  const [generatingYear, setGeneratingYear] = useState(false);
-  const [planningMode, setPlanningMode] = useState<'week' | 'month' | 'quarter' | 'year'>('month');
+  const [planningMode, setPlanningMode] = useState<'month' | 'quarter' | 'year'>('month');
   const [selectedQuarter, setSelectedQuarter] = useState(1);
-  const [selectedWeekStart, setSelectedWeekStart] = useState(() => {
-    const date = new Date();
-    const daysUntilMonday = (8 - date.getDay()) % 7 || 7;
-    date.setDate(date.getDate() + daysUntilMonday);
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  });
-  const [weekResult, setWeekResult] = useState<{ weekStart: string; generated: any[] } | null>(null);
   const [selectedPlanningYear, setSelectedPlanningYear] = useState(2027);
-  const [yearResult, setYearResult] = useState<{ year: number; quarter?: number | null; groupId?: string; generated: any[]; errors: any[] } | null>(null);
+  const [genTitle, setGenTitle] = useState('');
+  const [genDescription, setGenDescription] = useState('');
+  const [confirmGenerate, setConfirmGenerate] = useState(false);
+  const [genResult, setGenResult] = useState<{ scope: 'month' | 'quarter' | 'year'; year: number; quarter?: number | null; count: number; expected: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmActivate, setConfirmActivate] = useState(false);
   const [planningBasis, setPlanningBasis] = useState<any>(null);
@@ -167,7 +164,7 @@ export default function ShiftplanControlCenter() {
   const [manualEmployeesSaving, setManualEmployeesSaving] = useState(false);
   const [showManualEmployeesOnly, setShowManualEmployeesOnly] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
-  const [draftNote, setDraftNote] = useState('');
+  const [draftDescription, setDraftDescription] = useState('');
   const [draftMetadataSaving, setDraftMetadataSaving] = useState(false);
 
   // Year derived from selected month
@@ -185,16 +182,8 @@ export default function ShiftplanControlCenter() {
     return opts;
   })();
 
-  // Full-year planning intentionally starts in 2027 because 2026 is already underway.
-  const yearOptions = (() => {
-    const now = new Date();
-    const years: number[] = [];
-    const lastYear = Math.max(2032, now.getFullYear() + 6);
-    for (let y = 2027; y <= lastYear; y++) {
-      years.push(y);
-    }
-    return years;
-  })();
+  // Quarter/year planning is allowed for 2027–2040 (matches the backend).
+  const yearOptions = Array.from({ length: 14 }, (_, index) => 2027 + index);
 
   const loadDrafts = useCallback(async () => {
     try {
@@ -211,19 +200,13 @@ export default function ShiftplanControlCenter() {
       const res = await api.get(`/shiftplan-control/drafts/${id}`);
       setActiveDraft(res.data.draft);
       setDraftTitle(res.data.draft?.title || '');
-      setDraftNote(res.data.draft?.note || '');
+      setDraftDescription(res.data.draft?.description || '');
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message);
     } finally {
       setLoading(false);
     }
   }, []);
-
-  const openYearMonth = useCallback(async (entry: any) => {
-    setSelectedMonth(entry.month);
-    await loadDraft(entry.draftId);
-    setTab('draft');
-  }, [loadDraft]);
 
   const loadBasis = useCallback(async () => {
     setBasisLoading(true);
@@ -273,21 +256,34 @@ export default function ShiftplanControlCenter() {
   }, [loadManualEmployeeSummary]);
 
   const selectedMonthManualSummary = manualEmployeeSummaryByMonth[selectedMonth] || null;
-  const manualSummaryMonths = useMemo(() => {
-    return Array.from({ length: 12 }, (_, index) => {
-      const month = `${selectedMonthYear}-${String(index + 1).padStart(2, '0')}`;
-      return manualEmployeeSummaryByMonth[month] || { month, count: 0, employee_names: [] };
-    });
-  }, [manualEmployeeSummaryByMonth, selectedMonthYear]);
 
-  const handleGenerate = async () => {
+  const runGenerate = async () => {
+    const quarter = planningMode === 'quarter' ? selectedQuarter : null;
+    setConfirmGenerate(false);
     setGenerating(true);
     setError(null);
+    setGenResult(null);
+    const meta = {
+      ...(genTitle.trim() ? { title: genTitle.trim() } : {}),
+      ...(genDescription.trim() ? { description: genDescription.trim() } : {}),
+    };
     try {
-      const res = await api.post('/shiftplan-control/drafts/generate', { month: selectedMonth });
-      await loadDrafts();
-      if (res.data.draft?.id) await loadDraft(res.data.draft.id);
-      setTab('draft');
+      if (planningMode === 'month') {
+        const res = await api.post('/shiftplan-control/drafts/generate', { month: selectedMonth, ...meta });
+        await loadDrafts();
+        if (res.data.draft?.id) await loadDraft(res.data.draft.id);
+        setGenResult({ scope: 'month', year: selectedMonthYear, count: 1, expected: 1 });
+        setTab('draft');
+      } else {
+        const res = await api.post(`/shiftplan-control/drafts/generate-${quarter ? 'quarter' : 'year'}`, { year: selectedPlanningYear, ...(quarter ? { quarter } : {}), ...meta });
+        const generated: any[] = Array.isArray(res.data?.generated) ? res.data.generated : [];
+        if (generated[0]?.month) setSelectedMonth(generated[0].month);
+        setGenResult({ scope: planningMode, year: Number(res.data?.year) || selectedPlanningYear, quarter: res.data?.quarter ?? quarter, count: generated.length, expected: quarter ? 3 : 12 });
+        await loadDrafts();
+        setTab('overview');
+      }
+      setGenTitle('');
+      setGenDescription('');
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message);
     } finally {
@@ -295,24 +291,9 @@ export default function ShiftplanControlCenter() {
     }
   };
 
-  const handleGenerateYear = async () => {
-    const quarter = planningMode === 'quarter' ? selectedQuarter : null;
-    if (!confirm(isGerman ? `${quarter ? `Q${quarter} ${selectedPlanningYear} (3 Monate)` : `${selectedPlanningYear} (12 Monate)`} als zusammenhängende Planung generieren?` : `Generate a connected plan for ${quarter ? `Q${quarter} ${selectedPlanningYear}` : selectedPlanningYear}?`)) return;
-    setGeneratingYear(true);
-    setError(null);
-    setYearResult(null);
-    try {
-      const res = await api.post(`/shiftplan-control/drafts/generate-${quarter ? 'quarter' : 'year'}`, { year: selectedPlanningYear, ...(quarter ? { quarter } : {}) });
-      setYearResult(res.data);
-      const firstMonth = res.data.generated?.[0];
-      if (firstMonth) setSelectedMonth(firstMonth.month);
-      await loadDrafts();
-      setTab('overview');
-    } catch (e: any) {
-      setError(e?.response?.data?.error || e.message);
-    } finally {
-      setGeneratingYear(false);
-    }
+  const handleGenerate = () => {
+    if (planningMode === 'month') { void runGenerate(); return; }
+    setConfirmGenerate(true);
   };
 
   const handleStatusChange = async (id: number, status: string) => {
@@ -325,22 +306,6 @@ export default function ShiftplanControlCenter() {
     }
   };
 
-  const handleGenerateWeek = async () => {
-    setGenerating(true);
-    setError(null);
-    setWeekResult(null);
-    try {
-      const res = await api.post('/shiftplan-control/drafts/generate-week', { weekStart: selectedWeekStart });
-      setWeekResult(res.data);
-      const firstPart = res.data.generated?.[0];
-      if (firstPart) await openYearMonth(firstPart);
-    } catch (e: any) {
-      setError(e?.response?.data?.error || e.message);
-    } finally {
-      setGenerating(false);
-    }
-  };
-
   const handleSaveDraftMetadata = async () => {
     if (!activeDraft) return;
     setDraftMetadataSaving(true);
@@ -348,9 +313,9 @@ export default function ShiftplanControlCenter() {
     try {
       const res = await api.patch(`/shiftplan-control/drafts/${activeDraft.id}/metadata`, {
         title: draftTitle,
-        note: draftNote,
+        description: draftDescription,
       });
-      setActiveDraft(res.data.draft);
+      setActiveDraft((prev) => (prev ? { ...prev, ...res.data.draft } : res.data.draft));
       await loadDrafts();
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message);
@@ -367,7 +332,7 @@ export default function ShiftplanControlCenter() {
         day,
         shiftCode,
       });
-      setActiveDraft(res.data.draft);
+      setActiveDraft((prev) => (prev ? { ...prev, ...res.data.draft } : res.data.draft));
       await loadDrafts();
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message);
@@ -448,26 +413,6 @@ export default function ShiftplanControlCenter() {
     }
   };
 
-  const handleYearExport = async (year: number, groupId?: string) => {
-    try {
-      if (groupId) { await exportPlanningGroup(groupId); return; }
-      const res = await api.get(`/shiftplan-control/drafts/year-excel/${year}`, { responseType: 'blob' });
-      const cd = String(res.headers?.['content-disposition'] || '');
-      const match = cd.match(/filename="?([^"]+)"?/);
-      const filename = match ? match[1] : `Jahresschichtplan_${year}.xlsx`;
-      const url = URL.createObjectURL(res.data);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-    } catch (e: any) {
-      setError(e?.response?.data?.message || e?.message || t('sc.exportFailed'));
-    }
-  };
-
   const handleDelete = async (id: number) => {
     if (!confirm(t('sc.confirmDeleteDraft'))) return;
     try {
@@ -486,8 +431,6 @@ export default function ShiftplanControlCenter() {
     { key: 'explanations', label: t('sc.tabExplanations'), icon: Info },
     { key: 'fairness', label: 'Fairness', icon: BarChart3 },
     { key: 'basis', label: t('sc.tabPlanningBasis'), icon: List },
-    { key: 'history', label: t('sc.tabVersions'), icon: Clock },
-    { key: 'help', label: t('sc.tabHelp'), icon: HelpCircle },
   ];
 
   return (
@@ -497,108 +440,148 @@ export default function ShiftplanControlCenter() {
         icon={<CalendarClock className="w-6 h-6 text-blue-400" />}
         title={t('sc.title')}
         subtitle={t('sc.subtitle')}
-        rightContent={
-          <div className="flex items-center gap-3">
-            <select
-              value={planningMode}
-              disabled={generating || generatingYear}
-              onChange={(event) => setPlanningMode(event.target.value as 'week' | 'month' | 'quarter' | 'year')}
-              className="px-3 py-2 text-sm rounded-lg border border-indigo-500/30 bg-background/80 text-foreground focus:outline-none focus:border-indigo-500/50"
-              aria-label={isGerman ? 'Planungszeitraum' : 'Planning period'}
-            >
-              <option value="week">{isGerman ? 'Wöchentlich' : 'Weekly'}</option>
-              <option value="month">{isGerman ? 'Monatlich' : 'Monthly'}</option>
-              <option value="quarter">{isGerman ? 'Quartalsweise' : 'Quarterly'}</option>
-              <option value="year">{isGerman ? 'Jährlich' : 'Yearly'}</option>
-            </select>
+      />
 
-            <input
-              type="date"
-              value={selectedWeekStart}
-              disabled={generating || generatingYear}
-              onChange={(event) => setSelectedWeekStart(event.target.value)}
-              className={`${planningMode === 'week' ? '' : 'hidden'} px-3 py-2 text-sm rounded-lg border border-cyan-500/30 bg-background/80 text-foreground focus:outline-none focus:border-cyan-500/50`}
-              aria-label={isGerman ? 'Montag der Planungswoche' : 'Monday of planning week'}
-            />
-
-            {/* Month Selector */}
-            <select
-              value={selectedMonth}
-              disabled={generating || generatingYear}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-              className={`${planningMode === 'month' ? '' : 'hidden'} px-3 py-2 text-sm rounded-lg border border-blue-500/30 bg-background/80 text-foreground focus:outline-none focus:border-blue-500/50`}
-            >
-              {monthOptions.map(m => (
-                <option key={m} value={m}>{monthLabel(m, locale)}</option>
+      {/* Scope selector + generation */}
+      <EnterpriseCard>
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex rounded-lg border border-indigo-500/30 bg-background/80 p-0.5" role="group" aria-label={isGerman ? 'Planungszeitraum' : 'Planning period'}>
+              {([['month', isGerman ? 'Monat' : 'Month'], ['quarter', isGerman ? 'Quartal' : 'Quarter'], ['year', isGerman ? 'Jahr' : 'Year']] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={planningMode === mode}
+                  disabled={generating}
+                  onClick={() => { setPlanningMode(mode); setConfirmGenerate(false); }}
+                  className={`rounded-md px-4 py-1.5 text-sm font-medium transition disabled:opacity-50 ${planningMode === mode ? 'bg-indigo-600 text-white' : 'text-muted-foreground hover:text-foreground'}`}
+                >
+                  {label}
+                </button>
               ))}
-            </select>
+            </div>
 
-            <select
-              value={selectedPlanningYear}
-              disabled={generating || generatingYear}
-              onChange={(event) => setSelectedPlanningYear(Number.parseInt(event.target.value, 10))}
-              className={`${planningMode === 'year' || planningMode === 'quarter' ? '' : 'hidden'} px-3 py-2 text-sm rounded-lg border border-emerald-500/30 bg-background/80 text-foreground focus:outline-none focus:border-emerald-500/50`}
-            >
-              {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
-            </select>
-            <select value={selectedQuarter} disabled={generating || generatingYear} onChange={event => setSelectedQuarter(Number(event.target.value))}
-              aria-label={isGerman ? 'Quartal' : 'Quarter'} className={`${planningMode === 'quarter' ? '' : 'hidden'} rounded-lg border border-emerald-500/30 bg-background/80 px-3 py-2 text-sm`}>
-              {[1, 2, 3, 4].map(quarter => <option key={quarter} value={quarter}>Q{quarter}</option>)}
-            </select>
+            {planningMode === 'month' && (
+              <select
+                value={selectedMonth}
+                disabled={generating}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                aria-label={isGerman ? 'Monat' : 'Month'}
+                className="px-3 py-2 text-sm rounded-lg border border-blue-500/30 bg-background/80 text-foreground focus:outline-none focus:border-blue-500/50"
+              >
+                {monthOptions.map(m => (
+                  <option key={m} value={m}>{monthLabel(m, locale)}</option>
+                ))}
+              </select>
+            )}
 
-            {/* Generate Month Button */}
+            {planningMode !== 'month' && (
+              <select
+                value={selectedPlanningYear}
+                disabled={generating}
+                onChange={(event) => setSelectedPlanningYear(Number.parseInt(event.target.value, 10))}
+                aria-label={isGerman ? 'Jahr' : 'Year'}
+                className="px-3 py-2 text-sm rounded-lg border border-emerald-500/30 bg-background/80 text-foreground focus:outline-none focus:border-emerald-500/50"
+              >
+                {yearOptions.map((year) => <option key={year} value={year}>{year}</option>)}
+              </select>
+            )}
+            {planningMode === 'quarter' && (
+              <select
+                value={selectedQuarter}
+                disabled={generating}
+                onChange={event => setSelectedQuarter(Number(event.target.value))}
+                aria-label={isGerman ? 'Quartal' : 'Quarter'}
+                className="rounded-lg border border-emerald-500/30 bg-background/80 px-3 py-2 text-sm"
+              >
+                {[1, 2, 3, 4].map(quarter => <option key={quarter} value={quarter}>Q{quarter}</option>)}
+              </select>
+            )}
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="space-y-1 text-xs font-semibold text-muted-foreground">
+              {isGerman ? 'Titel' : 'Title'}
+              <Input
+                value={genTitle}
+                maxLength={200}
+                disabled={generating}
+                onChange={(event) => setGenTitle(event.target.value)}
+                placeholder={isGerman ? 'Optionaler Titel für diese Planung' : 'Optional title for this plan'}
+              />
+            </label>
+            <label className="space-y-1 text-xs font-semibold text-muted-foreground md:row-span-1">
+              {isGerman ? 'Beschreibung' : 'Description'}
+              <textarea
+                value={genDescription}
+                maxLength={2000}
+                rows={2}
+                disabled={generating}
+                onChange={(event) => setGenDescription(event.target.value)}
+                placeholder={isGerman ? 'z. B. Kurze Nachtschichten, andere Arbeitszeiten …' : 'e.g. short night shifts, different working hours …'}
+                className="w-full rounded-md border border-border/40 bg-background/75 px-3 py-2 text-sm font-normal text-foreground"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={handleGenerate}
-              disabled={planningMode !== 'month' || generating || generatingYear}
-              className={`${planningMode === 'month' ? '' : 'hidden'} flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition disabled:opacity-50 font-medium`}
+              disabled={generating || confirmGenerate}
+              className={`flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg text-white transition disabled:opacity-50 font-medium ${planningMode === 'month' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}
             >
-              <Play className="w-3.5 h-3.5" />
-              {generating ? t('sc.generating') : t('sc.generateDraft')}
+              {planningMode === 'month' ? <Play className="w-3.5 h-3.5" /> : <Calendar className="w-3.5 h-3.5" />}
+              {generating
+                ? (isGerman ? 'Planung wird generiert…' : 'Generating plan…')
+                : planningMode === 'month'
+                  ? (isGerman ? `Monatsplan ${monthLabel(selectedMonth, locale)} erstellen` : `Generate plan ${monthLabel(selectedMonth, locale)}`)
+                  : planningMode === 'quarter'
+                    ? (isGerman ? `Quartalsplanung Q${selectedQuarter} ${selectedPlanningYear} erstellen` : `Generate quarter plan Q${selectedQuarter} ${selectedPlanningYear}`)
+                    : (isGerman ? `Jahresplanung ${selectedPlanningYear} erstellen` : `Generate year plan ${selectedPlanningYear}`)}
             </button>
-
-            {/* Separator */}
-            <div className="w-px h-8 bg-border/40" />
-
-            {/* Generate Full Year Button */}
-            <button
-              onClick={handleGenerateYear}
-              disabled={(planningMode !== 'year' && planningMode !== 'quarter') || generating || generatingYear}
-              className={`${planningMode === 'year' || planningMode === 'quarter' ? '' : 'hidden'} flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition disabled:opacity-50 font-medium`}
-              title={planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear}` : `${selectedPlanningYear}`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              {generatingYear ? (isGerman ? 'Planung wird generiert…' : 'Generating plan…') : planningMode === 'quarter' ? `${isGerman ? 'Quartalsplanung' : 'Quarter plan'} Q${selectedQuarter} ${selectedPlanningYear}` : (isGerman ? `Jahresplanung ${selectedPlanningYear}` : `Full year ${selectedPlanningYear}`)}
-            </button>
-
-            <button
-              onClick={handleGenerateWeek}
-              disabled={planningMode !== 'week' || generating || generatingYear}
-              className={`${planningMode === 'week' ? '' : 'hidden'} flex items-center gap-1.5 text-xs px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition disabled:opacity-50 font-medium`}
-            >
-              <Calendar className="w-3.5 h-3.5" />
-              {generating ? (isGerman ? 'Woche wird generiert...' : 'Generating week...') : (isGerman ? 'Wochenplan erstellen' : 'Generate week')}
-            </button>
+            {confirmGenerate && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-100">
+                <span>
+                  {isGerman
+                    ? `${planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear} (3 Monate)` : `${selectedPlanningYear} (12 Monate)`} als zusammenhängende Planung generieren?`
+                    : `Generate a connected plan for ${planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear}` : selectedPlanningYear}?`}
+                </span>
+                <button type="button" onClick={() => void runGenerate()} className="rounded-md bg-emerald-600 px-3 py-1 font-bold text-white hover:bg-emerald-500">{isGerman ? 'Ja, generieren' : 'Yes, generate'}</button>
+                <button type="button" onClick={() => setConfirmGenerate(false)} className="rounded-md border border-border/40 px-3 py-1 text-muted-foreground hover:text-foreground">{t('common.cancel')}</button>
+              </div>
+            )}
           </div>
-        }
-      />
+
+          {genResult && (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-100">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              <span className="flex-1">
+                {genResult.scope === 'month'
+                  ? (isGerman ? 'Monatsplan erstellt.' : 'Monthly plan generated.')
+                  : `${genResult.quarter ? `Q${genResult.quarter} ${genResult.year}` : `${isGerman ? 'Jahresplanung' : 'Year plan'} ${genResult.year}`}: ${genResult.count}/${genResult.expected} ${isGerman ? 'Monate erstellt.' : 'months generated.'}`}
+              </span>
+              <a className="underline hover:text-white" href={`/odin-go/drafts?view=${genResult.scope}&year=${genResult.year}${genResult.quarter ? `&quarter=${genResult.quarter}` : ''}`}>
+                {isGerman ? 'Zu den Entwürfen' : 'Go to drafts'}
+              </a>
+              <button type="button" onClick={() => setGenResult(null)} className="text-xs underline hover:text-white">{isGerman ? 'Schließen' : 'Close'}</button>
+            </div>
+          )}
+        </div>
+      </EnterpriseCard>
 
       <EnterpriseFeatureHero
         tone="indigo"
         eyebrow={t('sc.subtitle')}
-        title={planningMode === 'week'
-          ? `${isGerman ? 'Wochenplanung ab' : 'Week starting'} ${selectedWeekStart}`
-          : planningMode === 'month' ? monthLabel(selectedMonth, locale) : planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear}` : `${isGerman ? 'Jahresplanung' : 'Year plan'} ${selectedPlanningYear}`}
-        description={planningMode === 'week'
-          ? (isGerman ? 'Erstellt einen Wochen-Draft mit anteiligem Stundenziel und vollständiger Besetzungsprüfung.' : 'Creates a weekly draft with a prorated hours target and full staffing validation.')
-          : planningMode === 'month'
+        title={planningMode === 'month' ? monthLabel(selectedMonth, locale) : planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear}` : `${isGerman ? 'Jahresplanung' : 'Year plan'} ${selectedPlanningYear}`}
+        description={planningMode === 'month'
           ? (isGerman ? 'Erstellt einen Monats-Draft mit vollständiger Stunden- und Serienprüfung.' : 'Creates one monthly draft with complete hours and series validation.')
           : planningMode === 'quarter'
           ? (isGerman ? 'Erstellt drei zusammenhängende Monats-Drafts in einer ausklappbaren Quartalsgruppe.' : 'Creates three connected monthly drafts in a collapsible quarter group.')
           : (isGerman ? 'Erstellt zwölf zusammenhängende Monats-Drafts in einer ausklappbaren Jahresgruppe.' : 'Creates twelve connected monthly drafts in a collapsible year group.')}
         metrics={[
-          { label: isGerman ? 'Zeitraum' : 'Period', value: planningMode === 'week' ? selectedWeekStart : planningMode === 'month' ? monthLabel(selectedMonth, locale) : planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear}` : selectedPlanningYear },
-          { label: isGerman ? 'Modus' : 'Mode', value: planningMode === 'week' ? (isGerman ? 'Wöchentlich' : 'Weekly') : planningMode === 'month' ? (isGerman ? 'Monatlich' : 'Monthly') : planningMode === 'quarter' ? (isGerman ? 'Quartalsweise' : 'Quarterly') : (isGerman ? 'Jährlich' : 'Yearly') },
-          { label: 'Status', value: generatingYear || generating ? (isGerman ? 'Wird erstellt' : 'Generating') : (isGerman ? 'Bereit' : 'Ready') },
+          { label: isGerman ? 'Zeitraum' : 'Period', value: planningMode === 'month' ? monthLabel(selectedMonth, locale) : planningMode === 'quarter' ? `Q${selectedQuarter} ${selectedPlanningYear}` : selectedPlanningYear },
+          { label: isGerman ? 'Modus' : 'Mode', value: planningMode === 'month' ? (isGerman ? 'Monatlich' : 'Monthly') : planningMode === 'quarter' ? (isGerman ? 'Quartalsweise' : 'Quarterly') : (isGerman ? 'Jährlich' : 'Yearly') },
+          { label: 'Status', value: generating ? (isGerman ? 'Wird erstellt' : 'Generating') : (isGerman ? 'Bereit' : 'Ready') },
         ]}
       />
 
@@ -610,45 +593,6 @@ export default function ShiftplanControlCenter() {
           <button onClick={() => setError(null)} className="text-xs underline hover:text-red-300">{isGerman ? 'Schließen' : 'Close'}</button>
         </div>
       )}
-
-      {/* Week Generation Result */}
-      {weekResult && (
-        <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-4 py-3 text-sm text-cyan-100">
-          <div className="font-bold">
-            {isGerman
-              ? `Wochenplanung ab ${weekResult.weekStart} erstellt`
-              : `Week starting ${weekResult.weekStart} generated`}
-          </div>
-          <div className="mt-1 text-xs text-cyan-200/80">
-            {weekResult.generated
-              .map((part) => `${monthLabel(part.month, locale)}: ${part.shifts} Dienste, ${part.conflicts} Warnungen`)
-              .join(' · ')}
-          </div>
-        </div>
-      )}
-
-      {yearResult && (
-        <details className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
-          <summary className="cursor-pointer text-sm font-semibold text-foreground">
-            {yearResult.quarter ? `Q${yearResult.quarter} ${yearResult.year}` : `${isGerman ? 'Jahresplanung' : 'Year plan'} ${yearResult.year}`} · {yearResult.generated.length}/{yearResult.quarter ? 3 : 12} {isGerman ? 'Monate erstellt' : 'months generated'}
-          </summary>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button type="button" onClick={() => setYearResult(null)} className="rounded-lg border border-border/30 px-3 py-2 text-xs">{isGerman ? 'Schließen' : 'Close'}</button>
-            <button type="button" onClick={() => void handleYearExport(yearResult.year, yearResult.groupId)} className="rounded-lg border border-emerald-500/30 px-3 py-2 text-xs">
-              {isGerman ? 'Gesamte Planung als Excel exportieren' : 'Export entire plan'}
-            </button>
-            <a className="rounded-lg border border-blue-500/30 px-3 py-2 text-xs" href={`/drafts?view=${yearResult.quarter ? 'quarter' : 'year'}&year=${yearResult.year}${yearResult.quarter ? `&quarter=${yearResult.quarter}` : ''}`}>
-              {isGerman ? 'Drafts öffnen' : 'Open drafts'}
-            </a>
-          </div>
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            {yearResult.generated.map(entry => <button key={entry.draftId} type="button" onClick={() => void openYearMonth(entry)} className="rounded-lg border border-border/30 p-2 text-left text-xs">
-              {monthLabel(entry.month, locale)} · v{entry.version}
-            </button>)}
-          </div>
-        </details>
-      )}
-
       <EnterpriseCard>
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-1">
@@ -833,46 +777,9 @@ export default function ShiftplanControlCenter() {
                 <h3 className="text-sm font-bold text-foreground">{t('sc.shiftPlanning')} — {draftListYear}</h3>
               </div>
 
-              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-black uppercase tracking-[0.22em] text-amber-300/80">
-                      {isGerman ? 'Manuelle Quellen im Jahr' : 'Manual sources across the year'}
-                    </div>
-                    <div className="text-sm font-semibold text-foreground">
-                      {isGerman ? `Übersicht für ${selectedMonthYear}` : `Overview for ${selectedMonthYear}`}
-                    </div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {isGerman ? 'Zeigt je Monat, ob Drafts auf manuellen Mitarbeitern aufbauen.' : 'Shows per month whether drafts build on manual employees.'}
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6">
-                  {manualSummaryMonths.map((entry) => {
-                    const hasManualSources = entry.count > 0;
-                    const isCurrentMonth = entry.month === selectedMonth;
-                    return (
-                      <button
-                        key={entry.month}
-                        type="button"
-                        onClick={() => setSelectedMonth(entry.month)}
-                        className={`rounded-xl border px-3 py-2 text-left transition ${isCurrentMonth ? 'border-blue-500/40 bg-blue-500/10' : hasManualSources ? 'border-amber-400/20 bg-amber-500/10 hover:bg-amber-500/15' : 'border-border/20 bg-background/40 hover:bg-background/60'}`}
-                      >
-                        <div className="text-xs font-semibold text-foreground">{monthLabel(entry.month, locale)}</div>
-                        <div className={`mt-1 text-[11px] font-bold uppercase tracking-[0.2em] ${hasManualSources ? 'text-amber-200' : 'text-muted-foreground'}`}>
-                          {hasManualSources
-                            ? `${entry.count} ${isGerman ? 'manuell' : 'manual'}`
-                            : (isGerman ? 'Keine manuellen Quellen' : 'No manual sources')}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
               <GroupedDraftList groups={draftGroups} activeId={activeDraft?.id}
                 onOpen={draft => { setSelectedMonth(draft.month); void loadDraft(draft.id); setTab('draft'); }}
-                onExportMonth={draft => void handleExport(draft.id)} onError={setError} />
+                onExportMonth={draft => void handleExport(draft.id)} onError={setError} onMetadataSaved={loadDrafts} />
               {!draftGroups.length && <p className="py-8 text-center text-sm text-muted-foreground">{isGerman ? 'Noch keine Drafts für dieses Jahr vorhanden.' : 'No drafts for this year yet.'}</p>}
             </div>
           )}
@@ -893,20 +800,22 @@ export default function ShiftplanControlCenter() {
                   <div className="rounded-xl border border-border/30 bg-card/70 p-4">
                     <div className="grid gap-3 md:grid-cols-[1fr_2fr_auto] md:items-end">
                       <label className="space-y-1 text-xs font-semibold text-muted-foreground">
-                        {isGerman ? 'Draft-Name' : 'Draft name'}
+                        {isGerman ? 'Titel' : 'Title'}
                         <Input
                           value={draftTitle}
+                          maxLength={200}
                           onChange={(event) => setDraftTitle(event.target.value)}
                           placeholder={isGerman ? `Schichtplan ${monthLabel(activeDraft.month, locale)} v${activeDraft.version}` : `Shift plan ${monthLabel(activeDraft.month, locale)} v${activeDraft.version}`}
                           disabled={activeDraft.status === 'activated'}
                         />
                       </label>
                       <label className="space-y-1 text-xs font-semibold text-muted-foreground">
-                        {isGerman ? 'Notizen' : 'Notes'}
+                        {isGerman ? 'Beschreibung' : 'Description'}
                         <Input
-                          value={draftNote}
-                          onChange={(event) => setDraftNote(event.target.value)}
-                          placeholder={isGerman ? 'Notiz zu diesem Draft' : 'Note for this draft'}
+                          value={draftDescription}
+                          maxLength={2000}
+                          onChange={(event) => setDraftDescription(event.target.value)}
+                          placeholder={isGerman ? 'Beschreibung zu diesem Draft' : 'Description for this draft'}
                           disabled={activeDraft.status === 'activated'}
                         />
                       </label>
@@ -950,15 +859,6 @@ export default function ShiftplanControlCenter() {
             <PlanningBasisView basis={planningBasis} loading={basisLoading} onReload={loadBasis} manualOnly={showManualEmployeesOnly} />
           )}
 
-          {/* History Tab */}
-          {tab === 'history' && <GroupedDraftList groups={draftGroups} activeId={activeDraft?.id}
-            onOpen={draft => { setSelectedMonth(draft.month); void loadDraft(draft.id); setTab('draft'); }}
-            onExportMonth={draft => void handleExport(draft.id)} onError={setError} />}
-
-          {/* Help Tab */}
-          {tab === 'help' && (
-            <ShiftplanHelp />
-          )}
         </div>
       </EnterpriseCard>
     </EnterprisePageShell>
@@ -981,7 +881,7 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: D
     const fromConfig = Array.isArray(draft.config_snapshot?.shiftDefinitions)
       ? draft.config_snapshot.shiftDefinitions.map((definition: any) => String(definition.code || '').trim()).filter(Boolean)
       : [];
-    return Array.from(new Set(['', ...fromConfig, 'E1', 'E1SA', 'E1WE', 'L1', 'L1WE', 'N', 'DBS', 'FS', 'ABW', 'S']));
+    return Array.from(new Set(['', ...fromConfig, 'E1', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1', 'L1WE', 'N', 'DBS', 'FS', 'ABW', 'S']));
   }, [draft.config_snapshot?.shiftDefinitions]);
   const manualEmployeeNameSet = useMemo(
     () => new Set((Array.isArray(draft.manual_employees) ? draft.manual_employees : []).map((entry) => String(entry.employee_name || '').trim()).filter(Boolean)),
@@ -1496,18 +1396,6 @@ function PlanningBasisView({ basis, loading, onReload, manualOnly = false }: { b
 
         <div className="rounded-lg border border-border/20 p-4">
           <h4 className="text-xs font-bold text-foreground mb-2 flex items-center gap-1.5">
-            <ShieldAlert className="w-3.5 h-3.5 text-rose-400" /> {t('sc.permanentExclusions')} ({basis.exclusions?.length || 0})
-          </h4>
-          <div className="text-xs text-muted-foreground max-h-32 overflow-y-auto space-y-0.5">
-            {(basis.exclusions || []).map((e: any, i: number) => (
-              <div key={i}>{e.employee_name} – {e.reason}</div>
-            ))}
-            {(basis.exclusions || []).length === 0 && <div>{t('sc.noExclusions')}</div>}
-          </div>
-        </div>
-
-        <div className="rounded-lg border border-border/20 p-4">
-          <h4 className="text-xs font-bold text-foreground mb-2 flex items-center gap-1.5">
             {t('sc.skills')} ({basis.skills?.length || 0})
           </h4>
           <div className="text-xs text-muted-foreground max-h-32 overflow-y-auto space-y-0.5">
@@ -1517,126 +1405,11 @@ function PlanningBasisView({ basis, loading, onReload, manualOnly = false }: { b
           </div>
         </div>
 
-        <div className="rounded-lg border border-border/20 p-4">
-          <h4 className="text-xs font-bold text-foreground mb-2">{t('sc.minimumStaffing')}</h4>
-          <div className="text-xs text-muted-foreground space-y-0.5">
-            {(basis.staffingRules || []).map((r: any, i: number) => (
-              <div key={i}>{t('sc.shift')} {r.shift_type}: {t('sc.atLeast')} {r.min_count} {t('sc.people')}</div>
-            ))}
-            {(basis.staffingRules || []).length === 0 && <div>{t('sc.noRulesDefined')}</div>}
-          </div>
-        </div>
-
       </div>
-    </div>
-  );
-}
 
-/* ================================================ */
-/* HELP COMPONENT                                   */
-/* ================================================ */
-
-function ShiftplanHelp() {
-  const { language, t } = useLanguage();
-  const isGerman = language === 'de';
-  const sections = isGerman ? [
-    {
-      title: 'Was ist der Schichtplaner?',
-      content: 'Der Schichtplaner erstellt automatisch Dienstpläne auf Basis vorhandener Mitarbeiterdaten, Abwesenheiten, Qualifikationen und Fairnessregeln. Er erzeugt Draft-Versionen, die geprüft, freigegeben und als aktiven Plan übernommen werden können.',
-    },
-    {
-      title: 'Einen Draft generieren',
-      content: 'Wähle oben rechts den gewünschten Monat aus und klicke auf „Draft generieren". Das System berücksichtigt automatisch: verfügbare Mitarbeiter, gemeldete Abwesenheiten, dauerhafte Ausschlüsse, Qualifikationen (SmartHands/TT/CC) und Fairness-Metriken aus Vormonaten.',
-    },
-    {
-      title: 'Mitarbeiter auswählen & ausschließen',
-      content: 'Mitarbeiter werden automatisch aus dem bestehenden Schichtplan geladen. Unter „ODIN-Logik → Dauerhafte Ausschlüsse" können einzelne Mitarbeiter zeitlich unbegrenzt oder für bestimmte Zeiträume von der Planung ausgeschlossen werden. Gründe wie Lead, Projektarbeit oder Training können angegeben werden.',
-    },
-    {
-      title: 'Draft-Workflow: Entwurf → Prüfung → Freigabe → Übernahme',
-      content: 'Jeder Draft durchläuft einen definierten Workflow:\n• Entwurf – frisch generiert, kann verworfen werden\n• In Prüfung – zur Durchsicht markiert\n• Freigegeben – bestätigt, bereit zur Übernahme\n• Übernommen – als aktiver Schichtplan eingesetzt (ersetzt bestehenden Plan für den Monat)',
-    },
-    {
-      title: 'Konflikte & Fairness prüfen',
-      content: 'Im Tab „Konfliktzentrum" werden Besetzungslücken und Regelkonflikte angezeigt. Der „Fairness"-Tab zeigt die Verteilung von Nacht-, Wochenend- und Gesamtschichten pro Mitarbeiter. Abweichungen vom Durchschnitt werden farblich markiert.',
-    },
-    {
-      title: 'Erklärungen nachvollziehen',
-      content: 'Unter „Erklärungen" wird für jede Zuweisung dokumentiert, warum ein Mitarbeiter einer bestimmten Schicht zugeteilt oder nicht eingeteilt wurde. Das macht die Planung transparent und nachprüfbar.',
-    },
-    {
-      title: 'Quartals- und Jahresplanung',
-      content: 'Wähle wöchentliche, monatliche, quartalsweise oder jährliche Planung. Quartals- und Jahresplanungen erstellen zusammenhängende Monats-Drafts und erscheinen als ausklappbare Gruppen. Jede Gruppe behält die genauen Monatsversionen ihres Planungslaufs.',
-    },
-    {
-      title: 'Excel-Export',
-      content: 'Exportiere einen einzelnen Monat oder klappe eine Quartals-/Jahresgruppe auf und exportiere die gesamte Planung. Die .xlsx-Datei enthält einen Reiter je Monat in chronologischer Reihenfolge und eine Zeitraumübersicht. Der Gruppenexport verwendet genau die Versionen des ausgewählten Planungslaufs.',
-    },
-    {
-      title: 'Planungsbasis einsehen',
-      content: 'Im Tab „Planungsbasis" siehst du alle Daten, die bei der Generierung verwendet werden: Mitarbeiterliste, Abwesenheiten, Ausschlüsse, Qualifikationen und Mindestbesetzung. So kannst du vor der Generierung prüfen, ob alle Daten aktuell sind.',
-    },
-    {
-      title: 'Tipps für die tägliche Nutzung',
-      content: '• Prüfe vor der Generierung die Planungsbasis auf Vollständigkeit\n• Nutze den Fairness-Tab, um Ungleichgewichte früh zu erkennen\n• Generiere bei Änderungen einfach eine neue Version – alte bleiben erhalten\n• Der Excel-Export eignet sich gut für die Weitergabe an Teamleiter oder den Aushang',
-    },
-  ] : [
-    {
-      title: 'What is the shift planner?',
-      content: 'The shift planner creates duty plans automatically based on available employee data, absences, qualifications, and fairness rules. It produces draft versions that can be reviewed, approved, and activated as the live plan.',
-    },
-    {
-      title: 'Generate a draft',
-      content: 'Select the target month at the top right and click "Generate draft". The system automatically considers available employees, reported absences, permanent exclusions, qualifications (SmartHands/TT/CC), and fairness metrics from previous months.',
-    },
-    {
-      title: 'Select and exclude employees',
-      content: 'Employees are loaded automatically from the existing shift plan. Under "ODIN logic → Permanent exclusions" you can exclude specific employees from planning indefinitely or for a defined time range. Reasons such as lead duty, project work, or training can be documented.',
-    },
-    {
-      title: 'Draft workflow: draft → review → approval → activation',
-      content: 'Each draft follows a defined workflow:\n• Draft – freshly generated and can be discarded\n• In review – marked for checking\n• Approved – confirmed and ready for activation\n• Activated – used as the live shift plan for the month',
-    },
-    {
-      title: 'Review conflicts and fairness',
-      content: 'The "Conflict center" tab shows staffing gaps and rule conflicts. The "Fairness" tab shows the distribution of night shifts, weekend shifts, and total shifts per employee. Deviations from the average are highlighted.',
-    },
-    {
-      title: 'Trace explanations',
-      content: 'Under "Explanations" you can see why an employee was assigned or not assigned to a specific shift. This keeps the planning process transparent and auditable.',
-    },
-    {
-      title: 'Quarter and year planning',
-      content: 'Choose weekly, monthly, quarterly or yearly planning. Quarter and year plans generate connected monthly drafts and appear as collapsible groups. Each group preserves the exact monthly versions from that generation run.',
-    },
-    {
-      title: 'Excel export',
-      content: 'Export a single month or expand a quarter/year group and export the entire plan. The .xlsx workbook contains one worksheet per month in chronological order, plus a period summary. Group exports use the exact versions from the selected planning run.',
-    },
-    {
-      title: 'Inspect the planning basis',
-      content: 'In the "Planning basis" tab you can inspect all data used during generation: employee list, absences, exclusions, qualifications, and minimum staffing. This lets you validate the input before generating.',
-    },
-    {
-      title: 'Daily usage tips',
-      content: '• Check the planning basis for completeness before generating\n• Use the fairness tab to spot imbalances early\n• Generate a new version whenever requirements change – older versions remain available\n• Excel export works well for sharing with team leads or for notice boards',
-    },
-  ];
-
-  return (
-    <div className="space-y-4">
-      <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-        <HelpCircle className="w-4 h-4 text-blue-400" />
-        {t('sc.helpTitle')}
-      </h3>
-      <div className="space-y-3">
-        {sections.map((s, i) => (
-          <div key={i} className="rounded-lg border border-border/20 p-4">
-            <h4 className="text-xs font-bold text-foreground mb-2">{s.title}</h4>
-            <p className="text-xs text-muted-foreground leading-relaxed whitespace-pre-line">{s.content}</p>
-          </div>
-        ))}
-      </div>
+      <p className="text-xs text-muted-foreground">
+        {isGerman ? 'Regeln, Ausschlüsse und Mindestbesetzung pflegst du unter Admin-Einstellungen → Schichtplanung.' : 'Rules, exclusions and minimum staffing are maintained under Admin settings → Shift planning.'}
+      </p>
     </div>
   );
 }

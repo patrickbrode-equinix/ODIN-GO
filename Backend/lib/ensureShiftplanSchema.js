@@ -48,6 +48,11 @@ export async function ensureShiftplanSchema() {
       `);
 
       await pool.query(`
+        ALTER TABLE shift_definitions
+          ADD COLUMN IF NOT EXISTS free_days_after SMALLINT NULL
+      `);
+
+      await pool.query(`
         ALTER TABLE staffing_rules
           ADD COLUMN IF NOT EXISTS max_count INT NULL
       `);

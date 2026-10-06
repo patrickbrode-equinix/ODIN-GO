@@ -191,10 +191,31 @@ export function resolveEmployeeNightModel({ planningMode, employeeNightModel } =
   return normalizeNightModel(employeeNightModel);
 }
 
-export function getNightSeriesDaysForModel({ nightModel, remainingDays = 7 } = {}) {
+export function getNightSeriesDaysForModel({ nightModel, remainingDays = 7, shortSeriesDays = 3 } = {}) {
   const availableDays = Math.max(Number.parseInt(String(remainingDays), 10) || 0, 0);
-  if (normalizeNightModel(nightModel) === NIGHT_MODELS.SHORT) return Math.min(3, availableDays);
+  const shortDays = Math.max(1, Math.min(7, Number.parseInt(String(shortSeriesDays), 10) || 3));
+  if (normalizeNightModel(nightModel) === NIGHT_MODELS.SHORT) return Math.min(shortDays, availableDays);
   return Math.min(7, availableDays);
+}
+
+/**
+ * MIXED night planning: seven-day employees fill the planned night slots and
+ * short-block employees additionally fill the remaining places up to the
+ * maximum staffing of the night shift. Returns the total slot count to fill
+ * (>= neededStaff) and how many of them are "extra" short-block-only slots.
+ */
+export function resolveNightFillTarget({ planningMode, shiftType, neededStaff = 0, maxStaff = 0, holidayCapacity = null } = {}) {
+  const needed = Math.max(Number.parseInt(String(neededStaff), 10) || 0, 0);
+  if (normalizeNightPlanningMode(planningMode) !== NIGHT_PLANNING_MODES.MIXED
+    || normalizePlanningShiftTypeKey(shiftType) !== 'night') {
+    return { fillTarget: needed, extraSlots: 0 };
+  }
+  let ceiling = Math.max(Number.parseInt(String(maxStaff), 10) || 0, 0);
+  if (holidayCapacity !== null && holidayCapacity !== undefined) {
+    ceiling = Math.min(ceiling, Math.max(Number.parseInt(String(holidayCapacity), 10) || 0, 0));
+  }
+  const fillTarget = Math.max(needed, ceiling);
+  return { fillTarget, extraSlots: fillTarget - needed };
 }
 
 const WEEKDAY_ALIASES = new Map([
@@ -285,9 +306,11 @@ const FIXED_SHIFT_SERIES_PATTERNS = {
   E1SA: { series_days: 6, applicable_days: [1, 2, 3, 4, 5, 6] },
   E1WE: { series_days: 7, applicable_days: [1, 2, 3, 4, 5, 6, 0] },
   L1WE: { series_days: 7, applicable_days: [1, 2, 3, 4, 5, 6, 0] },
+  E2SA: { series_days: 6, applicable_days: [1, 2, 3, 4, 5, 6] },
+  E2WE: { series_days: 7, applicable_days: [1, 2, 3, 4, 5, 6, 0] },
 };
 
-const MONDAY_ANCHORED_SHIFT_CODES = new Set(['E1SA', 'E1WE', 'L1WE', 'N', 'DBS']);
+const MONDAY_ANCHORED_SHIFT_CODES = new Set(['E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1WE', 'N', 'DBS']);
 
 export function applyFixedShiftSeriesPattern(definition) {
   const code = String(definition?.code || '').trim().toUpperCase();
@@ -312,6 +335,7 @@ export function getTargetHoursScore({ currentHours = 0, targetHours = 174 } = {}
 export function getPreferenceShiftCode(code) {
   const normalized = String(code || '').trim().toUpperCase();
   if (normalized === 'E1SA' || normalized === 'E1WE') return 'E1';
+  if (normalized === 'E2SA' || normalized === 'E2WE') return 'E2';
   if (normalized === 'L1WE') return 'L1';
   if (normalized === 'NK') return 'N';
   return normalized;
@@ -415,6 +439,8 @@ export function rankSafeSubstituteCandidates({
   const maxWeekendsPerMonth = Number.parseInt(String(rules.maxWeekendsPerMonth ?? ''), 10);
   const maxNightsPerMonth = Number.parseInt(String(rules.maxNightsPerMonth ?? ''), 10);
   const restrictedPool = rules.restrictedPool instanceof Set ? rules.restrictedPool : null;
+  const shortNightSeriesDaysRaw = Number.parseInt(String(rules.shortNightSeriesDays ?? 3), 10);
+  const shortNightSeriesDays = Number.isInteger(shortNightSeriesDaysRaw) && shortNightSeriesDaysRaw > 0 ? shortNightSeriesDaysRaw : 3;
 
   return candidates
     .map((candidate) => {
@@ -434,7 +460,7 @@ export function rankSafeSubstituteCandidates({
       if (isShiftBlockedByEmployeePreference(preferences, shiftCode, rules.respectEmployeeWishes !== false)) return null;
       if (normalizedType === 'night' && isNightShiftRefused(preferences)) return null;
       if (normalizedType === 'night' && normalizeNightModel(preferences.night_model) === NIGHT_MODELS.SHORT
-        && requiredDays.size > 3) return null;
+        && requiredDays.size > shortNightSeriesDays) return null;
 
       // The substitute must not break a neighbouring shift: rest periods,
       // recovery after nights/weekends and the consecutive-workday limit.

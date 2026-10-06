@@ -88,6 +88,19 @@ test('deleting the last absence clears conflicts without recreating them', async
   assert.match(calls[1], /FROM absences/);
 });
 
+test('recomputeConflictsInternal normalises local-midnight Date inputs to calendar date keys', async () => {
+  const deleteParams = [];
+  await recomputeConflictsInternal('Jane Doe', new Date(2026, 9, 2), new Date(2026, 9, 6), {
+    async query(sql, params) { if (sql.includes('DELETE FROM absence_conflicts')) deleteParams.push(params); return { rows: [] }; },
+  });
+  assert.deepEqual(deleteParams[0], ['Jane Doe', '2026-10-02', '2026-10-06']);
+});
+
+test('vacation spans above 366 days are rejected', async t => {
+  const { request } = await withApi(t, async sql => ({ rows: sql.includes('FROM users') ? [employee] : [] }));
+  assert.equal((await request('', 'POST', { start_date: '2026-01-01', end_date: '2027-12-31' })).status, 400);
+});
+
 test('deleting a vacation entry restores the annual account', async t => {
   let entries = [{ id: 10, employee_name: 'Jane Doe', employee_id: 7, start_date: '2026-10-05', end_date: '2026-10-09', type: 'VACATION' }];
   const { request, recomputed } = await withApi(t, async sql => {

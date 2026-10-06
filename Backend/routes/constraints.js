@@ -62,7 +62,7 @@ export async function recomputeConstraintsInternal(monthLabel) {
             // RULE: NO_NIGHT
             if (rules.no_night) {
                 for (const [day, code] of Object.entries(empShifts)) {
-                    if (code === 'N') {
+                    if (code === 'N' || code === 'NK') {
                         violations.push({
                             employee_name: empName,
                             date: new Date(year, monthIdx, Number(day)).toISOString().split('T')[0],
@@ -111,7 +111,7 @@ export async function recomputeConstraintsInternal(monthLabel) {
             if (rules.only_early) {
                 for (const [day, code] of Object.entries(empShifts)) {
                     // Allowed: E1, E2, FS, ABW. Forbidden: L1, L2, N
-                    if (['L1', 'L2', 'N'].includes(code)) {
+                    if (['L1', 'L2', 'N', 'NK'].includes(code)) {
                         violations.push({
                             employee_name: empName,
                             date: new Date(year, monthIdx, Number(day)).toISOString().split('T')[0],

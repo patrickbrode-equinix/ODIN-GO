@@ -30,18 +30,15 @@ describe("web admin session without application key", () => {
   const original = {};
 
   beforeEach(() => {
-    original.isShiftplannerMode = config.isShiftplannerMode;
     original.isProd = config.isProd;
     original.apiKey = config.SHIFTPLANNER_API_KEY;
     original.query = db.query;
-    config.isShiftplannerMode = true;
     config.isProd = true;
     config.SHIFTPLANNER_API_KEY = "extension-key-for-tests";
     db.query = async () => ({ rows: [{ id: 1, login_name: "root", is_root: true }] });
   });
 
   afterEach(() => {
-    config.isShiftplannerMode = original.isShiftplannerMode;
     config.isProd = original.isProd;
     config.SHIFTPLANNER_API_KEY = original.apiKey;
     db.query = original.query;

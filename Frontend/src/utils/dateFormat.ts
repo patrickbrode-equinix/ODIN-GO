@@ -34,18 +34,6 @@ export const formatTimestamp = (ts: string | Date) => {
 };
 
 /**
- * Nutzt commitDate ("2025-12-19") + commitTime ("03:12")
- * Ergebnis: "19.12.2025 – 03:12"
- */
-export const formatCommit = (dateStr: string, timeStr: string) => {
-  if (!dateStr || !timeStr) return "";
-
-  const [year, month, day] = dateStr.split("-");
-
-  return `${day}.${month}.${year} – ${timeStr}`;
-};
-
-/**
  * Reines deutsches Datum ohne Uhrzeit
  * Ergebnis: "19.12.2025"
  */

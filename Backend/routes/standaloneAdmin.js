@@ -50,8 +50,6 @@ function getUnlockClientKey(req) {
 }
 
 router.post("/unlock", async (req, res) => {
-  if (!config.isShiftplannerMode) return res.status(404).json({ message: "Not found" });
-
   const clientKey = getUnlockClientKey(req);
   const now = Date.now();
   const failures = (unlockFailures.get(clientKey) || []).filter((timestamp) => now - timestamp < UNLOCK_WINDOW_MS);
@@ -76,23 +74,27 @@ router.post("/unlock", async (req, res) => {
 });
 
 router.post("/change-password", requireAuth, async (req, res) => {
-  if (!config.isShiftplannerMode) return res.status(404).json({ message: "Not found" });
   if (!req.user?.is_admin) return res.status(403).json({ message: "Admin-Berechtigung erforderlich." });
 
   const { currentPassword, newPassword } = req.body || {};
   if (!currentPassword || !newPassword) return res.status(400).json({ message: "Altes und neues Passwort sind erforderlich." });
-  if (!await verifyAdminPassword(currentPassword)) {
-    return res.status(400).json({ message: "Aktuelles Admin-Passwort ist falsch." });
-  }
+  try {
+    if (!await verifyAdminPassword(currentPassword)) {
+      return res.status(400).json({ message: "Aktuelles Admin-Passwort ist falsch." });
+    }
 
-  const hash = await bcrypt.hash(String(newPassword), 12);
-  await db.query(
-    `INSERT INTO app_settings (key, value, updated_by, updated_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
-    ["shiftplanner.admin_password_hash", hash, req.user?.displayName || req.user?.email || "admin"],
-  );
-  return res.json({ success: true });
+    const hash = await bcrypt.hash(String(newPassword), 12);
+    await db.query(
+      `INSERT INTO app_settings (key, value, updated_by, updated_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = NOW()`,
+      ["shiftplanner.admin_password_hash", hash, req.user?.displayName || req.user?.email || "admin"],
+    );
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("STANDALONE ADMIN CHANGE PASSWORD ERROR:", error);
+    return res.status(500).json({ message: "Das Passwort konnte nicht geändert werden." });
+  }
 });
 
 export default router;

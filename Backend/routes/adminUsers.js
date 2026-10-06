@@ -13,7 +13,7 @@ import {
   normalizeGroupKey,
 } from "../db/initSchema.js";
 import { requirePageAccess } from "../middleware/requirePageAccess.js";
-import { syncEmployeeContacts } from "./employeeContacts.js";
+import { syncEmployeeContacts } from "../lib/employeeContactsSync.js";
 import { provisionUsersFromShiftplan } from "../services/shiftUserProvisioning.service.js";
 import { logActivity } from "./activity.js";
 import { buildBaseAccessPolicy } from "../auth/accessControl.js";

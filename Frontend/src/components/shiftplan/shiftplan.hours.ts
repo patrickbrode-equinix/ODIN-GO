@@ -57,7 +57,7 @@ export type EmployeeMonthlyStats = {
 function getShiftCategory(code: string | undefined | null): 'early' | 'late' | 'night' | null {
     const normalizedCode = String(code || "").trim().toUpperCase();
     if (!normalizedCode) return null;
-    if (normalizedCode === "N") return 'night';
+    if (normalizedCode === "N" || normalizedCode === "NK") return 'night';
     if (normalizedCode.startsWith("E") || normalizedCode.startsWith("HE")) return 'early';
     if (normalizedCode.startsWith("L") || normalizedCode.startsWith("HL")) return 'late';
     return null;
@@ -219,4 +219,94 @@ function parseHoursFromRange(range: string): number {
     // Actually, standard shift 8.5h often includes break. 
     // Let's return raw hours.
     return diffMin / 60;
+}
+
+/* ------------------------------------------------ */
+/* SHIFT CHANGE PREVIEW (hours delta)               */
+/* ------------------------------------------------ */
+
+export type ShiftCellChange = {
+    employeeName: string;
+    day: number;
+    /** New shift code. Empty string / null clears the cell. */
+    newCode: string | null;
+};
+
+export type ShiftChangeHoursDelta = {
+    employeeName: string;
+    /** Monthly paid hours before the change */
+    oldHours: number;
+    /** Monthly paid hours after the change */
+    newHours: number;
+    /** newHours - oldHours (rounded to 2 decimals) */
+    delta: number;
+    /** Monthly target hours */
+    soll: number;
+    /** newHours - soll (rounded to 2 decimals) */
+    resultingDiff: number;
+};
+
+/**
+ * Computes the monthly paid-hours effect of changing one or more cells.
+ * Uses calculateEmployeeHours for both states so breaks, absence credit
+ * (8h per weekday), holiday credit and FS = 0 behave exactly like the table.
+ * Works for single changes, multi-day changes and swaps (changes for two
+ * employees). Returns one entry per affected employee, in order of first appearance.
+ */
+export function computeShiftChangeHoursDelta(args: {
+    schedule: Record<string, Record<number, string>>;
+    changes: ShiftCellChange[];
+    year: number;
+    monthIndex1: number;
+    daysInMonth: number;
+    holidays: HolidayMap;
+    absencesByEmployee?: Map<string, Absence[]> | Record<string, Absence[]>;
+    sollHours?: number;
+}): ShiftChangeHoursDelta[] {
+    const { schedule, changes, year, monthIndex1, daysInMonth, holidays, absencesByEmployee, sollHours = SOLL_HOURS } = args;
+    const order: string[] = [];
+    const byEmployee = new Map<string, ShiftCellChange[]>();
+    for (const change of changes) {
+        if (!byEmployee.has(change.employeeName)) {
+            byEmployee.set(change.employeeName, []);
+            order.push(change.employeeName);
+        }
+        byEmployee.get(change.employeeName)!.push(change);
+    }
+
+    const getAbsences = (name: string): Absence[] => {
+        if (!absencesByEmployee) return [];
+        if (absencesByEmployee instanceof Map) return absencesByEmployee.get(name) || [];
+        return absencesByEmployee[name] || [];
+    };
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+
+    return order.map((employeeName) => {
+        const before: Record<number, string> = { ...(schedule[employeeName] || {}) };
+        const after: Record<number, string> = { ...before };
+        for (const change of byEmployee.get(employeeName) || []) {
+            const code = String(change.newCode || "").trim().toUpperCase();
+            if (code) after[change.day] = code;
+            else delete after[change.day];
+        }
+        const absences = getAbsences(employeeName);
+        const oldStats = calculateEmployeeHours(employeeName, before, year, monthIndex1, daysInMonth, holidays, undefined, sollHours, absences);
+        const newStats = calculateEmployeeHours(employeeName, after, year, monthIndex1, daysInMonth, holidays, undefined, sollHours, absences);
+        return {
+            employeeName,
+            oldHours: oldStats.ist,
+            newHours: newStats.ist,
+            delta: round2(newStats.ist - oldStats.ist),
+            soll: newStats.soll,
+            resultingDiff: newStats.diff,
+        };
+    });
+}
+
+/** Formats an hours delta as '+X,X h' / '−X,X h' / '±0 h' (German decimal comma). */
+export function formatHoursDelta(delta: number): string {
+    const rounded = Math.round(delta * 10) / 10;
+    if (!Number.isFinite(rounded) || rounded === 0) return "±0 h";
+    const text = Math.abs(rounded).toFixed(1).replace(".", ",");
+    return `${rounded > 0 ? "+" : "−"}${text} h`;
 }

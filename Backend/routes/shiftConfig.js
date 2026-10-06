@@ -9,7 +9,10 @@ import { requireAuth, requireVerifiedIdentity } from '../middleware/authMiddlewa
 import { requirePageAccess } from '../middleware/requirePageAccess.js';
 import pool from '../db.js';
 import { ensureShiftplanSchema } from '../lib/ensureShiftplanSchema.js';
-import { DEFAULT_SHIFT_DEFINITIONS, DEFAULT_STAFFING_RULES, STAFFING_SHIFT_TYPES, getPaidShiftHours } from '../lib/shiftDefaults.js';
+import { isDateKey, vacationSummary } from '../lib/vacationDays.js';
+import { recomputeConflictsInternal } from './absences.js';
+import { normalizeFreeDaysAfter, normalizeShortNightSeriesDays, sanitizeShiftModes } from '../lib/shiftDefinitionInput.js';
+import { DEFAULT_SHIFT_DEFINITIONS,DEFAULT_STAFFING_RULES, STAFFING_SHIFT_TYPES, getPaidShiftHours } from '../lib/shiftDefaults.js';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -89,53 +92,13 @@ function validateDayOverride(input = {}) {
   return null;
 }
 
-function parseEmployeeAccessPool(value) {
-  try {
-    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-    return Array.isArray(parsed) ? parsed.map((entry) => String(entry || '').trim()).filter(Boolean) : [];
-  } catch {
-    return [];
-  }
-}
-
-function comparableEmployeeName(value) {
-  return String(value || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLocaleLowerCase('de-DE')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .sort()
-    .join(' ');
-}
-
-async function canUseBlockedWeekdayPreferences(user) {
+// Every employee may enter weekdays they do not want to work. Whether the
+// generator honours them is a single admin switch (app_settings).
+async function isBlockedDaysEnabled() {
   const { rows } = await pool.query(
-    "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_weekday_employee_pool' LIMIT 1"
+    "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1"
   );
-  const allowedEmployees = parseEmployeeAccessPool(rows[0]?.value);
-  if (allowedEmployees.length === 0) return false;
-
-  const candidates = [user?.displayName];
-  if (user?.id) {
-    const userResult = await pool.query(
-      'SELECT first_name, last_name, provisioned_employee_name FROM users WHERE id = $1 LIMIT 1',
-      [user.id]
-    );
-    const localUser = userResult.rows[0];
-    if (localUser) {
-      candidates.push(
-        localUser.provisioned_employee_name,
-        [localUser.first_name, localUser.last_name].filter(Boolean).join(' '),
-        [localUser.last_name, localUser.first_name].filter(Boolean).join(', '),
-      );
-    }
-  }
-
-  const allowed = new Set(allowedEmployees.map(comparableEmployeeName).filter(Boolean));
-  return candidates.some((candidate) => allowed.has(comparableEmployeeName(candidate)));
+  return String(rows[0]?.value ?? 'false') === 'true';
 }
 
 /* ------------------------------------------------ */
@@ -247,6 +210,7 @@ router.get('/short-night-options', async (_req, res) => {
         start_day_offset: Number(definition?.start_day_offset ?? 0),
         end_day_offset: Number(definition?.end_day_offset ?? 1),
         duration_hours: Number(definition?.duration_hours ?? 9),
+        series_days: normalizeShortNightSeriesDays(definition?.series_days, 3),
       },
     });
   } catch (err) {
@@ -260,6 +224,7 @@ router.put('/short-night-options', requirePageAccess('shiftplan_control', 'write
     const start_time = String(req.body?.start_time || '21:45').slice(0, 5);
     const end_time = String(req.body?.end_time || '06:45').slice(0, 5);
     const free_days_after = Math.max(0, Math.min(14, Number.parseInt(String(req.body?.free_days_after), 10) || 0));
+    const series_days = normalizeShortNightSeriesDays(req.body?.series_days, 3);
     const requestedMode = String(req.body?.mode || '').trim().toUpperCase();
     const mode = ['SEVEN_DAY_ONLY', 'SHORT_ONLY', 'MIXED'].includes(requestedMode)
       ? requestedMode
@@ -279,15 +244,15 @@ router.put('/short-night-options', requirePageAccess('shiftplan_control', 'write
     );
     const { rows } = await client.query(
       `INSERT INTO shift_definitions (code, name, short_name, shift_type, start_time, end_time, start_day_offset, end_day_offset, duration_hours, series_days, min_staff, max_staff, color_hex, is_active, sort_order, applicable_days)
-       VALUES ('NK', 'Kurze Nachtschicht', 'NK', 'night', $1, $2, 0, 1, $3, 3, 1, 3, '#2563eb', $4, 999, '[0,1,2,3,4,5,6]'::jsonb)
-       ON CONFLICT (code) DO UPDATE SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, start_day_offset = 0, end_day_offset = 1, duration_hours = EXCLUDED.duration_hours, series_days = 3, color_hex = EXCLUDED.color_hex, is_active = EXCLUDED.is_active
+       VALUES ('NK', 'Kurze Nachtschicht', 'NK', 'night', $1, $2, 0, 1, $3, $5::smallint, 1, 3, '#2563eb', $4, 999, '[0,1,2,3,4,5,6]'::jsonb)
+       ON CONFLICT (code) DO UPDATE SET start_time = EXCLUDED.start_time, end_time = EXCLUDED.end_time, start_day_offset = 0, end_day_offset = 1, duration_hours = EXCLUDED.duration_hours, series_days = EXCLUDED.series_days, color_hex = EXCLUDED.color_hex, is_active = EXCLUDED.is_active
        RETURNING *`,
-      [start_time, end_time, duration_hours, enabled]
+      [start_time, end_time, duration_hours, enabled, series_days]
     );
     await client.query('COMMIT');
-    res.json({ ok: true, options: { mode, enabled, free_days_after, start_time, end_time, start_day_offset: 0, end_day_offset: 1, duration_hours }, definition: rows[0] });
+    res.json({ ok: true, options: { mode, enabled, free_days_after, start_time, end_time, start_day_offset: 0, end_day_offset: 1, duration_hours, series_days }, definition: rows[0] });
   } catch (err) {
-    if (client) await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ ok: false, error: err.message });
   } finally {
     client?.release();
@@ -306,6 +271,12 @@ router.put('/definitions/:id', requirePageAccess('shiftplan_control', 'write'), 
     const normalizedStartDayOffset = Number.isInteger(Number(start_day_offset)) ? Number(start_day_offset) : 0;
     const normalizedEndDayOffset = Number.isInteger(Number(end_day_offset)) ? Number(end_day_offset) : 0;
     const normalizedSeriesDays = Math.max(Number.parseInt(String(series_days ?? 1), 10) || 1, 1);
+    // modes / free_days_after are only written when the client sent them (older clients keep stored values).
+    const modesJson = Array.isArray(req.body?.modes)
+      ? JSON.stringify(sanitizeShiftModes(req.body.modes, { start_time, end_time, duration_hours }))
+      : null;
+    const hasFreeDaysAfter = Object.prototype.hasOwnProperty.call(req.body || {}, 'free_days_after');
+    const normalizedFreeDaysAfter = normalizeFreeDaysAfter(req.body?.free_days_after);
     const { rows } = await pool.query(
       `UPDATE shift_definitions
        SET name=$2,
@@ -323,10 +294,12 @@ router.put('/definitions/:id', requirePageAccess('shiftplan_control', 'write'), 
            is_active=$14,
            sort_order=$15,
            applicable_days=$16::jsonb,
+           modes=COALESCE($17::jsonb, modes),
+           free_days_after=CASE WHEN $18::boolean THEN $19::smallint ELSE free_days_after END,
            updated_at=NOW()
        WHERE id=$1
        RETURNING *`,
-      [id, name, short_name, shift_type, start_time, end_time, normalizedStartDayOffset, normalizedEndDayOffset, duration_hours, normalizedSeriesDays, min_staff, max_staff, color_hex, is_active, sort_order, JSON.stringify(normalizedApplicableDays)]
+      [id, name, short_name, shift_type, start_time, end_time, normalizedStartDayOffset, normalizedEndDayOffset, duration_hours, normalizedSeriesDays, min_staff, max_staff, color_hex, is_active, sort_order, JSON.stringify(normalizedApplicableDays), modesJson, hasFreeDaysAfter, normalizedFreeDaysAfter]
     );
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Definition nicht gefunden' });
     res.json({ ok: true, definition: rows[0] });
@@ -341,6 +314,9 @@ router.post('/definitions', requirePageAccess('shiftplan_control', 'write'), asy
     const start_time = normalizeClockTime(req.body?.start_time);
     const end_time = normalizeClockTime(req.body?.end_time);
     if (!code || !name) return res.status(400).json({ ok: false, error: 'Code und Name erforderlich' });
+    if (typeof code !== 'string' || !/^[A-Z0-9_]{1,10}$/.test(code)) {
+      return res.status(400).json({ ok: false, error: 'Code darf nur A-Z, 0-9 und _ enthalten (1-10 Zeichen)' });
+    }
     const validationError = validateShiftDefinitionInput({ shift_type, start_time, end_time, duration_hours, min_staff, max_staff, applicable_days });
     if (validationError) return res.status(400).json({ ok: false, error: validationError });
     const normalizedApplicableDays = Array.isArray(applicable_days) ? applicable_days : [0, 1, 2, 3, 4, 5, 6];
@@ -351,10 +327,10 @@ router.post('/definitions', requirePageAccess('shiftplan_control', 'write'), asy
       `INSERT INTO shift_definitions (
          code, name, short_name, shift_type, start_time, end_time,
          start_day_offset, end_day_offset, duration_hours, series_days, min_staff,
-         max_staff, color_hex, sort_order, applicable_days
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb)
+         max_staff, color_hex, sort_order, applicable_days, modes, free_days_after
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16::jsonb,$17::smallint)
        RETURNING *`,
-      [code, name, short_name || code, shift_type || 'early', start_time, end_time, normalizedStartDayOffset, normalizedEndDayOffset, duration_hours || 8, normalizedSeriesDays, min_staff || 1, max_staff || 5, color_hex || '#3b82f6', sort_order || 0, JSON.stringify(normalizedApplicableDays)]
+      [code, name, short_name || code, shift_type || 'early', start_time, end_time, normalizedStartDayOffset, normalizedEndDayOffset, duration_hours || 8, normalizedSeriesDays, min_staff || 1, max_staff || 5, color_hex || '#3b82f6', sort_order || 0, JSON.stringify(normalizedApplicableDays), JSON.stringify(sanitizeShiftModes(req.body?.modes, { start_time, end_time, duration_hours: duration_hours || 8 })), normalizeFreeDaysAfter(req.body?.free_days_after)]
     );
     res.json({ ok: true, definition: rows[0] });
   } catch (err) {
@@ -510,7 +486,13 @@ router.get('/special-pools/:shiftCode', async (req, res) => {
 });
 
 router.put('/special-pools/:shiftCode', requirePageAccess('shiftplan_control', 'write'), async (req, res) => {
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch (err) {
+    console.error('SPECIAL POOLS DB CONNECT ERROR:', err);
+    return res.status(503).json({ ok: false, error: 'Datenbank momentan nicht erreichbar' });
+  }
   try {
     const shiftCode = String(req.params.shiftCode || '').trim().toUpperCase();
     const assignments = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
@@ -519,7 +501,7 @@ router.put('/special-pools/:shiftCode', requirePageAccess('shiftplan_control', '
 
     const defRes = await client.query('SELECT code FROM shift_definitions WHERE code = $1', [shiftCode]);
     if (!defRes.rows.length) {
-      await client.query('ROLLBACK');
+      await client.query('ROLLBACK').catch(() => {});
       return res.status(404).json({ ok: false, error: 'Schichtdefinition nicht gefunden' });
     }
 
@@ -551,7 +533,7 @@ router.put('/special-pools/:shiftCode', requirePageAccess('shiftplan_control', '
     await client.query('COMMIT');
     res.json({ ok: true, assignments: rows });
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ ok: false, error: err.message });
   } finally {
     client.release();
@@ -581,7 +563,7 @@ router.put('/admin-flags', requireRootAdmin, async (req, res) => {
     if (!employeeName) return res.status(400).json({ ok: false, error: 'Mitarbeitername erforderlich' });
     const note = String(req.body?.note || '').trim() || null;
     const isActive = req.body?.is_active !== false;
-    const actor = req.user?.displayName || req.user?.email || req.user?.username || 'admin';
+    const actor = req.user?.displayName || req.user?.email || req.user?.loginName || 'system';
     const { rows } = await pool.query(
       `INSERT INTO employee_admin_flags (employee_name, note, is_active, created_by, created_at, updated_at)
        VALUES ($1, $2, $3, $4, NOW(), NOW())
@@ -630,9 +612,13 @@ router.put('/rotation-rules', requirePageAccess('shiftplan_control', 'write'), a
     if (Number(max_consecutive_same) < 1 || Number(max_consecutive_workdays) < 1) {
       return res.status(400).json({ ok: false, error: 'Die Grenzen für aufeinanderfolgende Schichten und Arbeitstage müssen mindestens 1 sein' });
     }
+    // 0 is a valid value (no free days) and must not fall through to the fallbacks.
+    const shortNightFreeDaysRaw = [Number.parseInt(short_night_free_days_after, 10), Number.parseInt(free_days_after_night, 10)]
+      .find((value) => Number.isFinite(value));
+    const shortNightFreeDaysAfter = Math.max(0, Math.min(14, shortNightFreeDaysRaw ?? 2));
     const { rows } = await pool.query(
       `UPDATE shift_rotation_rules SET max_consecutive_same=$1, max_consecutive_workdays=$2, min_free_after_streak=$3, night_to_early_forbidden=$4, late_to_early_forbidden=$5, min_hours_between_shifts=$6, max_nights_per_month=$7, max_weekends_per_month=$8, weekend_rule=$9, free_days_after_night=$10, free_days_after_weekend=$11, stability_priority=$12, max_shift_type_changes_per_month=$13, min_free_weekends_per_month=$14, min_recovery_days_after_shift_change=$15, night_next_workday=$16, night_next_shift_code=$17, late_before_night_required=$18, short_night_mode_enabled=$19, short_night_free_days_after=$20, updated_at=NOW() WHERE id=1 RETURNING *`,
-      [max_consecutive_same, max_consecutive_workdays, min_free_after_streak, night_to_early_forbidden, late_to_early_forbidden, min_hours_between_shifts, max_nights_per_month, max_weekends_per_month, weekend_rule, free_days_after_night, free_days_after_weekend, stability_priority, max_shift_type_changes_per_month, min_free_weekends_per_month, min_recovery_days_after_shift_change, Math.max(0, Math.min(6, Number.parseInt(night_next_workday, 10) || 0)), night_next_shift_code || null, Boolean(late_before_night_required), Boolean(short_night_mode_enabled), Math.max(0, Math.min(14, Number.parseInt(short_night_free_days_after, 10) || Number.parseInt(free_days_after_night, 10) || 2))]
+      [max_consecutive_same, max_consecutive_workdays, min_free_after_streak, night_to_early_forbidden, late_to_early_forbidden, min_hours_between_shifts, max_nights_per_month, max_weekends_per_month, weekend_rule, free_days_after_night, free_days_after_weekend, stability_priority, max_shift_type_changes_per_month, min_free_weekends_per_month, min_recovery_days_after_shift_change, Math.max(0, Math.min(6, Number.parseInt(night_next_workday, 10) || 0)), night_next_shift_code || null, Boolean(late_before_night_required), Boolean(short_night_mode_enabled), shortNightFreeDaysAfter]
     );
     res.json({ ok: true, rules: rows[0] });
   } catch (err) {
@@ -696,7 +682,7 @@ router.put('/planning-config', requirePageAccess('shiftplan_control', 'write'), 
 /* SHIFTPLAN EXCLUSIONS (separate from tickets)     */
 /* ------------------------------------------------ */
 
-router.get('/exclusions', async (_req, res) => {
+router.get('/exclusions', requirePageAccess('shiftplan_control', 'view'), async (_req, res) => {
   try {
     const { rows } = await pool.query(
       'SELECT * FROM shiftplan_exclusions WHERE is_active = TRUE ORDER BY created_at DESC'
@@ -719,7 +705,7 @@ router.post('/exclusions', requirePageAccess('shiftplan_control', 'write'), asyn
   try {
     const { employee_name, reason, reason_text, fixed_shift_type } = req.body;
     if (!employee_name) return res.status(400).json({ ok: false, error: 'Mitarbeitername erforderlich' });
-    const actor = req.user?.email || req.user?.username || 'system';
+    const actor = req.user?.displayName || req.user?.email || req.user?.loginName || 'system';
     const normalizedFixedShiftType = normalizeFixedShiftType(fixed_shift_type);
     const { rows } = await pool.query(
       `INSERT INTO shiftplan_exclusions (employee_name, reason, reason_text, fixed_shift_type, weekdays, created_by)
@@ -792,16 +778,16 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const [preferenceResult, canSelectBlockedDays] = await Promise.all([
+    const [preferenceResult, blockedDaysEnabled] = await Promise.all([
       pool.query('SELECT * FROM employee_preferences WHERE user_id=$1', [userId]),
-      canUseBlockedWeekdayPreferences(req.user),
+      isBlockedDaysEnabled(),
     ]);
     const preference = preferenceResult.rows[0] || null;
     const [colleagueOptionsResult, colleagueSettingResult] = await Promise.all([
       pool.query(
         `SELECT id, first_name, last_name
            FROM users
-          WHERE approved = TRUE AND id <> $1
+          WHERE approved = TRUE AND is_root = FALSE AND id <> $1
             AND (COALESCE(first_name, '') <> '' OR COALESCE(last_name, '') <> '')
           ORDER BY last_name, first_name`,
         [userId]
@@ -810,13 +796,14 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     ]);
     res.json({
       ok: true,
-      canSelectBlockedDays,
+      canSelectBlockedDays: true,
+      blockedDaysEnabled,
       preferredColleaguesEnabled: String(colleagueSettingResult.rows[0]?.value ?? 'false') === 'true',
       colleagueOptions: colleagueOptionsResult.rows.map((row) => ({
         id: row.id,
         name: [row.last_name, row.first_name].filter(Boolean).join(', '),
       })),
-      preferences: preference && !canSelectBlockedDays ? { ...preference, blocked_days: [] } : preference,
+      preferences: preference,
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
@@ -839,7 +826,6 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
     const { preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, max_weekends_per_month, blocked_days, night_model } = req.body;
-    const canSelectBlockedDays = await canUseBlockedWeekdayPreferences(req.user);
     // Half shifts are operational planning details, not employee-selectable preferences.
     // Filter them server-side as well so stale browser bundles cannot reintroduce them.
     const employeePreferenceExcludedShiftCodes = new Set(['HE1', 'HE2', 'HL1', 'HL2']);
@@ -859,7 +845,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     if (!['SEVEN_DAY', 'SHORT'].includes(normalizedNightModel)) {
       return res.status(400).json({ ok: false, error: 'Ungültiges Nachtschicht-Modell' });
     }
-    const sanitizedBlockedDays = canSelectBlockedDays && Array.isArray(blocked_days)
+    const sanitizedBlockedDays = Array.isArray(blocked_days)
       ? [...new Set(blocked_days.map((day) => Number.parseInt(String(day), 10)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))]
       : [];
     const monthly_preferences = req.body.monthly_preferences && typeof req.body.monthly_preferences === 'object' && !Array.isArray(req.body.monthly_preferences)
@@ -876,7 +862,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
       return res.status(400).json({ ok: false, error: 'Es können maximal vier Wunschkollegen ausgewählt werden.' });
     }
     const existingColleagues = requestedColleagueIds.length
-      ? await pool.query('SELECT id FROM users WHERE id = ANY($1::int[])', [requestedColleagueIds])
+      ? await pool.query('SELECT id FROM users WHERE id = ANY($1::int[]) AND is_root = FALSE', [requestedColleagueIds])
       : { rows: [] };
     const existingColleagueIds = new Set(existingColleagues.rows.map((row) => row.id));
     const preferredColleagues = requestedColleagueIds.filter((id) => existingColleagueIds.has(id));
@@ -920,6 +906,128 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     res.json({ ok: true, preferences: rows[0] });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* ------------------------------------------------ */
+/* VACATION WISHES (self-service)                   */
+/* Entries are 'VACATION' absences: the generator   */
+/* never schedules the employee in that period and  */
+/* the plan shows them as absent (ABW).             */
+/* Employees may change only entries they created   */
+/* themselves (source = 'self').                    */
+/* ------------------------------------------------ */
+
+const VACATION_COLUMNS = "id, employee_name, employee_id, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date, type, note, COALESCE(source = 'self', FALSE) AS editable";
+const MAX_VACATION_SPAN_DAYS = 366;
+
+async function loadVacationEmployee(userId) {
+  const { rows } = await pool.query(
+    `SELECT id, COALESCE(NULLIF(trim(provisioned_employee_name), ''), NULLIF(trim(concat_ws(' ', first_name, last_name)), ''), username) AS employee_name
+       FROM users WHERE id = $1`,
+    [userId]
+  );
+  return rows[0] || null;
+}
+
+function validateVacationInput(body = {}) {
+  const { start_date, end_date } = body;
+  const note = body.note == null ? '' : body.note;
+  if (!isDateKey(start_date) || !isDateKey(end_date) || end_date < start_date
+    || start_date < '1900-01-01' || end_date > '9998-12-31'
+    || typeof note !== 'string' || note.length > 2000) {
+    return { error: 'Ungültiger Zeitraum oder Notiz' };
+  }
+  const spanDays = (Date.parse(`${end_date}T00:00:00Z`) - Date.parse(`${start_date}T00:00:00Z`)) / 86_400_000;
+  if (spanDays > MAX_VACATION_SPAN_DAYS) return { error: 'Der Zeitraum darf höchstens ein Jahr umfassen' };
+  return { start_date, end_date, note: note.trim() };
+}
+
+router.get('/vacation-wishes', requireVerifiedIdentity, async (req, res) => {
+  try {
+    const year = Number(req.query.year ?? new Date().getFullYear());
+    if (!Number.isInteger(year) || year < 1900 || year > 9998) return res.status(400).json({ ok: false, error: 'Ungültiges Jahr' });
+    const employee = await loadVacationEmployee(req.user?.id);
+    if (!employee) return res.status(404).json({ ok: false, error: 'Benutzer nicht gefunden' });
+    const { rows } = await pool.query(
+      `SELECT ${VACATION_COLUMNS} FROM absences WHERE type = 'VACATION'
+         AND (employee_id = $1 OR (employee_id IS NULL AND employee_name = $2))
+         AND start_date <= $4 AND end_date >= $3 ORDER BY start_date, id`,
+      [employee.id, employee.employee_name, `${year}-01-01`, `${year}-12-31`]
+    );
+    res.json({ ok: true, entries: rows, ...vacationSummary(rows, year) });
+  } catch (err) {
+    console.error('VACATION WISHES LOAD ERROR:', err);
+    res.status(500).json({ ok: false, error: 'Urlaubswünsche konnten nicht geladen werden' });
+  }
+});
+
+router.post('/vacation-wishes', requireVerifiedIdentity, async (req, res) => {
+  const input = validateVacationInput(req.body);
+  if (input.error) return res.status(400).json({ ok: false, error: input.error });
+  try {
+    const employee = await loadVacationEmployee(req.user?.id);
+    if (!employee) return res.status(404).json({ ok: false, error: 'Benutzer nicht gefunden' });
+    const { rows } = await pool.query(
+      `INSERT INTO absences (employee_name, employee_id, start_date, end_date, type, note, source)
+       VALUES ($1, $2, $3, $4, 'VACATION', $5, 'self') RETURNING ${VACATION_COLUMNS}`,
+      [employee.employee_name, employee.id, input.start_date, input.end_date, input.note]
+    );
+    await recomputeConflictsInternal(employee.employee_name, input.start_date, input.end_date);
+    res.status(201).json({ ok: true, entry: rows[0] });
+  } catch (err) {
+    console.error('VACATION WISH CREATE ERROR:', err);
+    res.status(500).json({ ok: false, error: 'Urlaubswunsch konnte nicht gespeichert werden' });
+  }
+});
+
+router.put('/vacation-wishes/:id', requireVerifiedIdentity, async (req, res) => {
+  const absenceId = Number(req.params.id);
+  if (!Number.isInteger(absenceId) || absenceId <= 0) return res.status(400).json({ ok: false, error: 'Ungültige ID' });
+  const input = validateVacationInput(req.body);
+  if (input.error) return res.status(400).json({ ok: false, error: input.error });
+  try {
+    const employee = await loadVacationEmployee(req.user?.id);
+    if (!employee) return res.status(404).json({ ok: false, error: 'Benutzer nicht gefunden' });
+    const existing = await pool.query(
+      `SELECT to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date
+         FROM absences WHERE id = $1 AND type = 'VACATION' AND source = 'self'
+          AND (employee_id = $2 OR (employee_id IS NULL AND employee_name = $3))`,
+      [absenceId, employee.id, employee.employee_name]
+    );
+    if (!existing.rows[0]) return res.status(404).json({ ok: false, error: 'Urlaubswunsch nicht gefunden' });
+    const { rows } = await pool.query(
+      `UPDATE absences SET start_date = $2, end_date = $3, note = $4 WHERE id = $1 RETURNING ${VACATION_COLUMNS}`,
+      [absenceId, input.start_date, input.end_date, input.note]
+    );
+    // Recompute both the old and the new period so no stale conflict remains.
+    await recomputeConflictsInternal(employee.employee_name, existing.rows[0].start_date, existing.rows[0].end_date);
+    await recomputeConflictsInternal(employee.employee_name, input.start_date, input.end_date);
+    res.json({ ok: true, entry: rows[0] });
+  } catch (err) {
+    console.error('VACATION WISH UPDATE ERROR:', err);
+    res.status(500).json({ ok: false, error: 'Urlaubswunsch konnte nicht geändert werden' });
+  }
+});
+
+router.delete('/vacation-wishes/:id', requireVerifiedIdentity, async (req, res) => {
+  const absenceId = Number(req.params.id);
+  if (!Number.isInteger(absenceId) || absenceId <= 0) return res.status(400).json({ ok: false, error: 'Ungültige ID' });
+  try {
+    const employee = await loadVacationEmployee(req.user?.id);
+    if (!employee) return res.status(404).json({ ok: false, error: 'Benutzer nicht gefunden' });
+    const { rows } = await pool.query(
+      `DELETE FROM absences WHERE id = $1 AND type = 'VACATION' AND source = 'self'
+          AND (employee_id = $2 OR (employee_id IS NULL AND employee_name = $3))
+        RETURNING employee_name, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date`,
+      [absenceId, employee.id, employee.employee_name]
+    );
+    if (!rows[0]) return res.status(404).json({ ok: false, error: 'Urlaubswunsch nicht gefunden' });
+    await recomputeConflictsInternal(rows[0].employee_name, rows[0].start_date, rows[0].end_date);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('VACATION WISH DELETE ERROR:', err);
+    res.status(500).json({ ok: false, error: 'Urlaubswunsch konnte nicht gelöscht werden' });
   }
 });
 

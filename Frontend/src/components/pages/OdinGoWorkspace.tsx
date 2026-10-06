@@ -583,8 +583,13 @@ export default function OdinGoWorkspace() {
           {theme === "light" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </button>
         <button type="button" onClick={() => void refreshHeader()} className="rounded-md border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title="Headerdaten aktualisieren"><RefreshCw className={`h-4 w-4 ${headerRefreshing ? "animate-spin" : ""}`} /></button>
-        <button type="button" onClick={toggleExpanded} className="rounded-md border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title={expanded ? "Fenster verkleinern" : "Fenster vergrößern"}>{expanded ? <Minimize2 className="h-4 w-4" /> : <Expand className="h-4 w-4" />}</button>
-        <button type="button" onClick={() => sendBridgeMessage("ODIN_GO_CLOSE")} className="rounded-md border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title="ODIN GO schließen"><X className="h-4 w-4" /></button>
+        {/* Window controls only make sense inside the Jarvis extension overlay. */}
+        {!isWebSession && (
+          <>
+            <button type="button" onClick={toggleExpanded} className="rounded-md border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title={expanded ? "Fenster verkleinern" : "Fenster vergrößern"}>{expanded ? <Minimize2 className="h-4 w-4" /> : <Expand className="h-4 w-4" />}</button>
+            <button type="button" onClick={() => sendBridgeMessage("ODIN_GO_CLOSE")} className="rounded-md border border-slate-600 bg-slate-800 p-2 text-slate-300 hover:bg-slate-700" title="ODIN GO schließen"><X className="h-4 w-4" /></button>
+          </>
+        )}
       </header>
 
       <nav className="shrink-0 border-b border-slate-700 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950" aria-label="ODIN GO Anwendungen">

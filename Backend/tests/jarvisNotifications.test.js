@@ -26,16 +26,13 @@ function startApp() {
 }
 
 function authHeaders() {
-  if (config.isShiftplannerMode) {
-    return {
-      "x-shiftplanner-key": config.SHIFTPLANNER_API_KEY,
-      "x-shiftplanner-identity": jwt.sign(
-        { scope: "shiftplanner_identity", userId: 7, displayName: "Test User" },
-        config.JWT_SECRET,
-      ),
-    };
-  }
-  return { Authorization: `Bearer ${jwt.sign({ userId: 7 }, config.JWT_SECRET)}` };
+  return {
+    "x-shiftplanner-key": config.SHIFTPLANNER_API_KEY,
+    "x-shiftplanner-identity": jwt.sign(
+      { scope: "shiftplanner_identity", userId: 7, displayName: "Test User" },
+      config.JWT_SECRET,
+    ),
+  };
 }
 
 function createMockQuery({ enabled = true, activeNotifications = [] } = {}) {

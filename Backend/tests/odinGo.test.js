@@ -176,8 +176,12 @@ describe("ODIN GO operational schedule", () => {
 
   it("classifies shift variants and ignores absence codes", () => {
     assert.equal(classifyShiftCode("E1WE"), "early");
+    assert.equal(classifyShiftCode("E2SA"), "early");
+    assert.equal(classifyShiftCode("E2WE"), "early");
     assert.equal(classifyShiftCode("HL2"), "late");
     assert.equal(classifyShiftCode("N"), "night");
+    assert.equal(classifyShiftCode("NK"), "night");
+    assert.equal(classifyShiftCode("nk"), "night");
     assert.equal(classifyShiftCode("ABW"), null);
   });
 

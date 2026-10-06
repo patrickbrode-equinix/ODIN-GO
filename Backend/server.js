@@ -19,42 +19,25 @@ import { seedDefaultAdmin } from "./db/seed.js";
 import { provisionUsersFromShiftplan } from "./services/shiftUserProvisioning.service.js";
 
 // Routes
-import queueSnapshotRoute from "./routes/queue/snapshot.route.js";
-import queueRoutes from "./routes/queue.js";
 import healthRoutes from "./routes/health.js";
 import metricsRoutes from "./routes/metrics.js";
 import marketRoutes from "./routes/market.js";
-import kioskRoutes from "./routes/kiosk.js";
-import dashboardRoutes from "./routes/dashboard.js";
 import userSettingsRoutes from "./routes/userSettings.js";
-import authRoutes from "./routes/auth/index.js";
 import activityRoutes from "./routes/activity.js";
 import schedulesRoutes from "./routes/schedules.js";
 import statusRoutes from "./routes/status.js";
-import commitRoutes from "./routes/commit.js";
-import ingestRoutes from "./routes/ingest.js";
 import adminUsersRoutes from "./routes/adminUsers.js";
-import adminGroupsRoutes from "./routes/adminGroups.js";
-import handoverRoutes from "./routes/handover.js";
-import commitComplianceRoutes from "./routes/commitCompliance.js";
 import statsRoutes from "./routes/stats.js";
 import holidaysRoutes from "./routes/holidays.js";
 import competenciesRoutes from "./routes/competencies.js";
 import projectsRoutes from "./routes/projects.js";
 import appSettingsRoutes from "./routes/appSettings.js";
 import sseRoutes from "./routes/sse.js";
-import teamsRoutes from "./routes/teams.js";
-import tvRoutes from "./routes/tv.js";
-import eventsRoutes from "./routes/events.js";
-import assignmentRoutes from "./routes/assignment.js";
-import engineRoutes from "./routes/engine.js";
 import feedbackRoutes from "./routes/feedback.js";
 import shiftplanControlRoutes from "./routes/shiftplanControl.js";
 import shiftConfigRoutes from "./routes/shiftConfig.js";
-import verificationRoutes from "./routes/verification.js";
 import standaloneAdminRoutes, { resetStandaloneAdminPasswordIfRequested } from "./routes/standaloneAdmin.js";
 import standaloneIdentityRoutes from "./routes/standaloneIdentity.js";
-import cocRoutes from "./routes/coc.js";
 import jarvisNotificationsRoutes from "./routes/jarvisNotifications.js";
 import odinGoRoutes from "./routes/odinGo.js";
 import shiftHandoverRoutes from "./routes/shiftHandovers.js";
@@ -110,52 +93,40 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "50mb" }));
 
-if (config.isShiftplannerMode) {
-  app.use("/api/standalone-admin", standaloneAdminRoutes);
-  app.use("/api/standalone-identity", standaloneIdentityRoutes);
-}
+app.use("/api/standalone-admin", standaloneAdminRoutes);
+app.use("/api/standalone-identity", standaloneIdentityRoutes);
 
 /* ------------------------------------------------ */
 /* STATIC FILES                                     */
 /* Serve /uploads/* directly (images etc.)          */
 /* ------------------------------------------------ */
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+// Uploaded files are user content: never let a browser sniff or execute them
+// (e.g. an .html/.svg stored under a spoofed image Content-Type).
+const SAFE_INLINE_UPLOAD_TYPES = /^\.(png|jpe?g|gif|webp|pdf)$/i;
+app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
+  setHeaders(res, filePath) {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
+    if (!SAFE_INLINE_UPLOAD_TYPES.test(path.extname(filePath))) {
+      res.setHeader("Content-Disposition", "attachment");
+    }
+  },
+}));
 
 /* ------------------------------------------------ */
 /* ROUTES                                           */
 /* ------------------------------------------------ */
-
-// 0. TV Public endpoints (kiosk-safe, no auth)
-app.use("/api/tv", tvRoutes);
 
 // 1. Health + Metrics (proper route files with error handling)
 app.use("/api/health", healthRoutes);
 app.use("/api/metrics", metricsRoutes);
 app.use("/api/market", marketRoutes);
 
-// 2. Auth
-if (!config.isShiftplannerMode) {
-  app.use("/api/auth", authRoutes);
-}
-
-// 3. Queue Snapshot Ingest (public, via ingest key – crawler target)
-if (!config.isShiftplannerMode) {
-  app.use("/api/queue", queueSnapshotRoute);
-}
-// 4. Queue GET endpoints (tickets, groups, debug)
-if (!config.isShiftplannerMode) {
-  app.use("/api/queue", queueRoutes);
-}
-
-// 5. Kiosk messages
-app.use("/api/kiosk", kioskRoutes);
+// 2. Jarvis / ODIN GO
 app.use("/api/jarvis-notifications", jarvisNotificationsRoutes);
 app.use("/api/odin-go", odinGoRoutes);
 app.use("/api/shift-handovers", shiftHandoverRoutes);
 app.use("/api/team-handovers", teamHandoverRoutes);
-
-// 6. Dashboard info + toggles
-app.use("/api/dashboard", dashboardRoutes);
 
 // 7. User settings + meta
 app.use("/api", userSettingsRoutes);
@@ -169,36 +140,11 @@ app.use("/api/schedules", schedulesRoutes);
 // 10. Status
 app.use("/api/status", statusRoutes);
 
-// 11. Commits
-if (!config.isShiftplannerMode) {
-  app.use("/api/commit", commitRoutes);
-}
-
-// 12. Ingest (Excel)
-app.use("/api/ingest", ingestRoutes);
-
 // 13. Admin
 app.use("/api/admin/users", adminUsersRoutes);
-app.use("/api/admin/groups", adminGroupsRoutes);
 
-// 14. Handover
-if (!config.isShiftplannerMode) {
-  app.use("/api/handover", handoverRoutes);
-}
-
-// 16. Commit Compliance (PDF upload)
-if (!config.isShiftplannerMode) {
-  app.use("/api/commit-compliance", commitComplianceRoutes);
-}
-
-// 17. Statistics
+// 17. Statistics (shift hours)
 app.use("/api/stats", statsRoutes);
-
-// 17a. Ticket Audit (Admin-only statistics)
-import ticketAuditRoutes from "./routes/ticketAudit.js";
-if (!config.isShiftplannerMode) {
-  app.use("/api/stats/audit", ticketAuditRoutes);
-}
 
 // 17b. Holidays (public, for Schichtplan)
 app.use("/api/holidays", holidaysRoutes);
@@ -234,77 +180,31 @@ app.use("/api/competencies", competenciesRoutes);
 app.use("/api/projects", projectsRoutes);
 app.use("/api/app-settings", appSettingsRoutes);
 app.use("/api/sse", sseRoutes);
-app.use("/api/teams", teamsRoutes);
-
-// Events (photos for TV slide, auth-protected upload)
-app.use("/api/events", eventsRoutes);
 
 // Attendance tracking (Kommen/Gehen)
 import attendanceRoutes from "./routes/attendance.js";
 app.use("/api/attendance", attendanceRoutes);
 
-// Assignment Engine (ODIN-Logik, Phase 1 Shadow Mode)
-if (!config.isShiftplannerMode) {
-  app.use("/api/assignment", assignmentRoutes);
-}
-
-// Assignment Actions / Writeback (safe, auditable Jarvis writeback layer)
-import assignmentActionsRoutes from "./routes/assignmentActions.js";
-if (!config.isShiftplannerMode) {
-  app.use("/api/assignment-actions", assignmentActionsRoutes);
-}
-
-// Legacy engine endpoints kept for backwards compatibility
-if (!config.isShiftplannerMode) {
-  app.use("/api/engine", engineRoutes);
-}
-
-// Shift Verification (employee self-check via Teams)
-app.use("/api/verification", verificationRoutes);
-
 // Shiftplan Control Center (Draft generation, activation, Excel)
 app.use("/api/shiftplan-control", shiftplanControlRoutes);
+// Understaffing warnings + replacement candidates (second router on the same prefix;
+// requests unmatched by the router above fall through to it)
+import understaffingSuggestionsRoutes from "./routes/understaffingSuggestions.js";
+app.use("/api/shiftplan-control", understaffingSuggestionsRoutes);
 
 // Shift Configuration (definitions, rotation rules, fairness, exclusions, preferences)
 app.use("/api/shift-config", shiftConfigRoutes);
 
-// CoC - Chain of Command improvement workflow
-app.use("/api/coc", cocRoutes);
-
-// Feedback (email via SMTP)
+// Feedback
 app.use("/api/feedback", feedbackRoutes);
 
 // Weekplan Roles (per-employee per-day role assignments)
 import weekplanRolesRoutes from "./routes/weekplanRoles.js";
 app.use("/api/weekplan-roles", weekplanRolesRoutes);
 
-// Employee Contacts (E-Mail-Pflege für Teams-Bot)
-import employeeContactsRoutes from "./routes/employeeContacts.js";
-app.use("/api/employee-contacts", employeeContactsRoutes);
-
-// TV Slide Config (kiosk + admin)
-import tvConfigRoutes from "./routes/tvConfig.js";
-app.use("/api/tv/config", tvConfigRoutes);
-
-// Teams Communication Center Config
-import teamsConfigRoutes from "./routes/teamsConfig.js";
-app.use("/api/teams-config", teamsConfigRoutes);
-
-// Assignment Rules Config (ODIN Logic Editor)
-import assignmentRulesRoutes from "./routes/assignmentRules.js";
-if (!config.isShiftplannerMode) {
-  app.use("/api/assignment-rules", assignmentRulesRoutes);
-}
-
 // Settings Audit Log
 import settingsAuditRoutes from "./routes/settingsAudit.js";
 app.use("/api/admin/settings-audit", settingsAuditRoutes);
-
-// Fairness & Variety Settings (ODIN)
-import fairnessSettingsRoutes from "./routes/fairnessSettings.js";
-if (!config.isShiftplannerMode) {
-  app.use("/api/admin/fairness-settings", fairnessSettingsRoutes);
-}
 
 // Polls / Umfragen
 import pollsRoutes from "./routes/polls.js";
@@ -357,12 +257,18 @@ async function start() {
   if (!dbOk) {
     console.error("!! [STARTUP] DB Connection Failed after all retries. Server starting in DEGRADED mode.");
   } else {
-    // 2. Run migrations only if DB ok
-    await runMigrations();
-    // 3. Ensure master account exists with recovery-safe credentials.
-    await seedDefaultAdmin();
-    // 3a. Explicitly requested deployment recovery for the embedded admin lock.
-    await resetStandaloneAdminPasswordIfRequested();
+    // 2. Run migrations only if DB ok. A failing migration/seed must not kill
+    //    the process (restart loop); stay up in degraded mode so /api/health
+    //    and the logs remain reachable.
+    try {
+      await runMigrations();
+      // 3. Ensure master account exists with recovery-safe credentials.
+      await seedDefaultAdmin();
+      // 3a. Explicitly requested deployment recovery for the embedded admin lock.
+      await resetStandaloneAdminPasswordIfRequested();
+    } catch (startupError) {
+      console.error("!! [STARTUP] Migration/seed step failed. Continuing in DEGRADED mode:", startupError?.message || startupError);
+    }
     // 4. Ensure shiftplan employees exist as SSO-only identities.
     try {
       const provisioningSummary = await provisionUsersFromShiftplan({ logger: console });
@@ -406,20 +312,6 @@ async function start() {
     console.log(`✅ [SERVER] Listening on http://0.0.0.0:${PORT}`);
     console.log(`   Health: http://localhost:${PORT}/api/health`);
     if (!dbOk) console.warn("   ⚠️  WARNING: Database is NOT connected.");
-
-    // Start verification scheduler (checks every 60s if verifications need sending)
-    import("./services/verificationScheduler.js")
-      .then(({ startVerificationScheduler }) => startVerificationScheduler())
-      .catch((err) => console.warn("[SERVER] Verification scheduler not started:", err?.message));
-
-    if (config.isShiftplannerMode) {
-      console.log("[SERVER] Shiftplanner mode: assignment scheduler disabled.");
-    } else {
-      // Start assignment scheduler (polls assignment.enabled and runs the engine automatically)
-      import("./services/assignmentScheduler.js")
-        .then(({ startAssignmentScheduler }) => startAssignmentScheduler())
-        .catch((err) => console.warn("[SERVER] Assignment scheduler not started:", err?.message));
-    }
   });
 
   // 4. Error Handling (EADDRINUSE)
@@ -446,5 +338,17 @@ async function start() {
   process.on("SIGTERM", shutdown);
 }
 
+// A single stray rejection (e.g. a failed outbound call) must not take the whole
+// service down. Log it and keep serving.
+process.on("unhandledRejection", (reason) => {
+  console.error("!! [PROCESS] Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("!! [PROCESS] Uncaught exception:", err);
+});
+
 // Start the server
-start();
+start().catch((err) => {
+  console.error("!! [STARTUP] Fatal startup error:", err);
+  process.exit(1);
+});

@@ -1,4 +1,4 @@
-﻿/* ─────────────────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────── */
 /*  TAGESPLANUNG – Premium WOW daily shift command view  v2                    */
 /* ─────────────────────────────────────────────────────────────────────────── */
 
@@ -15,12 +15,9 @@ import { useAuth } from "../../context/AuthContext";
 import { LANGUAGE_TO_LOCALE, useLanguage } from "../../context/LanguageContext";
 import { fetchSchedule } from "../shiftplan/shiftplan.api";
 import { formatMonthLabel } from "../../utils/dateFormat";
-import { getRemainingMs, formatRemainingTime } from "../../utils/ticketColors";
-import { findBestMatch, normalizeName } from "../../utils/fuzzyName";
-import { getRoleDef, useWeekplanRoleStore } from "../../store/weekplanRoleStore";
+import { getRoleDef, getRoleVisualStyle, useWeekplanRoleStore } from "../../store/weekplanRoleStore";
 import { isColoEmployee, parseColoPool } from "../../utils/colo";
 import { api } from "../../api/api";
-import type { EnrichedCommitTicket } from "../commit/commit.types";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 import { ShiftplanUploadStatus } from "../shiftplan/ShiftplanUploadStatus";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
@@ -56,6 +53,8 @@ interface EmployeeRow {
   shiftCode: string;
   cat:       ShiftCat;
   roleKey?:  string;
+  roleComment?: string | null;
+  isNewcomer?: boolean;
   isColo?: boolean;
   isDispatcher?: boolean;
 }
@@ -63,7 +62,7 @@ interface EmployeeRow {
 /* ── Constants ─────────────────────────────────────────────────────────────── */
 
 const SHIFT_CAT: Record<string, ShiftCat> = {
-  E1: "early", E2: "early", E1SA: "early", E1WE: "early",
+  E1: "early", E2: "early", E1SA: "early", E1WE: "early", E2SA: "early", E2WE: "early",
   HE1: "early", HE2: "early",
   L1: "late",  L2: "late",  L1WE: "late",
   HL1: "late", HL2: "late",
@@ -90,8 +89,8 @@ const CAT_META: Record<ShiftCat, CategoryMeta> = {
     label:     "NACHTSCHICHT",
     hex:       "#38bdf8",
     bgGrad:    "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(56,189,248,0.17) 0%, rgba(3,9,24,0.98) 65%)",
-    timeLabel: "21:45 – 06:45",
-    window:    { startMin: 21 * 60 + 45, endMin: 6 * 60 + 45, crossesMidnight: true },
+    timeLabel: "21:15 – 06:45",
+    window:    { startMin: 21 * 60 + 15, endMin: 6 * 60 + 45, crossesMidnight: true },
   },
   dbs: {
     label:     "DBS",
@@ -111,16 +110,18 @@ const CAT_META: Record<ShiftCat, CategoryMeta> = {
 
 const EARLY_SUB_GROUPS: SubGroup[] = [
   { code: "E1",  label: "E1",         time: "06:30 – 15:30", window: { startMin: 6 * 60 + 30, endMin: 15 * 60 + 30 } },
-  { code: "E1SA",label: "E1 SA",      time: "06:00 – 14:00", window: { startMin: 6 * 60,       endMin: 14 * 60 } },
-  { code: "E1WE",label: "E1 WE",      time: "06:00 – 14:00", window: { startMin: 6 * 60,       endMin: 14 * 60 } },
+  { code: "E1SA",label: "E1 SA",      time: "06:30 – 15:30", window: { startMin: 6 * 60 + 30,  endMin: 15 * 60 + 30 } },
+  { code: "E1WE",label: "E1 SA/SO",   time: "06:30 – 15:30", window: { startMin: 6 * 60 + 30,  endMin: 15 * 60 + 30 } },
   { code: "HE1", label: "Halbe Früh", time: "06:30 – 10:30", window: { startMin: 6 * 60 + 30,  endMin: 10 * 60 + 30 } },
   { code: "E2",  label: "E2",         time: "07:00 – 16:00", window: { startMin: 7 * 60,        endMin: 16 * 60 } },
+  { code: "E2SA",label: "E2 SA",      time: "07:00 – 16:00", window: { startMin: 7 * 60,        endMin: 16 * 60 } },
+  { code: "E2WE",label: "E2 SA/SO",   time: "07:00 – 16:00", window: { startMin: 7 * 60,        endMin: 16 * 60 } },
   { code: "HE2", label: "Halbe Früh", time: "07:00 – 11:00", window: { startMin: 7 * 60,        endMin: 11 * 60 } },
 ];
 
 const LATE_SUB_GROUPS: SubGroup[] = [
   { code: "L1",   label: "L1",         time: "13:00 – 22:00", window: { startMin: 13 * 60,       endMin: 22 * 60 } },
-  { code: "L1WE", label: "L1 WE",      time: "13:00 – 21:00", window: { startMin: 13 * 60,       endMin: 21 * 60 } },
+  { code: "L1WE", label: "L1 SA/SO",   time: "13:00 – 22:00", window: { startMin: 13 * 60,       endMin: 22 * 60 } },
   { code: "HL1",  label: "Halbe Spät", time: "13:00 – 17:00", window: { startMin: 13 * 60,       endMin: 17 * 60 } },
   { code: "L2",   label: "L2",         time: "15:00 – 00:00", window: { startMin: 15 * 60,       endMin: 24 * 60 } },
   { code: "HL2",  label: "Halbe Spät", time: "15:00 – 19:00", window: { startMin: 15 * 60,       endMin: 19 * 60 } },
@@ -161,99 +162,6 @@ function resolveNightSourceDate(date: Date): Date {
 
 function toDateKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
-function normalizeOwnerKey(value: string): string {
-  return normalizeName(value).replace(/\s+/g, "").replace(/[0-9]+$/g, "");
-}
-
-function buildEmployeeOwnerKeys(name: string): string[] {
-  const tokens = normalizeName(name).split(" ").filter(Boolean);
-  if (tokens.length === 0) return [];
-
-  const keys = new Set<string>();
-  keys.add(tokens.join(""));
-  keys.add([...tokens].reverse().join(""));
-  if (tokens.length >= 2) {
-    const first = tokens[0];
-    const second = tokens[1];
-    const last = tokens[tokens.length - 1];
-    keys.add(`${first}${last}`);
-    keys.add(`${last}${first}`);
-    keys.add(`${first.charAt(0)}${last}`);
-    keys.add(`${last.charAt(0)}${first}`);
-    if (second) keys.add(`${second.charAt(0)}${first}`);
-  }
-  return [...keys].filter(Boolean);
-}
-
-function readTicketOwnerCandidates(ticket: EnrichedCommitTicket): string[] {
-  return [
-    (ticket as any)?.owner,
-    (ticket as any)?.Owner,
-    (ticket as any)?.current_owner,
-    (ticket as any)?.currentOwner,
-    (ticket as any)?.assigned_to,
-    (ticket as any)?.assignedTo,
-  ]
-    .map((value) => String(value ?? "").trim())
-    .filter(Boolean);
-}
-
-function mapTicketsByEmployee(employees: EmployeeRow[], tickets: EnrichedCommitTicket[]) {
-  const map = new Map<string, EnrichedCommitTicket[]>();
-  const ownerLookup = new Map<string, string>();
-  const ownerAliases: string[] = [];
-  const employeeNames = employees.map((employee) => employee.name);
-
-  for (const employee of employees) {
-    for (const key of buildEmployeeOwnerKeys(employee.name)) {
-      if (!ownerLookup.has(key)) {
-        ownerLookup.set(key, employee.name);
-        ownerAliases.push(key);
-      }
-    }
-    const directKey = normalizeOwnerKey(employee.name);
-    if (directKey && !ownerLookup.has(directKey)) {
-      ownerLookup.set(directKey, employee.name);
-      ownerAliases.push(directKey);
-    }
-    map.set(employee.name, []);
-  }
-
-  for (const ticket of tickets) {
-    const ownerCandidates = readTicketOwnerCandidates(ticket);
-    if (ownerCandidates.length === 0) continue;
-
-    let employeeName: string | null = null;
-    for (const ownerValue of ownerCandidates) {
-      const ownerKey = normalizeOwnerKey(ownerValue);
-      const directMatch = ownerLookup.get(ownerKey);
-      const aliasMatch = directMatch ? null : findBestMatch(ownerKey, ownerAliases, 0.84)?.match;
-      const fuzzyNameMatch = directMatch || aliasMatch ? null : findBestMatch(ownerValue, employeeNames, 0.76)?.match;
-      employeeName = directMatch || (aliasMatch ? ownerLookup.get(aliasMatch) ?? null : null) || fuzzyNameMatch || null;
-      if (employeeName) break;
-    }
-
-    if (!employeeName) continue;
-    const current = map.get(employeeName) ?? [];
-    current.push(ticket);
-    map.set(employeeName, current);
-  }
-
-  for (const [employeeName, matches] of map.entries()) {
-    matches.sort((a, b) => {
-      const ah = getRemainingMs(a as unknown as Record<string, unknown>);
-      const bh = getRemainingMs(b as unknown as Record<string, unknown>);
-      if (ah === null && bh === null) return 0;
-      if (ah === null) return 1;
-      if (bh === null) return -1;
-      return ah - bh;
-    });
-    map.set(employeeName, matches);
-  }
-
-  return map;
 }
 
 function fmtMs(ms: number): string {
@@ -338,69 +246,30 @@ function getBandStateLabel(status: ShiftStatus, isGerman: boolean): string {
   return isGerman ? "BEENDET" : "ENDED";
 }
 
-/* ── TicketChip ─────────────────────────────────────────────────────────────── */
+/* ── RoleBadge ──────────────────────────────────────────────────────────────── */
 
-function TicketChip({ ticket, index }: { ticket: EnrichedCommitTicket; index: number }) {
-  const rem = getRemainingMs(ticket as unknown as Record<string, unknown>);
-  const isScheduled = (ticket.activityStatus ?? "").toLowerCase() === "scheduled";
-  const isOverdue  = rem !== null && rem < 0;
-  const isCritical = rem !== null && rem >= 0 && rem <= 72 * 60 * 60 * 1000;
-
-  const dot = isOverdue ? "#f43f5e" : isCritical ? "#f59e0b" : "#475569";
-  const timeStr = isScheduled ? null : rem !== null ? formatRemainingTime(rem) : null;
-
-  const chipBg = isOverdue ? "rgba(244,63,94,0.07)" : isCritical ? "rgba(245,158,11,0.07)" : "rgba(255,255,255,0.03)";
-  const chipBorder = isOverdue ? "rgba(244,63,94,0.20)" : isCritical ? "rgba(245,158,11,0.18)" : "rgba(255,255,255,0.06)";
-  const activity = String((ticket as any).activity ?? ticket.activityType ?? ticket.activitySubType ?? "—").trim();
-
+function RoleBadge({ roleKey, comment }: { roleKey: string; comment?: string | null }) {
+  const def = getRoleDef(roleKey);
+  const visual = getRoleVisualStyle(roleKey);
+  const label = def?.label ?? roleKey;
+  const text = (comment ?? "").trim();
+  const showText = roleKey === "projekt" && text.length > 0;
+  const full = showText ? `${label}: ${text}` : label;
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 4 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.2, delay: index * 0.04 }}
-      className="relative flex items-center gap-2 overflow-hidden rounded-lg py-1.5 pr-2"
-      style={{ background: chipBg, border: `1px solid ${chipBorder}` }}
+    <span
+      title={full}
+      className="inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em]"
+      style={
+        visual
+          ? { color: visual.accent, background: visual.badge, borderColor: visual.border }
+          : { color: "#cbd5e1", background: "rgba(148,163,184,0.12)", borderColor: "rgba(148,163,184,0.35)" }
+      }
     >
-      {/* left accent line */}
-      <div
-        className="absolute inset-y-0 left-0 w-[2.5px] rounded-l-lg"
-        style={{
-          background: isOverdue
-            ? "linear-gradient(180deg, #f43f5e, #f43f5e80)"
-            : isCritical
-            ? "linear-gradient(180deg, #f59e0b, #f59e0b80)"
-            : "linear-gradient(180deg, rgba(255,255,255,0.15), rgba(255,255,255,0.04))",
-          boxShadow: (isOverdue || isCritical) ? `0 0 6px ${dot}` : "none",
-        }}
-      />
-      <div className="pl-3 flex items-center gap-2 min-w-0 flex-1">
-        <span
-          className="font-mono text-[12px] font-black shrink-0 tracking-wider"
-          style={{ color: (isOverdue || isCritical) ? dot : "#e2e8f0", textShadow: (isOverdue || isCritical) ? `0 0 10px ${dot}70` : "none" }}
-        >
-          {ticket.activityNumber || "—"}
-        </span>
-        <div className="min-w-0 flex flex-1 items-center gap-1.5 text-[10px]">
-          {ticket.systemName && (
-            <span className="shrink-0 font-semibold text-slate-300">{ticket.systemName}</span>
-          )}
-          <span className="truncate font-medium text-slate-500">{activity}</span>
-        </div>
-      </div>
-      {timeStr && (
-        <span
-          className="shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] font-black"
-          style={{
-            color: dot,
-            background: `${dot}14`,
-            textShadow: `0 0 8px ${dot}70`,
-          }}
-        >{timeStr}</span>
-      )}
-      {isScheduled && (
-        <span className="shrink-0 rounded-md px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.18em]" style={{ color: "rgba(100,116,139,0.7)", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.06)" }}>SCHED</span>
-      )}
-    </motion.div>
+      <span className="shrink-0">{label}</span>
+      {showText ? (
+        <span className="min-w-0 max-w-[110px] truncate normal-case tracking-normal font-semibold opacity-90">{text}</span>
+      ) : null}
+    </span>
   );
 }
 
@@ -416,6 +285,8 @@ function EmployeeCard({
   delay:    number;
 }) {
   const { user } = useAuth();
+  const { language } = useLanguage();
+  const isGerman = language === "de";
   const isOwnShift = Boolean(user.displayName) && normName(employee.name) === normName(user.displayName);
   return (
     <motion.div
@@ -464,12 +335,17 @@ function EmployeeCard({
               <div className="mt-1 text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: `${hex}70` }}>
                 {employee.shiftCode}
               </div>
-              {employee.roleKey && getRoleDef(employee.roleKey) && (
-                <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>
-                  Rolle: {getRoleDef(employee.roleKey)?.label}
+              {(employee.roleKey || employee.isNewcomer) && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                  {employee.roleKey ? <RoleBadge roleKey={employee.roleKey} comment={employee.roleComment} /> : null}
+                  {employee.isNewcomer ? (
+                    <span className="inline-flex items-center rounded-md border border-teal-400/45 bg-teal-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-teal-200">
+                      {isGerman ? "Neueinsteiger" : "Newcomer"}
+                    </span>
+                  ) : null}
                 </div>
               )}
-              {isOwnShift && <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>Deine Schicht</div>}
+              {isOwnShift && <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>{isGerman ? "Deine Schicht" : "Your shift"}</div>}
             </div>
           </div>
         </div>
@@ -866,7 +742,9 @@ export default function TagesplanungPage() {
   const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
   const [coloPool, setColoPool] = useState<string[]>([]);
   const [dispatcherConfig, setDispatcherConfig] = useState<{ enabled: boolean; priorities: string[] }>({ enabled: true, priorities: [] });
-  const { fetchRoles, getRole } = useWeekplanRoleStore();
+  const fetchRoles = useWeekplanRoleStore((s) => s.fetchRoles);
+  // Subscribe to the whole store state so role/newcomer updates recompute the lists.
+  const roleStore = useWeekplanRoleStore();
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -942,7 +820,9 @@ export default function TagesplanungPage() {
           name: name.replace(",", "").trim(),
           shiftCode,
           cat: SHIFT_CAT[shiftCode] ?? "special",
-          roleKey: getRole(name, todayKey),
+          roleKey: roleStore.getRole(name, todayKey),
+          roleComment: roleStore.getRoleComment(name, todayKey),
+          isNewcomer: roleStore.isNewcomer(name, todayKey),
           isColo: isColoEmployee(name, coloPool),
           isDispatcher: dispatcherConfig.enabled && dispatcherConfig.priorities[0] ? isColoEmployee(name, [dispatcherConfig.priorities[0]]) && shiftCode.startsWith("E") : false,
         };
@@ -956,7 +836,9 @@ export default function TagesplanungPage() {
           name: name.replace(",", "").trim(),
           shiftCode,
           cat: "night" as const,
-          roleKey: getRole(name, nightSourceKey),
+          roleKey: roleStore.getRole(name, nightSourceKey),
+          roleComment: roleStore.getRoleComment(name, nightSourceKey),
+          isNewcomer: roleStore.isNewcomer(name, nightSourceKey),
           isColo: isColoEmployee(name, coloPool),
           isDispatcher: false,
         };
@@ -964,7 +846,7 @@ export default function TagesplanungPage() {
       .filter((employee): employee is EmployeeRow => employee !== null);
     return [...daytimeEmployees, ...nightEmployees]
       .sort((left, right) => left.shiftCode.localeCompare(right.shiftCode) || left.name.localeCompare(right.name, "de"));
-  }, [coloPool, dispatcherConfig, getRole, needsPreviousMonthSchedule, nightSourceDate, nightSourceKey, previousMonthSchedule, schedule, today, todayKey]);
+  }, [coloPool, dispatcherConfig, roleStore, needsPreviousMonthSchedule, nightSourceDate, nightSourceKey, previousMonthSchedule, schedule, today, todayKey]);
 
   const groups = useMemo(() => {
     const map = new Map<ShiftCat, EmployeeRow[]>();

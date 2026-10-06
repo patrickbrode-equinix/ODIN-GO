@@ -45,14 +45,17 @@ export interface Employee {
 export const shiftTypes: Record<string, ShiftTypeInfo> = {
   E1: { label: "E1", color: "bg-orange-500", name: "Frühschicht", time: "06:30-15:30" },
   E2: { label: "E2", color: "bg-orange-600", name: "Frühschicht", time: "07:00-16:00" },
-  E1SA: { label: "E1SA", color: "bg-sky-500", name: "Frühschicht mit Wochenende (Samstag)", time: "06:00-14:00" },
-  E1WE: { label: "E1WE", color: "bg-sky-600", name: "Frühschicht mit Wochenende (Sa/So)", time: "06:00-14:00" },
+  E1SA: { label: "E1 SA", color: "bg-sky-500", name: "Frühschicht mit Wochenende (Samstag)", time: "06:30-15:30" },
+  E1WE: { label: "E1 SA/SO", color: "bg-sky-600", name: "Frühschicht mit Wochenende (Sa/So)", time: "06:30-15:30" },
+  E2SA: { label: "E2 SA", color: "bg-cyan-500", name: "Frühschicht 2 mit Wochenende (Samstag)", time: "07:00-16:00" },
+  E2WE: { label: "E2 SA/SO", color: "bg-cyan-600", name: "Frühschicht 2 mit Wochenende (Sa/So)", time: "07:00-16:00" },
 
   L1: { label: "L1", color: "bg-yellow-500", name: "Spätschicht", time: "13:00-22:00" },
   L2: { label: "L2", color: "bg-yellow-600", name: "Spätschicht", time: "15:00-00:00" },
-  L1WE: { label: "L1WE", color: "bg-amber-500", name: "Spätschicht mit Wochenende (Sa/So)", time: "14:00-22:00" },
+  L1WE: { label: "L1 SA/SO", color: "bg-amber-500", name: "Spätschicht mit Wochenende (Sa/So)", time: "13:00-22:00" },
 
-  N: { label: "N", color: "bg-blue-600", name: "Nachtschicht", time: "21:45-06:45" },
+  N: { label: "N", color: "bg-blue-600", name: "Nachtschicht", time: "21:15-06:45" },
+  NK: { label: "NK", color: "bg-blue-500", name: "Kurze Nachtschicht", time: "21:45-06:45" },
 
   /* Halbe Schichten */
   HE1: { label: "HE1", color: "bg-orange-400", name: "Halbe Frühschicht (E1)", time: "06:30-10:30" },
@@ -67,7 +70,7 @@ export const shiftTypes: Record<string, ShiftTypeInfo> = {
   SEMINAR: { label: "S", color: "bg-purple-600", name: "Seminar", time: "08:00-16:00" },
 };
 
-export const EARLY_SHIFT_CODES = ["E1", "E2", "E1SA", "E1WE"] as const;
+export const EARLY_SHIFT_CODES = ["E1", "E2", "E1SA", "E1WE", "E2SA", "E2WE"] as const;
 export const LATE_SHIFT_CODES = ["L1", "L2", "L1WE"] as const;
 
 /* ------------------------------------------------ */
@@ -190,7 +193,7 @@ export const useShiftStore = create<ShiftStoreState>()(
 
           if (EARLY_SHIFT_CODES.includes(shiftCode as (typeof EARLY_SHIFT_CODES)[number])) early.push(entry);
           if (LATE_SHIFT_CODES.includes(shiftCode as (typeof LATE_SHIFT_CODES)[number])) late.push(entry);
-          if (shiftCode === "N") night.push(entry);
+          if (shiftCode === "N" || shiftCode === "NK") night.push(entry);
         });
 
         return { early, late, night };
@@ -223,7 +226,7 @@ export const useShiftStore = create<ShiftStoreState>()(
         });
 
         // stabile Sortierung: Früh -> Spät -> Nacht -> DBS -> Rest
-        const prio: Record<string, number> = { E1: 10, E2: 11, E1SA: 12, E1WE: 13, L1: 20, L2: 21, L1WE: 22, N: 30, DBS: 40 };
+        const prio: Record<string, number> = { E1: 10, E2: 11, E1SA: 12, E1WE: 13, E2SA: 14, E2WE: 15, L1: 20, L2: 21, L1WE: 22, N: 30, DBS: 40 };
         return out.sort((a, b) => (prio[a.shift] ?? 99) - (prio[b.shift] ?? 99) || a.name.localeCompare(b.name));
       },
 

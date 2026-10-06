@@ -53,7 +53,7 @@
       .panel { position: absolute; top: 0; right: 0; width: min(1180px,100vw); max-width: 100vw; height: 100%; max-height: 100dvh; display: flex; flex-direction: column; overflow: hidden; background:#0f172a; border-left:1px solid #334155; box-shadow:-16px 0 40px rgba(15,23,42,.3); color:#e2e8f0; font-family:"Segoe UI",Arial,sans-serif; transition:width .18s ease; }
       .panel.expanded { width: 100vw; max-width: 100vw; }
       @media (max-width: 700px) { .panel { width: 100vw; border-left: 0; } .head { padding: 0 10px; } .staffing, .employee { display:none; } }
-      .panel.remote-shell > .head, .panel.remote-shell > .odin-brand, .panel.remote-shell > .notice, .panel.remote-shell > .tabs, .panel.remote-shell .admin-login { display:none !important; }
+      .panel.remote-shell > .head, .panel.remote-shell > .odin-brand, .panel.remote-shell > .tabs, .panel.remote-shell .admin-login { display:none !important; }
       .head { height:58px; flex:0 0 auto; display:flex; align-items:center; gap:10px; padding:0 16px; background:#172033; border-bottom:1px solid #334155; }
       .title { font-size: 16px; font-weight: 850; margin-right: auto; letter-spacing: -.02em; }
       .employee { color:#cbd5e1; font-size:12px; white-space:pre-line; text-align:right; }
@@ -98,7 +98,6 @@
     <button class="launcher" type="button" aria-label="ODIN GO öffnen oder verschieben" title="Klicken zum Öffnen, gedrückt halten zum Verschieben"><span class="lx-face"><span class="lx-mark"></span><span class="lx-text"><b>ODIN</b><i>GO</i></span><span class="lx-live"></span></span><img alt="ODIN GO" /></button>
     <div class="app-menu" role="menu" aria-label="Anwendung auswählen">
       <button class="app-choice" type="button" data-app="planner"><span class="app-symbol">S</span><span><strong>Schichtplaner</strong><small>Dienstplan, Drafts und Wellbeing</small></span></button>
-      <button class="app-choice" type="button" data-app="coc"><span class="app-symbol">C</span><span><strong>CoC</strong><small>Chain of Command für Ideen und Probleme</small></span></button>
       <button class="app-choice" type="button" data-app="notices"><span class="app-symbol">N</span><span><strong>Notifications</strong><small>Aktuelle Informationen und Anweisungen</small></span></button>
     </div>
     <div class="backdrop">
@@ -398,7 +397,6 @@
     ["wellbeing", "Wellbeing", "/wellbeing"],
     ["preferences", "Settings", "/preferences"],
     ["admin", "Settings Admin", "/admin-settings"],
-    ["coc", "CoC", "/coc"],
     ["projects", "Projekte", "/projects"],
     ["notices", "Notifications", "/jarvis-notifications"],
   ];
@@ -406,7 +404,6 @@
     ["generator", "Generator", "/shiftplan-control"],
     ["users", "User Management", "/users"],
   ];
-  const cocTabs = [["coc", "CoC Übersicht", "/coc"]];
   const noticeTabs = [["notices", "Notifications", "/jarvis-notifications"]];
 
   function normalizeBaseUrl() { return String(settings.plannerUrl || DEFAULTS.plannerUrl).replace(/\/+$/, ""); }
@@ -484,7 +481,7 @@
 
   function selectTab(id, path) {
     activeTab = id;
-    if ((id === "admin" || id === "coc_admin") && !adminToken && !hasPasswordlessAdminAccess()) {
+    if (id === "admin" && !adminToken && !hasPasswordlessAdminAccess()) {
       adminLogin.classList.add("open");
       iframe.style.display = "none";
       window.setTimeout(() => adminPasswordInput.focus(), 0);
@@ -658,6 +655,7 @@
 
     identityVerificationPending = true;
     const response = await chrome.runtime.sendMessage({ type: "VERIFY_JARVIS_IDENTITY", identity })
+      .catch(() => null)
       .finally(() => { identityVerificationPending = false; });
     log("Identitätsprüfung beendet", { ok: Boolean(response?.ok), message: response?.message || "" });
     if (!response?.ok) {
@@ -790,7 +788,7 @@
 
   async function loadStaffing() {
     if (!identityToken) return;
-    const response = await chrome.runtime.sendMessage({ type: "GET_JARVIS_STAFFING", identityToken });
+    const response = await chrome.runtime.sendMessage({ type: "GET_JARVIS_STAFFING", identityToken }).catch(() => null);
     if (!response?.ok) return;
     staffingNode.querySelector(".early").textContent = `Früh ${response.staffing?.early ?? 0}`;
     staffingNode.querySelector(".late").textContent = `Spät ${response.staffing?.late ?? 0}`;

@@ -41,6 +41,10 @@ export function createVacationRouter(db, { authenticate = requireAuth, recompute
     if (!isDateKey(start_date) || !isDateKey(end_date) || end_date < start_date || start_date < '1900-01-01' || end_date > '9998-12-31' || typeof note !== 'string' || note.length > 2000) {
       return res.status(400).json({ error: 'Invalid vacation dates or note' });
     }
+    const spanDays = (Date.parse(`${end_date}T00:00:00Z`) - Date.parse(`${start_date}T00:00:00Z`)) / 86_400_000;
+    if (!Number.isFinite(spanDays) || spanDays > 366) {
+      return res.status(400).json({ error: 'Vacation period must not exceed 366 days' });
+    }
     try {
       const employee = req.vacationEmployee;
       const { rows } = await db.query(

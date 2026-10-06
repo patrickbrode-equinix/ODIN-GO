@@ -160,7 +160,6 @@ if (creator) {
     team: "frost", ticketNumber: "T-1", customerName: "Kunde", notes: "Smoke-Test", status: "open",
   }, { identity: creator }));
 }
-await step("POST /dashboard/info-entries", () => call("POST", "/dashboard/info-entries", { content: "Smoke-Test", type: "info" }));
 await step("POST /projects", () => call("POST", "/projects", { name: "Smoke-Test Projekt", responsible: "Anna Tester", progress: 10, participants: ["Anna Tester"] }));
 await step("POST /feedback", () => call("POST", "/feedback", { type: "Bug", title: "Smoke-Test", description: "Test", route: "/" }, { identity: creator }));
 

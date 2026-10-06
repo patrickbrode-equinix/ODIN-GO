@@ -13,7 +13,7 @@ import * as XLSX from "xlsx";
 /* ------------------------------------------------ */
 
 export const KNOWN_SHIFT_CODES: string[] = [
-  "E1","E2","E1SA","E1WE","L1","L2","L1WE","L3","N","FS","ABW",
+  "E1","E2","E1SA","E1WE","E2SA","E2WE","L1","L2","L1WE","L3","N","FS","ABW",
   "U","UR","URB","K","S","DBS","NA",
   "HE1","HE2","HL1","HL2",
 ];

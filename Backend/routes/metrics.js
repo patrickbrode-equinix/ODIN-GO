@@ -66,7 +66,7 @@ router.get("/", requireAuth, async (req, res) => {
     const cpuCount = os.cpus().length || 1;
     const [l1, l5, l15] = os.loadavg();
 
-    const [cpuUsagePct, dbStats, userStats, ticketStats] = await Promise.all([
+    const [cpuUsagePct, dbStats, userStats] = await Promise.all([
       sampleCpuUsagePct(200).catch(() => null),
       db.query(
         `SELECT
@@ -85,17 +85,11 @@ router.get("/", requireAuth, async (req, res) => {
            )::int AS online_count
          FROM users`
       ).catch(() => ({ rows: [{}] })),
-      db.query(
-        `SELECT COUNT(*) FILTER (WHERE active = TRUE)::int AS active_count
-         FROM queue_items`
-      ).catch(() => ({ rows: [{}] })),
     ]);
 
   const dbRow = dbStats.rows[0] || {};
   const userRow = userStats.rows[0] || {};
-  const ticketRow = ticketStats.rows[0] || {};
   const onlineCount = Number.parseInt(String(userRow.online_count ?? 0), 10) || 0;
-  const activeTickets = Number.parseInt(String(ticketRow.active_count ?? 0), 10) || 0;
     const loadPct1 = cpuCount > 0 ? Math.round((l1 / cpuCount) * 1000) / 10 : 0;
     const utilizationPct = Math.round((((cpuUsagePct || 0) + Math.max(loadPct1, 0) + Math.max(Math.round((used / total) * 1000) / 10, 0)) / 3) * 10) / 10;
 
@@ -134,10 +128,6 @@ router.get("/", requireAuth, async (req, res) => {
         sizeMB: bytesToMB(Number.parseInt(String(dbRow.size_bytes ?? 0), 10) || 0),
         sizePretty: dbRow.size_pretty || null,
         connectionCount: Number.parseInt(String(dbRow.connection_count ?? 0), 10) || 0,
-      },
-      tickets: {
-        activeCount: activeTickets,
-        perOnlineUser: onlineCount > 0 ? Math.round((activeTickets / onlineCount) * 10) / 10 : null,
       },
       utilization: {
         overallPct: Number.isFinite(utilizationPct) ? utilizationPct : null,

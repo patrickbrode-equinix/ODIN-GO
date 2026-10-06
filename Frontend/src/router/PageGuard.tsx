@@ -4,7 +4,7 @@ import { LockKeyhole } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import type { AccessLevel } from "../context/AuthContext";
 import AccessDenied from "../components/pages/AccessDenied";
-import { getDefaultRouteForCurrentMode, IS_SHIFTPLANNER_MODE } from "../config/appMode";
+import { getDefaultRouteForCurrentMode } from "../config/appMode";
 
 type Props = {
   pageKey: string;
@@ -16,7 +16,7 @@ type Props = {
   children: React.ReactNode;
 };
 
-const ADMIN_UNLOCK_PAGE_KEYS = new Set(["admin_settings", "shiftplan_control", "user_management", "teams_center", "protokoll"]);
+const ADMIN_UNLOCK_PAGE_KEYS = new Set(["admin_settings", "shiftplan_control", "user_management", "protokoll"]);
 
 function AdminUnlockGate() {
   const { unlockAdmin } = useAuth();
@@ -92,7 +92,7 @@ export function PageGuard({
     || (anyOf || []).some((requirement) => canAccess(requirement.pageKey, requirement.min || "view"));
 
   if (!isAllowed) {
-    if (IS_SHIFTPLANNER_MODE && ADMIN_UNLOCK_PAGE_KEYS.has(pageKey)) {
+    if (ADMIN_UNLOCK_PAGE_KEYS.has(pageKey)) {
       return <AdminUnlockGate />;
     }
 

@@ -21,7 +21,6 @@ import { Absence, AbsenceConflict } from "../../api/absences";
 import { EmployeeConstraints, ConstraintViolation } from "../../api/constraints";
 import { Badge } from "../ui/badge";
 import { AlertTriangle, CalendarX } from "lucide-react";
-import { useCommitStore } from "../../store/commitStore";
 import { useLanguage } from "../../context/LanguageContext";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { AttendanceRecord } from "../../api/attendance";
@@ -153,21 +152,6 @@ export function ShiftplanTable({
   // Helper
   const getMetric = (name: string) => wellbeingMetrics.find(m => m.employee_name === name);
 
-  // For C3: Last Update + Asset Count Display
-  const tickets = useCommitStore((s) => s.tickets);
-  const lastUpdate = useMemo(() => {
-    const safeTickets = Array.isArray(tickets) ? tickets : [];
-    if (safeTickets.length === 0) return null;
-    let maxTime = 0;
-    for (const t of safeTickets as any[]) {
-      if (t.updated_at) {
-        const time = new Date(t.updated_at).getTime();
-        if (time > maxTime) maxTime = time;
-      }
-    }
-    return maxTime > 0 ? new Date(maxTime).toLocaleString(locale, { timeZone: 'Europe/Berlin', day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : null;
-  }, [locale, tickets]);
-
   // Keyboard navigation across cells (Edit mode)
   const focusCell = (employeeIndex: number, day: number) => {
     const el = tableRef.current?.querySelector<HTMLTableCellElement>(
@@ -294,17 +278,6 @@ export function ShiftplanTable({
   return (
     <Card className="rounded-2xl flex-1 overflow-visible border-0 shadow-none bg-transparent flex flex-col min-h-0">
 
-      {/* C3: Last Update Banner */}
-      {lastUpdate && (
-        <div className="flex justify-end mb-2">
-          <div className="text-[10px] font-mono tracking-wider font-semibold text-slate-400/80 bg-black/20 px-2.5 py-1 rounded-md border border-white/5 flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse shadow-[0_0_8px_rgba(34,197,94,0.6)]" />
-            Letztes Crawler-Update: {lastUpdate}
-            <span className="text-white/20">|</span>
-            {tickets.length} Assets geladen
-          </div>
-        </div>
-      )}
 
       <CardContent className="p-0 h-full overflow-visible flex-1 min-h-0">
         <div className="shiftplan-schedule-table overflow-x-auto h-full rounded-xl border border-white/10 bg-[#0f111a]">
@@ -357,7 +330,14 @@ export function ShiftplanTable({
                   const titleParts: string[] = [];
                   titleParts.push(`${weekdayAbbrev(d, locale)} ${day}.${pad2(monthIndex1)}.${year}`);
                   if (holidayName) titleParts.push(`${isGerman ? "Feiertag" : "Holiday"}: ${holidayName}`);
-                  if (hasWarning) titleParts.push(`${isGerman ? "Unterbesetzung" : "Understaffing"}: ${(Array.isArray(dayWarnings) ? dayWarnings : []).map((w) => w.label).join(" | ")}`);
+                  const hasCriticalWarning = dayWarnings.some((w) => w.severity === "critical");
+                  for (const w of dayWarnings) {
+                    const kindLabel = w.kind === "night" ? (isGerman ? "Nacht" : "Night") : w.kind === "late" ? (isGerman ? "Spät" : "Late") : (isGerman ? "Früh" : "Early");
+                    const prefix = w.severity === "critical"
+                      ? (isGerman ? "Kritische Unterbesetzung" : "Critical understaffing")
+                      : (isGerman ? "Unterbesetzung" : "Understaffing");
+                    titleParts.push(`${prefix}: ${kindLabel} ${w.actual}/${w.max} (${w.missing} ${isGerman ? "fehlt" : "missing"})`);
+                  }
 
                   // [NEW] Staffing Status Indicator
                   const dateStr = dateKey(year, monthIndex1, day);
@@ -384,7 +364,7 @@ export function ShiftplanTable({
                       <div className={`text-[11px] font-medium flex items-center justify-center gap-0.5 ${isToday ? 'text-indigo-300 font-bold' : 'text-foreground'}`}>
                         {day}.{pad2(monthIndex1)}.
                         {holidayName && <span className="text-[10px] text-red-400 font-bold drop-shadow-[0_0_4px_rgba(248,113,113,0.8)] ml-0.5">✦</span>}
-                        {hasWarning && <span className="text-[11px] font-extrabold text-red-400 ml-0.5">!!</span>}
+                        {hasWarning && <span className={`text-[11px] font-extrabold ml-0.5 ${hasCriticalWarning ? "text-red-400" : "text-amber-400"}`}>{hasCriticalWarning ? "!!" : "!"}</span>}
                       </div>
 
                       {/* Traffic Light Dot */}
@@ -405,7 +385,8 @@ export function ShiftplanTable({
                         ${isWeekend ? "bg-white/[0.015]" : ""}
                         ${holidayName ? "bg-red-500/10 hover:bg-red-500/20" : ""}
                         ${isDayEmpty ? "border-x border-red-500/30 bg-red-500/[0.04] shadow-[inset_0_0_12px_rgba(239,68,68,0.2)]" : ""}
-                        ${hasWarning ? "bg-red-600/25 ring-2 ring-red-300/70 shadow-[inset_0_0_0_1px_rgba(248,113,113,0.25)]" : ""}
+                        ${hasWarning && hasCriticalWarning ? "bg-red-600/25 ring-2 ring-red-300/70 shadow-[inset_0_0_0_1px_rgba(248,113,113,0.25)]" : ""}
+                        ${hasWarning && !hasCriticalWarning ? "bg-amber-500/20 ring-2 ring-amber-300/60 shadow-[inset_0_0_0_1px_rgba(251,191,36,0.25)]" : ""}
                         ${isToday ? "bg-indigo-500/10 shadow-[inset_0_0_0_1px_rgba(99,102,241,0.5)] z-30" : ""}
                         ${holidayName ? "cursor-context-menu" : ""}
                       `}
@@ -542,7 +523,9 @@ export function ShiftplanTable({
                         const empSched = (schedule && typeof schedule === 'object') ? (schedule as any)[name] : null;
                         const shift = empSched ? empSched[day] : null;
                         const key = dateKey(year, monthIndex1, day);
-                        const hasWarning = (warningByDateKey.get(key) ?? []).length > 0;
+                        const cellDayWarnings = warningByDateKey.get(key) ?? [];
+                        const hasWarning = cellDayWarnings.length > 0;
+                        const hasCriticalWarning = cellDayWarnings.some((w) => w.severity === "critical");
                         const isToday = isCurrentMonth && day === currentDay;
                         // [NEW] Check for violations & coverage
                         const cellViolations = violationsMap.get(cellKey(name, day));
@@ -613,7 +596,7 @@ export function ShiftplanTable({
                             data-day={day}
                             tabIndex={canNav ? 0 : -1}
                             className={`border-r border-white/5 p-1 text-center relative transition-colors group-hover:bg-white/[0.02] 
-                              ${hasWarning ? "bg-red-600/10" : ""}
+                              ${hasWarning ? (hasCriticalWarning ? "bg-red-600/10" : "bg-amber-500/10") : ""}
                               ${hasViolation ? "ring-2 ring-red-500/50 shadow-[inset_0_0_0_1px_rgba(239,68,68,0.5)] bg-red-500/5" : ""} 
                               ${hasCoverageIssue ? "bg-orange-500/10" : ""}
                               ${(isEditMode || !!onCellClick) ? "cursor-pointer" : ""}

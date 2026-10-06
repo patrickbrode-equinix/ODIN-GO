@@ -27,7 +27,8 @@ async function testConnection(plannerUrl, apiKey) {
   const validation = validatePlannerUrl(plannerUrl);
   if (!validation.ok) return { ok: false, status: 0, message: validation.message };
   const baseUrl = validation.url;
-  const url = `${baseUrl}/api/health/ready`;
+  // Endpoint behind requireApplicationKey (cached, cheap) so a wrong/empty key is reported as HTTP 401.
+  const url = `${baseUrl}/api/odin-go/weather`;
   logConnection("Verbindungsversuch", { url });
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 8000);
@@ -68,7 +69,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       sendResponse({ ok: true, token: session.token });
-    });
+    }).catch(() => sendResponse({ ok: false, token: null }));
     return true;
   }
 
@@ -83,7 +84,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         token,
         expiresAt: Date.now() + (4 * 60 * 60 * 1000) - 60_000,
       },
-    }).then(() => sendResponse({ ok: true }));
+    }).then(() => sendResponse({ ok: true }))
+      .catch(() => sendResponse({ ok: false, message: "Admin-Sitzung konnte nicht gespeichert werden." }));
     return true;
   }
 

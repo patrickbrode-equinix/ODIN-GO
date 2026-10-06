@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { api } from "../api/api";
-import { IS_SHIFTPLANNER_MODE } from "../config/appMode";
 
 export type AccessLevel = "none" | "view" | "write";
 
@@ -41,7 +40,6 @@ const ADMIN_PAGE_KEYS = new Set([
   "admin_settings",
   "shiftplan_control",
   "user_management",
-  "teams_center",
   "protokoll",
 ]);
 
@@ -75,13 +73,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("shiftplanner-admin-session-expired", clearExpiredAdminSession);
   }, []);
 
-  useEffect(() => {
-    const needsGlobalScheduleBootstrap = !IS_SHIFTPLANNER_MODE || window.location.pathname.startsWith("/tv-");
-    if (needsGlobalScheduleBootstrap) {
-      void import("../lib/bootstrapShiftData").then(({ bootstrapShiftData }) => bootstrapShiftData()).catch(() => {});
-    }
-  }, []);
-
   const unlockAdmin = useCallback(async (password: string) => {
     const response = await api.post("/standalone-admin/unlock", { password });
     const token = String(response.data?.token || "");
@@ -103,7 +94,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const lastName = nameParts.join(" ");
     const normalizedEmployeeName = extensionContext.employeeName.trim().toLocaleLowerCase("de-DE").replace(/\s+/g, " ");
     const patrickBypass = normalizedEmployeeName === "patrick brode";
-    const adminUnlocked = Boolean(adminToken || extensionContext.adminUnlocked || patrickBypass);
+    // adminToken is initialised from sessionStorage (which already contains a token
+    // handed over by the extension) and is cleared when the session expires; do not
+    // OR in the one-time init value, or the web login would never reappear.
+    const adminUnlocked = Boolean(adminToken || patrickBypass);
     // The web version only needs the admin password; the application key is
     // required for the Jarvis extension, which identifies employees without a password.
     const webLoginRequired = !extensionContext.embedded && !adminUnlocked;

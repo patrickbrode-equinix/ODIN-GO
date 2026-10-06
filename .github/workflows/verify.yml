@@ -27,7 +27,6 @@ jobs:
         run: npm ci --prefix Backend
       - name: Run backend tests
         env:
-          APP_MODE: shiftplanner
           JWT_SECRET: ci-only-jwt-secret
           SHIFTPLANNER_API_KEY: ci-only-application-key
           OPERATIONAL_TIMEZONE: Europe/Berlin
@@ -36,7 +35,6 @@ jobs:
         run: npm ci --prefix Frontend
       - name: Build frontend
         env:
-          VITE_APP_MODE: shiftplanner
           VITE_API_BASE_URL: /api
         run: npm run build --prefix Frontend
       - name: Run frontend tests

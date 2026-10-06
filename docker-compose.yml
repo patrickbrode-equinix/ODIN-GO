@@ -1,7 +1,16 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
+    logging: *default-logging
+    # Keep a runaway container from starving the shared VM. Raise if the VM has headroom.
+    mem_limit: ${POSTGRES_MEM_LIMIT:-1g}
     environment:
       # Technical database names are fixed for the standalone installation.
       # DB_PASSWORD is reused by PostgreSQL and the backend.
@@ -30,22 +39,20 @@ services:
     # stack update; otherwise Docker may continue to use an older :local tag.
     pull_policy: build
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${BACKEND_MEM_LIMIT:-1g}
     expose:
       - "8001"
     environment:
       PORT: 8001
       NODE_ENV: production
-      APP_MODE: shiftplanner
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
-      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-8h}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com}
       DB_HOST: postgres
       DB_PORT: 5432
       DB_NAME: shiftplanner
       DB_USER: shiftplanner_app
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-      TEAMS_CHANNEL_WEBHOOK: ${TEAMS_CHANNEL_WEBHOOK:-}
-      TEAMS_PERSONAL_WEBHOOK: ${TEAMS_PERSONAL_WEBHOOK:-}
       SHIFTPLANNER_API_KEY: ${SHIFTPLANNER_API_KEY:?SHIFTPLANNER_API_KEY is required}
       SHIFTPLANNER_ADMIN_PASSWORD: ${SHIFTPLANNER_ADMIN_PASSWORD:-root}
       # Set to true for exactly one redeploy to restore the configured admin password.
@@ -54,14 +61,6 @@ services:
       WEATHER_FALLBACK_LAT: ${WEATHER_FALLBACK_LAT:-50.1109}
       WEATHER_FALLBACK_LON: ${WEATHER_FALLBACK_LON:-8.6821}
       WEATHER_FALLBACK_NAME: ${WEATHER_FALLBACK_NAME:-Frankfurt am Main}
-      COC_PUBLIC_URL: ${COC_PUBLIC_URL:-https://eqx-portal.corp.equinix.com}
-      COC_REVIEW_TOKEN_TTL: ${COC_REVIEW_TOKEN_TTL:-14d}
-      SMTP_HOST: ${SMTP_HOST:-}
-      SMTP_PORT: ${SMTP_PORT:-587}
-      SMTP_SECURE: ${SMTP_SECURE:-false}
-      SMTP_USER: ${SMTP_USER:-}
-      SMTP_PASS: ${SMTP_PASS:-}
-      SMTP_FROM: ${SMTP_FROM:-}
     volumes:
       - shiftplanner_uploads_data:/app/uploads
     networks:
@@ -85,11 +84,12 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_BASE_URL: /api
-        VITE_APP_MODE: shiftplanner
     image: odin-shiftplanner-frontend:local
     # Keep the embedded application in sync with the checked-out Git revision.
     pull_policy: build
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: ${FRONTEND_MEM_LIMIT:-512m}
     ports:
       - "8080:8000"
     environment:
@@ -97,7 +97,6 @@ services:
       PORT: 8000
       BACKEND_URL: http://odin-backend:8001
       VITE_API_BASE_URL: /api
-      VITE_APP_MODE: shiftplanner
     networks:
       - shiftplanner-net
     depends_on:

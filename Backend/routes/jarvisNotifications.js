@@ -135,22 +135,32 @@ router.get("/bootstrap", requireAuth, async (req, res) => {
 });
 
 router.get("/preferences", requireAuth, async (req, res) => {
-  const { rows } = await db.query(
-    `SELECT enabled FROM jarvis_notification_preferences WHERE user_id = $1`,
-    [req.user.id],
-  );
-  res.json({ enabled: rows[0]?.enabled !== false });
+  try {
+    const { rows } = await db.query(
+      `SELECT enabled FROM jarvis_notification_preferences WHERE user_id = $1`,
+      [req.user.id],
+    );
+    res.json({ enabled: rows[0]?.enabled !== false });
+  } catch (error) {
+    console.error("JARVIS NOTIFICATION PREFERENCES ERROR:", error);
+    res.status(500).json({ error: "Failed to load preferences" });
+  }
 });
 
 router.put("/preferences", requireAuth, async (req, res) => {
   const enabled = req.body?.enabled !== false;
-  await db.query(
-    `INSERT INTO jarvis_notification_preferences (user_id, enabled)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = NOW()`,
-    [req.user.id, enabled],
-  );
-  res.json({ enabled });
+  try {
+    await db.query(
+      `INSERT INTO jarvis_notification_preferences (user_id, enabled)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = NOW()`,
+      [req.user.id, enabled],
+    );
+    res.json({ enabled });
+  } catch (error) {
+    console.error("JARVIS NOTIFICATION PREFERENCES SAVE ERROR:", error);
+    res.status(500).json({ error: "Failed to save preferences" });
+  }
 });
 
 router.get("/recipients", requireAuth, async (_req, res) => {
@@ -163,6 +173,7 @@ router.get("/recipients", requireAuth, async (_req, res) => {
 });
 
 router.get("/staffing", requireAuth, async (_req, res) => {
+  try {
   const now = new Date();
   const parts = Object.fromEntries(new Intl.DateTimeFormat("de-DE", {
     timeZone: "Europe/Berlin", year: "numeric", month: "numeric", day: "numeric",
@@ -178,9 +189,13 @@ router.get("/staffing", requireAuth, async (_req, res) => {
   for (const row of rows) {
     if (/^(E|HE)/.test(row.shift_code)) staffing.early += row.count;
     else if (/^(L|HL)/.test(row.shift_code)) staffing.late += row.count;
-    else if (row.shift_code === "N") staffing.night += row.count;
+    else if (row.shift_code === "N" || row.shift_code === "NK") staffing.night += row.count;
   }
   res.json({ date: `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`, ...staffing });
+  } catch (error) {
+    console.error("JARVIS NOTIFICATION STAFFING ERROR:", error);
+    res.status(500).json({ error: "Failed to load staffing" });
+  }
 });
 
 router.post("/:id/dismiss", requireAuth, async (req, res) => {
@@ -246,7 +261,7 @@ router.post("/", requireAuth, async (req, res) => {
         [recipientUserIds],
       );
       if (validRecipients.rows.length !== recipientUserIds.length) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         return res.status(400).json({ error: "INVALID_RECIPIENTS", message: "Mindestens ein ausgewählter Empfänger ist nicht verfügbar." });
       }
     }
@@ -267,7 +282,7 @@ router.post("/", requireAuth, async (req, res) => {
     await client.query("COMMIT");
     res.status(201).json({ notification: rows[0] });
   } catch (error) {
-    await client.query("ROLLBACK");
+    await client.query("ROLLBACK").catch(() => {});
     console.error("JARVIS NOTIFICATION CREATE ERROR:", error);
     res.status(500).json({ error: "Failed to create notification" });
   } finally {
@@ -277,12 +292,21 @@ router.post("/", requireAuth, async (req, res) => {
 
 router.patch("/:id", requireAuth, requirePageAccess("admin_settings", "write"), async (req, res) => {
   const active = req.body?.active === true;
-  const { rows } = await db.query(
-    `UPDATE jarvis_notifications SET active = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
-    [Number(req.params.id), active],
-  );
-  if (!rows[0]) return res.status(404).json({ error: "Notification not found" });
-  res.json({ notification: rows[0] });
+  const notificationId = Number(req.params.id);
+  if (!Number.isInteger(notificationId) || notificationId <= 0) {
+    return res.status(400).json({ error: "INVALID_NOTIFICATION_ID" });
+  }
+  try {
+    const { rows } = await db.query(
+      `UPDATE jarvis_notifications SET active = $2, updated_at = NOW() WHERE id = $1 RETURNING *`,
+      [notificationId, active],
+    );
+    if (!rows[0]) return res.status(404).json({ error: "Notification not found" });
+    res.json({ notification: rows[0] });
+  } catch (error) {
+    console.error("JARVIS NOTIFICATION UPDATE ERROR:", error);
+    res.status(500).json({ error: "Failed to update notification" });
+  }
 });
 
 router.delete("/:id", requireAuth, requirePageAccess("admin_settings", "write"), async (req, res) => {

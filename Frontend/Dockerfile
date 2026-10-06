@@ -4,9 +4,7 @@ WORKDIR /app
 
 # Vite bakes import.meta.env.* at BUILD TIME.
 ARG VITE_API_BASE_URL=/api
-ARG VITE_APP_MODE=odin
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
-ENV VITE_APP_MODE=$VITE_APP_MODE
 
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund --loglevel error

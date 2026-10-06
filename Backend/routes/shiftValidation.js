@@ -248,7 +248,7 @@ router.post("/validate", requireAuth, async (req, res) => {
         res.json({ success: true, count: violations.length, violations });
 
     } catch (err) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         console.error("VALIDATE ERROR:", err);
         res.status(500).json({ error: "Validation failed" });
     } finally {

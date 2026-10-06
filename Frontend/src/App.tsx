@@ -1,43 +1,43 @@
-/* FORCE REBUILD */
 import { lazy, Suspense, useEffect } from "react";
-import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
-import { Layout } from "./components/Layout";
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import StandaloneWebLogin from "./components/StandaloneWebLogin";
-import { PageGuard } from "./router/PageGuard";
-import { getDefaultRouteForCurrentMode, IS_SHIFTPLANNER_MODE } from "./config/appMode";
 import { useAuth } from "./context/AuthContext";
 
 /* Public – small, always needed immediately */
-const TVFullscreen          = lazy(() => import("./components/pages/TVFullscreen"));
+const OdinGoWorkspace = lazy(() => import("./components/pages/OdinGoWorkspace"));
 
-/* Lazy-loaded pages – code split per route */
-const DisabledPage           = lazy(() => Promise.resolve({ default: () => null }));
-const Dashboard              = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/Dashboard"));
-const DashboardStatistik     = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/DashboardStatistik"));
-const OdinLogicPage          = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/OdinLogicPage"));
-const Shiftplan              = lazy(() => import("./components/pages/Shiftplan"));
-const ShiftplanDrafts        = lazy(() => import("./components/pages/ShiftplanDrafts"));
-const Weekplan               = lazy(() => import("./components/pages/Weekplan"));
-const TagesplanungPage       = lazy(() => import("./components/pages/TagesplanungPage"));
-const Handover               = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/Handover"));
-const Tickets                = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/Tickets"));
-const TVDashboard            = lazy(() => import("./components/pages/TVDashboard"));
-const Dispatcher             = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/Dispatcher"));
-const Settings               = lazy(() => import("./components/pages/Settings"));
-const Users                  = lazy(() => import("./components/pages/Users"));
-const CommitCompliance       = IS_SHIFTPLANNER_MODE ? DisabledPage : lazy(() => import("./components/pages/CommitCompliance"));
-const TeamsCommunicationCenter = lazy(() => import("./components/pages/TeamsCommunicationCenter"));
-const AdminSettings          = lazy(() => import("./components/pages/AdminSettings"));
-const ShiftplanControlCenter = lazy(() => import("./components/pages/ShiftplanControlCenter"));
-const UserPreferencesPage    = lazy(() => import("./components/pages/UserPreferencesPage"));
+/*
+ * Both access paths use the same UI: the ODIN GO workspace.
+ *  - Jarvis extension: iframe with ?embed=1
+ *  - Web access (managers): same workspace behind the admin-password login
+ */
+const WORKSPACE_HOME = "/odin-go/shiftplan";
 
-function ProtectedApplicationLayout() {
-  const { webLoginRequired } = useAuth();
-  return webLoginRequired ? <StandaloneWebLogin /> : <Layout />;
+/* Old standalone-shell URLs → matching workspace tab (bookmarks keep working). */
+const LEGACY_REDIRECTS: Array<[string, string]> = [
+  ["shiftplan", "/odin-go/shiftplan"],
+  ["shiftplan/week", "/odin-go/week"],
+  ["shiftplan/day", "/odin-go/day"],
+  ["tagesplanung", "/odin-go/day"],
+  ["drafts", "/odin-go/drafts"],
+  ["projects", "/odin-go/projects"],
+  ["jarvis-notifications", "/odin-go/notifications"],
+  ["preferences", "/odin-go/preferences"],
+  ["admin-settings", "/odin-go/admin-settings"],
+  ["shiftplan-control", "/odin-go/generator"],
+  ["users", "/odin-go/users"],
+  ["wellbeing", "/odin-go/admin-settings?section=wellbeing"],
+];
+
+/* Redirect that keeps the query string (embed=1, extension tokens) intact. */
+function RedirectKeepSearch({ to }: { to: string }) {
+  const { search } = useLocation();
+  const [path, ownQuery] = to.split("?");
+  const merged = new URLSearchParams(search);
+  new URLSearchParams(ownQuery || "").forEach((value, key) => merged.set(key, value));
+  const query = merged.toString();
+  return <Navigate to={query ? `${path}?${query}` : path} replace />;
 }
-const JarvisNotifications    = lazy(() => import("./components/pages/JarvisNotifications"));
-const ProjectsPage           = lazy(() => import("./components/pages/ProjectsPage"));
-const OdinGoWorkspace        = lazy(() => import("./components/pages/OdinGoWorkspace"));
 
 function ProtectedOdinGoWorkspace() {
   const { webLoginRequired } = useAuth();
@@ -71,284 +71,19 @@ function ExtensionNavigationBridge() {
 }
 
 export default function App() {
-  const defaultRoute = getDefaultRouteForCurrentMode();
-
   return (
     <Router>
       <ExtensionNavigationBridge />
       <Suspense fallback={<PageLoader />}>
-      <Routes>
+        <Routes>
+          <Route path="/odin-go/*" element={<ProtectedOdinGoWorkspace />} />
 
-        {/* ========================= */}
-        {/* PUBLIC ROUTES             */}
-        {/* ========================= */}
-        <Route path="/tv-fullscreen" element={<TVFullscreen />} />
-        <Route path="/odin-go/*" element={<ProtectedOdinGoWorkspace />} />
+          {LEGACY_REDIRECTS.map(([from, to]) => (
+            <Route key={from} path={from} element={<RedirectKeepSearch to={to} />} />
+          ))}
 
-        {/* ========================= */}
-        {/* PUBLIC TV DASHBOARD       */}
-        {/* kiosk-ready, no auth      */}
-        {/* ========================= */}
-        <Route path="/tv-dashboard" element={<TVDashboard />} />
-
-        {/* ========================= */}
-        {/* AUTHENTICATED ONLY        */}
-        {/* ========================= */}
-          {/* ========================= */}
-          {/* MAIN APP (with Layout)   */}
-          {/* ========================= */}
-          <Route element={<ProtectedApplicationLayout />}>
-
-            {/* Default */}
-            <Route index element={<Navigate to={defaultRoute} replace />} />
-
-            {/* Core */}
-            {!IS_SHIFTPLANNER_MODE && (
-              <>
-                <Route
-                  path="dashboard"
-                  element={
-                    <PageGuard pageKey="dashboard">
-                      <Dashboard />
-                    </PageGuard>
-                  }
-                />
-
-                <Route
-                  path="dashboard/statistiken"
-                  element={
-                    <PageGuard pageKey="dashboard">
-                      <DashboardStatistik />
-                    </PageGuard>
-                  }
-                />
-
-                <Route
-                  path="dashboard/ticket-audit"
-                  element={<Navigate to="/dashboard/statistiken" replace />}
-                />
-              </>
-            )}
-
-            <Route
-              path="shiftplan"
-              element={
-                <PageGuard pageKey="shiftplan">
-                  <Shiftplan />
-                </PageGuard>
-              }
-            />
-
-            <Route
-              path="drafts"
-              element={
-                <PageGuard pageKey="shiftplan_drafts">
-                  <ShiftplanDrafts />
-                </PageGuard>
-              }
-            />
-
-            <Route path="wellbeing" element={<Navigate to="/admin-settings?section=wellbeing" replace />} />
-
-            <Route path="jarvis-notifications" element={<JarvisNotifications />} />
-            <Route path="projects" element={<ProjectsPage />} />
-
-            <Route
-              path="shiftplan/week"
-              element={
-                <PageGuard pageKey="shiftplan">
-                  <Weekplan />
-                </PageGuard>
-              }
-            />
-
-            <Route
-              path="shiftplan/day"
-              element={
-                <PageGuard pageKey="shiftplan">
-                  <TagesplanungPage />
-                </PageGuard>
-              }
-            />
-
-            <Route
-              path="tagesplanung"
-              element={
-                <PageGuard pageKey="shiftplan">
-                  <TagesplanungPage />
-                </PageGuard>
-              }
-            />
-
-            {!IS_SHIFTPLANNER_MODE && (
-              <>
-                <Route
-                  path="handover"
-                  element={
-                    <PageGuard pageKey="handover">
-                      <Handover />
-                    </PageGuard>
-                  }
-                />
-
-                <Route
-                  path="tickets"
-                  element={
-                    <PageGuard pageKey="tickets">
-                      <Tickets />
-                    </PageGuard>
-                  }
-                />
-              </>
-            )}
-
-            {/* Dashboards */}
-            <Route
-              path="commit-dashboard"
-              element={<Navigate to={defaultRoute} replace />}
-            />
-
-            {/* tv-dashboard is handled above without the main layout */}
-
-            {/* Tools */}
-            <Route
-              path="dispatcher"
-              element={
-                <PageGuard pageKey="dispatcher_console">
-                  <Dispatcher />
-                </PageGuard>
-              }
-            />
-
-            <Route
-              path="settings"
-              element={IS_SHIFTPLANNER_MODE ? <Navigate to="/preferences" replace /> :
-                <PageGuard pageKey="settings">
-                  <Settings />
-                </PageGuard>
-              }
-            />
-
-            {/* New Pages */}
-            {/* DBS (Colo 2.0) → redirects to CAR */}
-            <Route
-              path="dbs/*"
-              element={<Navigate to={defaultRoute} replace />}
-            />
-
-            <Route
-              path="preferences"
-              element={
-                <PageGuard pageKey="settings">
-                  <UserPreferencesPage />
-                </PageGuard>
-              }
-            />
-            <Route
-              path="car-liste"
-              element={<Navigate to={defaultRoute} replace />}
-            />
-            <Route
-              path="protokoll"
-              element={<Navigate to="/admin-settings?section=audit" replace />}
-            />
-            <Route
-              path="protokoll/teams-benachrichtigungen"
-              element={<Navigate to="/admin-settings?section=teams" replace />}
-            />
-            <Route
-              path="protokoll/automated-assignment"
-              element={<Navigate to="/admin-settings?section=odin" replace />}
-            />
-
-            {!IS_SHIFTPLANNER_MODE && (
-              <Route
-                path="commit-compliance"
-                element={
-                  <PageGuard pageKey="commit_compliance">
-                    <CommitCompliance />
-                  </PageGuard>
-                }
-              />
-            )}
-
-            {/* ODIN-Logik */}
-            {!IS_SHIFTPLANNER_MODE && (
-              <Route
-                path="odin-logic"
-                element={
-                  <PageGuard pageKey="odin_logic">
-                    <OdinLogicPage />
-                  </PageGuard>
-                }
-              />
-            )}
-
-            {/* Legacy ODIN rules route redirected into Admin Settings */}
-            <Route
-              path="odin-logic/rules"
-              element={<Navigate to="/admin-settings?section=odin" replace />}
-            />
-
-            {/* Shiftplan Control Center */}
-            <Route
-              path="shiftplan-control"
-              element={
-                <PageGuard pageKey="shiftplan_control" min="write">
-                  <ShiftplanControlCenter />
-                </PageGuard>
-              }
-            />
-
-            {/* Shift Admin Settings moved into Admin Settings */}
-            <Route
-              path="shift-admin-settings"
-              element={<Navigate to="/admin-settings?section=shiftplan" replace />}
-            />
-
-            {/* Teams Communication Center */}
-            <Route
-              path="teams-center"
-              element={
-                <PageGuard pageKey="teams_center">
-                  <TeamsCommunicationCenter />
-                </PageGuard>
-              }
-            />
-
-            {/* Admin Settings */}
-            <Route
-              path="admin-settings"
-              element={
-                <PageGuard
-                  pageKey="admin_settings"
-                  anyOf={IS_SHIFTPLANNER_MODE ? undefined : [
-                    { pageKey: "teams_center" },
-                    { pageKey: "shiftplan_control" },
-                    { pageKey: "odin_logic" },
-                    { pageKey: "protokoll" },
-                  ]}
-                >
-                  <AdminSettings />
-                </PageGuard>
-              }
-            />
-
-            {/* Admin */}
-            <Route
-              path="users"
-              element={
-                <PageGuard pageKey="user_management">
-                  <Users />
-                </PageGuard>
-              }
-            />
-
-            {/* Fallback */}
-            <Route path="*" element={<Navigate to={defaultRoute} replace />} />
-
-          </Route>
-      </Routes>
+          <Route path="*" element={<RedirectKeepSearch to={WORKSPACE_HOME} />} />
+        </Routes>
       </Suspense>
     </Router>
   );

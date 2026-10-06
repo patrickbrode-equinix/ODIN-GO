@@ -65,6 +65,14 @@ describe('shiftplanGeneration helpers', () => {
       candidates: [{ employee: 'Short Nights', preferences: { preferred_shifts: ['N'], night_model: 'SHORT' } }],
     }), []);
   });
+  it('uses the configured short-night series length for substitutes', () => {
+    const options = {
+      shiftType: 'night', shiftCode: 'NK', coverageDays: [1, 2, 3, 4],
+      candidates: [{ employee: 'Short Nights', preferences: { night_model: 'SHORT' } }],
+    };
+    assert.deepEqual(rankSafeSubstituteCandidates(options), []);
+    assert.deepEqual(rankSafeSubstituteCandidates({ ...options, rules: { shortNightSeriesDays: 4 } }).map((entry) => entry.employee), ['Short Nights']);
+  });
   it('normalizes staffing rule keys from legacy E/L/N format', () => {
     assert.equal(normalizePlanningShiftTypeKey('E'), 'early');
     assert.equal(normalizePlanningShiftTypeKey('L'), 'late');
@@ -219,6 +227,20 @@ describe('shiftplanGeneration helpers', () => {
     assert.equal(canStartShiftSeries({ day: 4, dayOfWeek: 2, definition: { code: 'E1WE', series_days: 7 } }), false);
     assert.equal(canStartShiftSeries({ day: 1, dayOfWeek: 6, definition: { code: 'N', series_days: 7 } }), false);
     assert.equal(canStartShiftSeries({ day: 4, dayOfWeek: 2, definition: { code: 'E1', series_days: 5 } }), true);
+  });
+
+  it('treats the E2 weekend family like the E1 weekend family', () => {
+    assert.equal(getPreferenceShiftCode('E2SA'), 'E2');
+    assert.equal(getPreferenceShiftCode('E2WE'), 'E2');
+    assert.equal(isShiftUnwantedByEmployeePreference({ unwanted_shifts: ['E2'] }, 'E2WE'), true);
+    assert.equal(isShiftPreferredByEmployeePreference({ preferred_shifts: ['E2'] }, 'E2SA'), true);
+    assert.equal(isShiftPreferredByEmployeePreference({ preferred_shifts: ['E1'] }, 'E2SA'), false);
+    assert.deepEqual(applyFixedShiftSeriesPattern({ code: 'E2SA', series_days: 1 }).applicable_days, [1, 2, 3, 4, 5, 6]);
+    assert.equal(applyFixedShiftSeriesPattern({ code: 'E2SA', series_days: 1 }).series_days, 6);
+    assert.deepEqual(applyFixedShiftSeriesPattern({ code: 'E2WE', series_days: 1 }).applicable_days, [1, 2, 3, 4, 5, 6, 0]);
+    assert.equal(applyFixedShiftSeriesPattern({ code: 'E2WE', series_days: 1 }).series_days, 7);
+    assert.equal(canStartShiftSeries({ day: 3, dayOfWeek: 1, definition: { code: 'E2WE', series_days: 7 } }), true);
+    assert.equal(canStartShiftSeries({ day: 4, dayOfWeek: 2, definition: { code: 'E2SA', series_days: 6 } }), false);
   });
 
   it('treats blocked weekend wishes as hard day matches across stored formats', () => {

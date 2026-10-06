@@ -6,6 +6,7 @@ export interface PlanningDraftSummary {
   version: number;
   status: string;
   title?: string | null;
+  description?: string | null;
   note?: string | null;
   created_at: string;
   created_by?: string;
@@ -19,8 +20,30 @@ export interface PlanningDraftGroup<D extends PlanningDraftSummary = PlanningDra
   type: 'month' | 'quarter' | 'year';
   year: number;
   quarter: number | null;
+  title?: string | null;
+  description?: string | null;
   created_at: string;
   drafts: D[];
+}
+
+export interface PlanningMetadataInput {
+  title?: string | null;
+  description?: string | null;
+}
+
+export async function updateDraftMetadata(id: number, metadata: PlanningMetadataInput) {
+  const response = await api.patch(`/shiftplan-control/drafts/${id}/metadata`, metadata);
+  return response.data as { ok: boolean; draft: any };
+}
+
+export async function updateGroupMetadata(groupId: string, metadata: PlanningMetadataInput) {
+  const response = await api.patch(`/shiftplan-control/drafts/groups/${encodeURIComponent(groupId)}/metadata`, metadata);
+  return response.data as { ok: boolean; updated: number };
+}
+
+/** True for real batch ids (quarter/year runs) that can carry their own metadata. */
+export function isEditableGroupId(groupId: string) {
+  return !groupId.startsWith('month:') && !groupId.startsWith('legacy-year:');
 }
 
 export async function exportPlanningGroup(groupId: string) {

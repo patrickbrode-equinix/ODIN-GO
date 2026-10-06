@@ -36,7 +36,6 @@ const services = [
     name: "Backend",
     directory: path.join(rootDir, "Backend"),
     env: {
-      APP_MODE: "shiftplanner",
       NODE_ENV: "development",
       PORT: "5055",
       DB_NAME: "shiftplanner",
@@ -49,7 +48,6 @@ const services = [
     directory: path.join(rootDir, "Frontend"),
     devArgs: ["run", "dev", "--", "--host", "127.0.0.1"],
     env: {
-      VITE_APP_MODE: "shiftplanner",
       BACKEND_URL: "http://127.0.0.1:5055",
       SHIFTPLANNER_API_KEY: applicationKey,
     },

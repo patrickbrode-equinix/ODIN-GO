@@ -27,42 +27,6 @@ export type WellbeingMetric = {
     updated_at: string;
 };
 
-export type WellbeingAnalyticsRow = {
-    worker: string;
-    nightCount: number;
-    weekendCount: number;
-    holidayCount: number;
-    lateCount: number;
-    earlyCount: number;
-    absentCount: number;
-    totalAssignments: number;
-    totalSpecialShifts: number;
-    maxStreak: number;
-    burdenScore: number;
-};
-
-export type WellbeingAnalyticsResponse = {
-    from: string;
-    to: string;
-    config: {
-        nightThreshold: number;
-        weekendThreshold: number;
-        streakThreshold: number;
-    };
-    summary: {
-        employeeCount: number;
-        totalNight: number;
-        totalWeekend: number;
-        totalHoliday: number;
-        totalLate: number;
-        totalAbsent: number;
-        averageBurden: number;
-        maxBurden: number;
-        highestBurdenWorker: string | null;
-    };
-    rows: WellbeingAnalyticsRow[];
-};
-
 export const fetchWellbeingConfig = async () => {
     const res = await api.get<WellbeingConfig>("/wellbeing/config");
     return res.data;
@@ -80,16 +44,5 @@ export const fetchWellbeingMetrics = async (year: number, month: number) => {
 
 export const computeWellbeingMetrics = async (year: number, month: number) => {
     const res = await api.post<{ success: true; count: number }>("/wellbeing/compute", { year, month });
-    return res.data;
-};
-
-export const fetchWellbeingAnalytics = async (params: { range: string; from?: string; to?: string; state?: string }) => {
-    const searchParams = new URLSearchParams();
-    searchParams.set("range", params.range);
-    if (params.from) searchParams.set("from", params.from);
-    if (params.to) searchParams.set("to", params.to);
-    if (params.state) searchParams.set("state", params.state);
-
-    const res = await api.get<WellbeingAnalyticsResponse>(`/stats/audit/wellbeing-analytics?${searchParams.toString()}`);
     return res.data;
 };

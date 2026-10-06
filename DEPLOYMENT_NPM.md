@@ -49,8 +49,9 @@ damit alle Requests mit unveraendertem Pfad und Query denselben Upstream nutzen.
    kein Passwort in Git hinterlegen. `shiftplanner_postgres_data_v2` und
    `shiftplanner_uploads_data` bleiben erhalten.
 3. Environment pruefen:
-   `CORS_ORIGINS=https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com`
-   und `COC_PUBLIC_URL=https://eqx-portal.corp.equinix.com`.
+   `CORS_ORIGINS=https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com`.
+   Nicht mehr benoetigte Variablen (`COC_*`, `SMTP_*`, `TEAMS_*`, `APP_MODE`,
+   `JWT_EXPIRES_IN`) koennen aus der Stack-Environment entfernt werden.
    Die obsolete Proxy-Port-Variable aus der Stack-Environment entfernen.
 4. Nur `SHIFTPLANNER_API_KEY` bei der geplanten manuellen Rotation aendern;
    den passenden Key auch in den Jarvis-Erweiterungsoptionen aktualisieren.

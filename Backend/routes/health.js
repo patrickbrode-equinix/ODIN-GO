@@ -4,7 +4,6 @@
 
 import express from "express";
 import db from "../db.js";
-import { config } from "../config/index.js";
 
 const router = express.Router();
 
@@ -32,7 +31,6 @@ router.get("/", async (req, res) => {
   // Always 200: backend is up, database may or may not be.
   res.json({
     backend: "ok",
-    appMode: config.APP_MODE,
     database: dbStatus,
     latencyMs: Date.now() - start,
     timestamp: new Date().toISOString(),
@@ -51,7 +49,6 @@ router.get("/ready", async (req, res) => {
     await db.query("SELECT 1");
     res.json({
       ready: true,
-      appMode: config.APP_MODE,
       database: "ok",
       latencyMs: Date.now() - start,
       timestamp: new Date().toISOString(),
@@ -59,7 +56,6 @@ router.get("/ready", async (req, res) => {
   } catch (err) {
     res.status(503).json({
       ready: false,
-      appMode: config.APP_MODE,
       database: "error",
       latencyMs: Date.now() - start,
       timestamp: new Date().toISOString(),

@@ -171,7 +171,7 @@ router.post("/compute", requireAuth, async (req, res) => {
                 }
 
                 // Night
-                if (shift === 'N') nightCount++;
+                if (shift === 'N' || shift === 'NK') nightCount++;
 
                 // Early (starts with E)
                 if (shift && shift.startsWith('E')) earlyCount++;
@@ -221,7 +221,7 @@ router.post("/compute", requireAuth, async (req, res) => {
         res.json({ success: true, count: Object.keys(empData).length });
 
     } catch (err) {
-        await client.query("ROLLBACK");
+        await client.query("ROLLBACK").catch(() => {});
         console.error("WELLBEING COMPUTE ERROR:", err);
         res.status(500).json({ error: "Computation failed" });
     } finally {

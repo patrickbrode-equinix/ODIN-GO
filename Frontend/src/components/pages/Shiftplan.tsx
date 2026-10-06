@@ -4,7 +4,7 @@
 /* ------------------------------------------------ */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, RefreshCw, Calendar, Plus, Trash2, Users } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, Calendar, Plus, Trash2, Users, Heart, AlertTriangle } from "lucide-react";
 import { EnterprisePageShell, EnterpriseCard, EnterpriseHeader, ENT_SECTION_TITLE } from "../layout/EnterpriseLayout";
 
 import { Button } from "../ui/button";
@@ -43,8 +43,13 @@ import { getHessenHolidayMap, getIslamicHolidayMap, HolidayMap } from "../../uti
 import { api } from "../../api/api";
 import { logActivityEventSafe } from "../../api/activity";
 import { fetchShiftHours, type ShiftHoursEmployee } from "../../api/shiftHours";
-import { computeUnderstaffWarnings } from "../shiftplan/shiftplan.warnings";
-import { calculateEmployeeHours, EmployeeMonthlyStats, HourLimitsConfig } from "../shiftplan/shiftplan.hours";
+import { computeUnderstaffWarnings, type StaffingDefinitionLike, type StaffingRuleLike } from "../shiftplan/shiftplan.warnings";
+import {
+  fetchShiftConfigStaffingRules,
+  fetchUnderstaffingSuggestions,
+  type UnderstaffingSuggestionItem,
+} from "../../api/shiftplanSuggestions";
+import { calculateEmployeeHours, computeShiftChangeHoursDelta, formatHoursDelta, EmployeeMonthlyStats, HourLimitsConfig } from "../shiftplan/shiftplan.hours";
 import { useWellbeingStore } from "../../store/wellbeingStore"; // [NEW]
 
 import { fetchViolations, validateShiftplan, ShiftViolation } from "../../api/shiftValidation"; // [NEW]
@@ -75,7 +80,15 @@ type ShiftplanIssueInsight = {
   detected: string;
   solution: string;
   meta: string;
+  dateKey?: string;
+  shiftType?: "night" | "late" | "early";
 };
+
+function hashString(value: string) {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) + hash + value.charCodeAt(i)) | 0;
+  return hash;
+}
 
 function parseIssueToggleSetting(value: unknown, fallback: boolean) {
   if (typeof value === "boolean") return value;
@@ -200,6 +213,10 @@ export default function Shiftplan() {
   const [coloPool, setColoPool] = useState<string[]>([]);
   const [dispatcherConfig, setDispatcherConfig] = useState<{ enabled: boolean; priorities: string[] }>({ enabled: true, priorities: [] });
   const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
+  const [shiftDefinitions, setShiftDefinitions] = useState<StaffingDefinitionLike[]>([]);
+  const [staffingRuleConfig, setStaffingRuleConfig] = useState<StaffingRuleLike[]>([]);
+  const [suggestionsMap, setSuggestionsMap] = useState<Map<string, UnderstaffingSuggestionItem>>(new Map());
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
   // [NEW] Shift Violations
   const [violations, setViolations] = useState<ShiftViolation[]>([]);
@@ -247,7 +264,7 @@ export default function Shiftplan() {
   const { selection, selectCell, clearSelection, isSelected, getSelectedKeys } = useShiftSelection();
 
   // Context Menu State
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; employeeName: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ anchorEl: HTMLElement; employeeName: string } | null>(null);
 
   // Swap Dialog State
   const [swapOpen, setSwapOpen] = useState(false);
@@ -353,8 +370,17 @@ export default function Shiftplan() {
 
   useEffect(() => {
     api.get("/shift-config/definitions")
-      .then(({ data }) => setShiftTimes(buildShiftTimeMap(data?.definitions)))
-      .catch(() => setShiftTimes({}));
+      .then(({ data }) => {
+        setShiftTimes(buildShiftTimeMap(data?.definitions));
+        setShiftDefinitions(Array.isArray(data?.definitions) ? (data.definitions as StaffingDefinitionLike[]) : []);
+      })
+      .catch(() => {
+        setShiftTimes({});
+        setShiftDefinitions([]);
+      });
+    fetchShiftConfigStaffingRules()
+      .then((rules) => setStaffingRuleConfig(rules))
+      .catch(() => setStaffingRuleConfig([]));
   }, []);
 
   // Load Hessen Holidays per year
@@ -567,11 +593,109 @@ export default function Shiftplan() {
   }, [selectedYear]);
 
   const warningsComputed = useMemo(
-    () => computeUnderstaffWarnings(schedule || {}, selectedYear, monthIndex1, daysInMonth),
-    [schedule, selectedYear, monthIndex1, daysInMonth]
+    () =>
+      computeUnderstaffWarnings(schedule || {}, selectedYear, monthIndex1, daysInMonth, new Date(), {
+        definitions: shiftDefinitions,
+        staffingRules: staffingRuleConfig,
+      }),
+    [schedule, selectedYear, monthIndex1, daysInMonth, shiftDefinitions, staffingRuleConfig]
   );
 
   const warningsForMonthTable = warningsVisible ? warningsComputed : [];
+
+  // Cheap fingerprint of schedule + absences so suggestions refresh when the plan changes materially.
+  const suggestionsVersion = useMemo(() => {
+    let acc = "";
+    for (const [name, plan] of Object.entries(schedule || {})) {
+      acc += `${name}:`;
+      for (const [day, code] of Object.entries((plan as Record<string, unknown>) || {})) acc += `${day}=${String(code || "")},`;
+      acc += ";";
+    }
+    for (const absence of absences) acc += `${absence.employee_name}|${absence.start_date}|${absence.end_date}|${absence.type};`;
+    return hashString(acc);
+  }, [schedule, absences]);
+
+  const hasUnderstaffing = warningsComputed.length > 0;
+  const suggestionsActive = viewMode === "month" && (warningsVisible || warningDialogOpen) && hasUnderstaffing;
+
+  useEffect(() => {
+    if (!suggestionsActive) {
+      setSuggestionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setSuggestionsLoading(true);
+    const timer = setTimeout(() => {
+      fetchUnderstaffingSuggestions(selectedYear, monthIndex1, controller.signal)
+        .catch(() => [] as UnderstaffingSuggestionItem[])
+        .then((items) => {
+          if (cancelled) return;
+          const next = new Map<string, UnderstaffingSuggestionItem>();
+          for (const item of items) {
+            if (item && item.date && item.shiftType) next.set(`${item.date}|${item.shiftType}`, item);
+          }
+          setSuggestionsMap(next);
+          setSuggestionsLoading(false);
+        });
+    }, 600);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [suggestionsActive, selectedYear, monthIndex1, suggestionsVersion]);
+
+  const renderSuggestions = (dateKey: string, shiftType: string) => {
+    if (!issueShowSolutions) return null;
+    const item = suggestionsMap.get(`${dateKey}|${shiftType}`);
+    if (!item) {
+      return suggestionsLoading ? (
+        <div className="mt-2 text-xs italic text-muted-foreground">{isGerman ? "Ersatz wird berechnet…" : "Calculating replacements…"}</div>
+      ) : null;
+    }
+    const candidates = Array.isArray(item.candidates) ? item.candidates : [];
+    return (
+      <div className="mt-2 space-y-1.5">
+        {suggestionsLoading ? (
+          <div className="text-xs italic text-muted-foreground">{isGerman ? "Ersatz wird berechnet…" : "Calculating replacements…"}</div>
+        ) : null}
+        {candidates.length === 0 ? (
+          <div className="text-xs text-muted-foreground">{isGerman ? "Kein konfliktfreier Ersatz verfügbar" : "No conflict-free replacement available"}</div>
+        ) : (
+          candidates.map((candidate) => {
+            const level = candidate.wellbeing?.level || "ok";
+            const note = candidate.wellbeing?.note;
+            return (
+              <div key={candidate.employee} className="rounded-lg border border-border bg-muted/25 px-3 py-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                  <span className="font-semibold text-foreground">{candidate.employee}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {candidate.fromShiftCode ? `${isGerman ? "aktuell" : "current"}: ${candidate.fromShiftCode}` : isGerman ? "frei" : "off"}
+                  </span>
+                  {level !== "ok" ? (
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                        level === "high"
+                          ? "bg-red-500/20 text-red-700 dark:text-red-200"
+                          : "bg-amber-500/20 text-amber-700 dark:text-amber-200"
+                      }`}
+                    >
+                      {level === "high" ? <AlertTriangle className="h-3 w-3" /> : <Heart className="h-3 w-3" />}
+                      {isGerman ? "Wellbeing-Hinweis" : "Wellbeing note"}{note ? `: ${note}` : ""}
+                    </span>
+                  ) : null}
+                </div>
+                {Array.isArray(candidate.reasons) && candidate.reasons.length > 0 ? (
+                  <div className="mt-1 text-[11px] text-muted-foreground">{candidate.reasons.join(" · ")}</div>
+                ) : null}
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  };
 
   const warningsSummary = useMemo(() => {
     const night = warningsComputed.filter((w) => w.kind === "night");
@@ -584,20 +708,21 @@ export default function Shiftplan() {
     const items: ShiftplanIssueInsight[] = [];
 
     warningsComputed.forEach((warning, index) => {
-      const delta = Math.max((warning.target || 0) - (warning.actual || 0), 0);
       const shiftLabel = formatShiftTypeLabel(warning.kind, shiftTypeLabels);
       items.push({
         id: `warning-${index}`,
         source: "understaffing",
-        severity: delta >= 2 || warning.actual === 0 ? "high" : "medium",
+        severity: warning.severity === "critical" ? "high" : "medium",
+        dateKey: warning.dateKey,
+        shiftType: warning.shiftType,
         title: isGerman ? "Unterbesetzung erkannt" : "Understaffing detected",
         detected: isGerman
-          ? `${warning.label} am ${warning.dateKey}: ${shiftLabel} ist mit ${warning.actual}/${warning.target} besetzt.`
-          : `${warning.label} on ${warning.dateKey}: ${shiftLabel} is staffed with ${warning.actual}/${warning.target}.`,
+          ? `${warning.label} am ${warning.dateKey}: ${shiftLabel} ist mit ${warning.actual}/${warning.max} besetzt (${warning.missing} fehlt).`
+          : `${warning.label} on ${warning.dateKey}: ${shiftLabel} is staffed with ${warning.actual}/${warning.max} (${warning.missing} missing).`,
         solution: isGerman
           ? `Besetzung in ${shiftLabel} erhöhen, Reserve/DBS prüfen oder einen verfügbaren Mitarbeiter aus einer weniger kritischen Schicht verschieben.`
           : `Increase staffing in ${shiftLabel}, check reserve/DBS capacity, or move an available employee from a less critical shift.`,
-        meta: isGerman ? `Soll ${warning.target}, Ist ${warning.actual}` : `Target ${warning.target}, actual ${warning.actual}`,
+        meta: isGerman ? `Max ${warning.max}, Ist ${warning.actual}` : `Max ${warning.max}, actual ${warning.actual}`,
       });
     });
 
@@ -690,19 +815,27 @@ export default function Shiftplan() {
       fairness_first: { understaffing: 40, staffing: 38, coverage: 36, absence: 34, validation: 46, constraint: 44 },
     };
 
-    return items
-      .sort((left, right) => {
-        const leftScore = (left.severity === "high" ? 100 : 60) + sourceWeight[issuePriorityMode][left.source];
-        const rightScore = (right.severity === "high" ? 100 : 60) + sourceWeight[issuePriorityMode][right.source];
-        return rightScore - leftScore;
-      })
-      .slice(0, 12);
+    // Severity (high first) dominates, then source weight, then date for stable order.
+    const sorted = items.sort((left, right) => {
+      const leftScore = (left.severity === "high" ? 100 : 60) + sourceWeight[issuePriorityMode][left.source];
+      const rightScore = (right.severity === "high" ? 100 : 60) + sourceWeight[issuePriorityMode][right.source];
+      if (rightScore !== leftScore) return rightScore - leftScore;
+      return String(left.dateKey || "").localeCompare(String(right.dateKey || ""));
+    });
+    // The cap must never hide critical understaffing items.
+    const head = sorted.slice(0, 12);
+    const hiddenCritical = sorted.slice(12).filter((entry) => entry.source === "understaffing" && entry.severity === "high");
+    return [...head, ...hiddenCritical];
   }, [warningsComputed, staffingResults, coverageViolations, violations, absenceConflicts, constraintViolations, issuePriorityMode]);
 
   const issueCounts = useMemo(() => {
     const high = issueInsights.filter((entry) => entry.severity === "high").length;
-    return { high, total: issueInsights.length };
-  }, [issueInsights]);
+    // High issues from other sources; critical understaffing is counted from warningsComputed to avoid double counting.
+    const highOther = issueInsights.filter((entry) => entry.severity === "high" && entry.source !== "understaffing").length;
+    const understaffWarning = warningsComputed.filter((entry) => entry.severity === "warning").length;
+    const understaffCritical = warningsComputed.filter((entry) => entry.severity === "critical").length;
+    return { high, highOther, understaffWarning, understaffCritical, total: issueInsights.length };
+  }, [issueInsights, warningsComputed]);
 
   const manualEmployeeNameSet = useMemo(() => {
     return new Set(
@@ -842,6 +975,49 @@ export default function Shiftplan() {
     }
     return map;
   }, [visibleSchedule, selectedYear, monthIndex1, daysInMonth, holidays, hourLimits, defaultTargetHours, absencesByEmployee]);
+
+  // Hours effect shown in the shift change confirmation (one entry per affected employee).
+  const manualChangeHoursDelta = useMemo(() => {
+    if (!manualChangeTarget || !manualChangeValue) return [];
+    return computeShiftChangeHoursDelta({
+      schedule: schedule as Record<string, Record<number, string>>,
+      changes: manualChangeTarget.changes.map((change) => ({
+        employeeName: manualChangeTarget.employeeName,
+        day: change.day,
+        newCode: manualChangeValue,
+      })),
+      year: selectedYear,
+      monthIndex1,
+      daysInMonth,
+      holidays,
+      absencesByEmployee,
+      sollHours: defaultTargetHours,
+    });
+  }, [manualChangeTarget, manualChangeValue, schedule, selectedYear, monthIndex1, daysInMonth, holidays, absencesByEmployee, defaultTargetHours]);
+
+  // Context menu header info (selected dates and current shift code(s)).
+  const contextMenuSelection = contextMenu
+    ? Array.from(getSelectedKeys())
+        .map((key) => {
+          const [employeeName, rawDay] = key.split("|||");
+          return { employeeName, day: Number(rawDay) };
+        })
+        .filter((entry) => entry.employeeName === contextMenu.employeeName && Number.isInteger(entry.day))
+        .sort((a, b) => a.day - b.day)
+    : [];
+  const contextMenuDateLabel = (() => {
+    if (!contextMenuSelection.length) return "";
+    const mm = String(monthIndex1).padStart(2, "0");
+    const days = contextMenuSelection.map((entry) => entry.day);
+    const contiguous = days.every((day, index) => index === 0 || day === days[index - 1] + 1);
+    const text = days.length > 1 && contiguous
+      ? `${days[0]}.–${days[days.length - 1]}.`
+      : days.map((day) => `${day}.`).join(", ");
+    return `${text}${mm}.${selectedYear}`;
+  })();
+  const contextMenuCurrentLabel = Array.from(
+    new Set(contextMenuSelection.map((entry) => String(schedule?.[entry.employeeName]?.[entry.day] || "—")))
+  ).join(", ");
 
   /* ------------------------------------------------ */
   /* WELLBEING LOGIC (NEW)                            */
@@ -1039,15 +1215,19 @@ export default function Shiftplan() {
     if (!isSelected(args.employeeName, args.day)) {
       selectCell(args.employeeName, args.day, { shiftKey: false, ctrlKey: false, metaKey: false });
     }
-    // Align menu to the row's top edge (not cursor Y) to prevent visual downward shift.
-    // clientX stays as-is (horizontal = cursor position is fine).
-    const rowTop = (e.currentTarget as HTMLElement).getBoundingClientRect().top;
-    setContextMenu({ x: e.clientX, y: rowTop, employeeName: args.employeeName });
+    // Anchor the menu to the clicked cell element (position is derived from its bounding rect).
+    setContextMenu({ anchorEl: e.currentTarget as HTMLElement, employeeName: args.employeeName });
   };
 
-  const applyShiftChange = async (value: string) => {
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const applyShiftChange = async (rawValue: string) => {
     const keys = getSelectedKeys();
     if (!keys.size) return;
+
+    // Menu entries arrive as SET_SHIFT:<code>; they open the confirmation directly with the code preset.
+    const presetShiftCode = rawValue.startsWith("SET_SHIFT:") ? rawValue.slice("SET_SHIFT:".length) : "";
+    const value = presetShiftCode ? "CHANGE_SHIFT" : rawValue;
 
     if (value === "CHANGE_SHIFT") {
       const selected = Array.from(keys)
@@ -1070,8 +1250,13 @@ export default function Shiftplan() {
         .sort((a, b) => a.day - b.day)
         .map(({ day }) => ({ day, current: String(schedule?.[employeeName]?.[day] || "") || null }));
       setManualChangeTarget({ employeeName, changes });
-      setManualChangeValue("");
-      setManualChangeOpen(true);
+      setManualChangeValue(presetShiftCode);
+      if (presetShiftCode) {
+        setManualChangeOpen(false);
+        setManualChangeConfirmOpen(true);
+      } else {
+        setManualChangeOpen(true);
+      }
       setContextMenu(null);
       return;
     }
@@ -1497,8 +1682,8 @@ export default function Shiftplan() {
             <div className="rounded-lg border border-border bg-background/75 px-4 py-4">
               <div className="text-[10px] font-bold uppercase tracking-[0.24em] theme-text-soft">{isGerman ? "Signalstatus" : "Signal state"}</div>
               <div className="mt-3 flex flex-wrap gap-2">
-                <span className="inline-flex items-center rounded-full border border-amber-400/22 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-100">{warningsComputed.length} {isGerman ? "Warnungen" : "warnings"}</span>
-                <span className="inline-flex items-center rounded-full border border-rose-400/22 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold text-rose-100">{issueCounts.high} {isGerman ? "kritisch" : "critical"}</span>
+                <span className="inline-flex items-center rounded-full border border-amber-400/22 bg-amber-500/10 px-3 py-1 text-[11px] font-semibold text-amber-100">{issueCounts.understaffWarning} {isGerman ? "Warnungen" : "warnings"}</span>
+                <span className="inline-flex items-center rounded-full border border-rose-400/22 bg-rose-500/10 px-3 py-1 text-[11px] font-semibold text-rose-100">{issueCounts.understaffCritical + issueCounts.highOther} {isGerman ? "kritisch" : "critical"}</span>
                 <span className="inline-flex items-center rounded-full border border-cyan-400/22 bg-cyan-500/10 px-3 py-1 text-[11px] font-semibold text-cyan-100">{hiddenEmployees.size} {isGerman ? "ausgeblendet" : "hidden"}</span>
               </div>
             </div>
@@ -1757,12 +1942,13 @@ export default function Shiftplan() {
               />
               {contextMenu && (
                 <ShiftContextMenu
-                  x={contextMenu!.x}
-                  y={contextMenu!.y}
-                  employeeName={contextMenu!.employeeName || ""} // [NEW] Pass Name
+                  anchorEl={contextMenu.anchorEl}
+                  employeeName={contextMenu.employeeName || ""}
                   selectedCount={getSelectedKeys().size}
-                  onClose={() => setContextMenu(null)}
-                  onSelect={applyShiftChange}
+                  dateLabel={contextMenuDateLabel}
+                  currentLabel={contextMenuCurrentLabel}
+                  onClose={closeContextMenu}
+                  onSelect={(code) => void applyShiftChange(`SET_SHIFT:${code}`)}
                 />
               )}
             </div>
@@ -1845,13 +2031,21 @@ export default function Shiftplan() {
           <div className="max-h-[60vh] space-y-2 overflow-auto pr-1">
             {warningsComputed.length > 0 ? (
               warningsComputed.map((warning, index) => (
-                <div key={`${warning.dateKey}-${warning.kind}-${warning.label}-${index}`} className="rounded-2xl border border-red-500/20 bg-red-500/5 px-4 py-3">
+                <div key={`${warning.dateKey}-${warning.kind}-${index}`} className={`rounded-2xl border px-4 py-3 ${warning.severity === "critical" ? "border-red-500/30 bg-red-500/10" : "border-amber-500/30 bg-amber-500/10"}`}>
                   <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
-                    <div className="text-sm font-semibold text-red-700 dark:text-red-100">{warning.label}</div>
-                    <div className="text-xs uppercase tracking-[0.18em] text-red-700/80 dark:text-red-200/70">{formatShiftTypeLabel(warning.kind, shiftTypeLabels)}</div>
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${warning.severity === "critical" ? "bg-red-500/20 text-red-700 dark:text-red-200" : "bg-amber-500/20 text-amber-700 dark:text-amber-200"}`}>
+                        {warning.severity === "critical" ? (isGerman ? "Kritisch" : "Critical") : (isGerman ? "Unterbesetzung" : "Understaffing")}
+                      </span>
+                      <span className="text-sm font-semibold text-foreground">{warning.label}</span>
+                    </div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">{formatShiftTypeLabel(warning.kind, shiftTypeLabels)}</div>
                   </div>
                   <div className="mt-2 text-sm text-foreground">{warning.dateKey}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{isGerman ? "Ist" : "Actual"}: {warning.actual} | {isGerman ? "Soll" : "Target"}: {warning.target}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {isGerman ? "Ist" : "Actual"} {warning.actual} / Max {warning.max} ({isGerman ? "fehlt" : "missing"} {warning.missing})
+                  </div>
+                  {renderSuggestions(warning.dateKey, warning.shiftType)}
                 </div>
               ))
             ) : (
@@ -1887,11 +2081,12 @@ export default function Shiftplan() {
                       <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                         <div className="text-sm font-semibold text-foreground">{issue.title}</div>
                         <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${issue.severity === 'high' ? 'bg-red-500/20 text-red-700 dark:text-red-200' : 'bg-amber-500/20 text-amber-700 dark:text-amber-200'}`}>
-                          {issue.severity === 'high' ? (isGerman ? 'Kritisch' : 'Critical') : (isGerman ? 'Hinweis' : 'Notice')}
+                          {issue.severity === 'high' ? (isGerman ? 'Kritisch' : 'Critical') : issue.source === 'understaffing' ? (isGerman ? 'Unterbesetzung' : 'Understaffing') : (isGerman ? 'Hinweis' : 'Notice')}
                         </span>
                       </div>
                       <div className="mt-2 text-sm text-muted-foreground">{issue.detected}</div>
                       {issueShowSolutions ? <div className="mt-2 text-sm text-muted-foreground"><span className="font-semibold text-sky-700 dark:text-sky-200">{isGerman ? 'Lösung' : 'Solution'}:</span> {issue.solution}</div> : null}
+                      {issue.source === 'understaffing' && issue.dateKey && issue.shiftType ? renderSuggestions(issue.dateKey, issue.shiftType) : null}
                       <div className="mt-2 text-xs text-muted-foreground">{isGerman ? 'Quelle' : 'Source'}: {formatIssueSource(issue.source, isGerman)} | {issue.meta}</div>
                     </div>
                   ))
@@ -1973,6 +2168,31 @@ export default function Shiftplan() {
                 ))}
               </div>
             </div>
+            {manualChangeHoursDelta.length > 0 && (
+              <div className="rounded-lg border border-border bg-muted/25 p-3">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {isGerman ? "Auswirkung auf die Monatsstunden" : "Effect on monthly hours"}
+                </div>
+                <div className="mt-2 space-y-1">
+                  {manualChangeHoursDelta.map((entry) => {
+                    const fmt = (value: number) => value.toFixed(1).replace(".", ",");
+                    const rounded = Math.round(entry.delta * 10) / 10;
+                    const tone = rounded > 0 ? "text-emerald-500" : rounded < 0 ? "text-red-500" : "text-muted-foreground";
+                    return (
+                      <div key={entry.employeeName} className="flex flex-wrap items-center justify-between gap-x-3 text-xs">
+                        <span className="font-medium">{entry.employeeName}</span>
+                        <span>
+                          <span className={`font-bold ${tone}`}>{formatHoursDelta(entry.delta)}</span>
+                          <span className="ml-2 text-muted-foreground">
+                            {fmt(entry.oldHours)} → {fmt(entry.newHours)} h ({isGerman ? "Soll" : "target"} {fmt(entry.soll)} h)
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setManualChangeConfirmOpen(false)} disabled={manualChangeSaving}>{t("common.cancel")}</Button>

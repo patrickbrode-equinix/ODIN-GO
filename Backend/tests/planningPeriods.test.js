@@ -1,7 +1,7 @@
-import { test } from 'node:test';
+﻿import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { getPlanningMonths, groupPlanningDrafts } from '../lib/planningPeriods.js';
+import { getPlanningMonths, groupPlanningDrafts, buildDraftSheetHeaderText, sanitizeCellText } from '../lib/planningPeriods.js';
 import { generatePeriodDrafts } from '../services/planningPeriodDrafts.js';
 import { buildExcelWorkbook } from '../routes/shiftplanControl.js';
 
@@ -116,4 +116,61 @@ test('quarter and year Excel exports retain monthly versions in chronological wo
     assert.equal(restored.worksheets.at(-1).getCell(4, 2).value, 2);
     assert.equal(restored.worksheets[0].getCell(5, 2).value, 'E1');
   }
+});
+
+
+test('groupPlanningDrafts exposes group title and description from the batch drafts', () => {
+  const batch = { id: 'g1', type: 'quarter', year: 2027, quarter: 1 };
+  const groups = groupPlanningDrafts([
+    { ...summary(1, '2027-01', batch), title: null, description: null },
+    { ...summary(2, '2027-02', batch), title: 'Q1 Plan', description: 'Beschreibung' },
+    { ...summary(3, '2027-05', null), title: 'Einzel', description: 'x' },
+  ]);
+  const group = groups.find(entry => entry.id === 'g1');
+  assert.equal(group.title, 'Q1 Plan');
+  assert.equal(group.description, 'Beschreibung');
+  const month = groups.find(entry => entry.type === 'month');
+  assert.equal(month.title, null);
+  assert.equal(month.description, null);
+});
+
+test('period inserts keep the existing parameter positions and append title/description', async () => {
+  const pool = fakePool();
+  const result = await generatePeriodDrafts({ year: 2027, quarter: 1, title: '  Q1  ', description: 'Text', createdBy: 'admin', ownerId: 7, pool, generateMonth: async (y, m) => plan(m) });
+  assert.equal(result.title, 'Q1');
+  for (const { params } of pool.calls.filter(call => call.sql.includes('INSERT'))) {
+    assert.equal(params[9], 7);
+    assert.equal(params[10], 'Q1');
+    assert.equal(params[11], 'Text');
+    assert.equal(params.length, 12);
+  }
+});
+
+test('draft sheet header text combines title, description and meta line safely', () => {
+  const meta = 'Version 1 | Status: draft';
+  assert.deepEqual(buildDraftSheetHeaderText({ metaLine: meta, sheetName: 'Januar 2027' }),
+    { title: 'ODIN Schichtplan – Januar 2027', subtitle: meta, lineCount: 1, rowHeight: 18 });
+  const withText = buildDraftSheetHeaderText({ title: 'Mein Plan', description: 'Notiz', metaLine: meta, sheetName: 'Januar 2027' });
+  assert.equal(withText.title, 'Mein Plan – Januar 2027');
+  assert.equal(withText.subtitle, `Notiz\n${meta}`);
+  assert.equal(withText.rowHeight, 30);
+  assert.equal(sanitizeCellText('=1+1'), ' =1+1');
+});
+
+test('Excel month sheets and summary show title and description', async () => {
+  const months = getPlanningMonths(2027, 1);
+  const drafts = months.map((month, index) => ({ month, version: 1, status: 'draft', title: 'Q1 Plan', description: 'Beschreibung', shifts_json: [], conflicts: [], config_snapshot: {}, fairness: {}, created_at: '2026-10-06T12:00:00Z', created_by: 'a' }));
+  const workbook = await buildExcelWorkbook(drafts, { type: 'quarter', year: 2027, quarter: 1, title: 'Gruppe', description: 'Gruppenbeschreibung' });
+  const restored = new ExcelJS.Workbook();
+  await restored.xlsx.load(await workbook.xlsx.writeBuffer());
+  assert.equal(restored.worksheets.length, 4);
+  assert.match(String(restored.worksheets[0].getCell(1, 1).value), /^Gruppe – /);
+  assert.match(String(restored.worksheets[0].getCell(2, 1).value), /^Beschreibung\nVersion 1/);
+  assert.equal(restored.worksheets.at(-1).getCell(1, 1).value, 'Gruppe');
+  assert.equal(restored.worksheets.at(-1).getCell(2, 1).value, 'Gruppenbeschreibung');
+  const single = await buildExcelWorkbook([drafts[0]]);
+  const one = new ExcelJS.Workbook();
+  await one.xlsx.load(await single.xlsx.writeBuffer());
+  assert.match(String(one.worksheets[0].getCell(1, 1).value), /^Q1 Plan – /);
+  assert.equal(one.worksheets.length, 1);
 });

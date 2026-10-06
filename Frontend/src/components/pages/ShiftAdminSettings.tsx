@@ -34,6 +34,7 @@ import type { TranslationKey } from '../../context/LanguageContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { dedupeEmployeeNames } from '../../utils/employeeNames';
+import { PreferenceWeightSettings } from './PreferenceWeightSettings';
 
 /* ── locale helpers ── */
 
@@ -94,6 +95,7 @@ interface ShiftDefinition {
   is_active: boolean;
   sort_order: number;
   applicable_days: number[];
+  free_days_after?: number | null;
   modes?: ShiftMode[];
   day_overrides?: ShiftDayOverride[];
 }
@@ -208,10 +210,6 @@ function getPlanningAuditIssues({
     }
   }
 
-  if (advancedSettings.blockedWeekdayEmployees.some((employee) => !employees.includes(employee))) {
-    add('weekday-access-unknown-employee', 'warning', 'Die Freigabe für nicht verfügbare Wochentage enthält Mitarbeitende, die nicht mehr in der aktuellen Mitarbeiterliste stehen.', 'The unavailable-weekday access list contains employees who are no longer in the current employee list.');
-  }
-
   return issues;
 }
 
@@ -245,6 +243,7 @@ interface ShortNightOptions {
   end_time: string;
   free_days_after: number;
   duration_hours?: number;
+  series_days?: number;
 }
 
 interface FairnessRules {
@@ -322,7 +321,7 @@ interface AdvancedPlanningSettings {
   issuePanelEnabled: boolean;
   issueShowSolutions: boolean;
   issuePriorityMode: 'staffing_first' | 'balanced' | 'fairness_first';
-  blockedWeekdayEmployees: string[];
+  blockedDaysEnabled: boolean;
   adminFlagsEnabled: boolean;
   preferredColleaguesEnabled: boolean;
 }
@@ -331,6 +330,7 @@ interface DbsConfig {
   enabled: boolean;
   shiftCode: string;
   freeDaysAfterBlock: number;
+  fillGaps: boolean;
 }
 
 interface ColoConfig {
@@ -363,7 +363,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   issuePanelEnabled: true,
   issueShowSolutions: true,
   issuePriorityMode: 'balanced',
-  blockedWeekdayEmployees: [],
+  blockedDaysEnabled: false,
   adminFlagsEnabled: false,
   preferredColleaguesEnabled: false,
 };
@@ -372,6 +372,7 @@ const DEFAULT_DBS_CONFIG: DbsConfig = {
   enabled: true,
   shiftCode: 'DBS',
   freeDaysAfterBlock: 2,
+  fillGaps: false,
 };
 
 const DEFAULT_COLO_CONFIG: ColoConfig = {
@@ -412,7 +413,7 @@ const FIXED_SHIFT_TYPE_OPTIONS: Array<{ value: FixedShiftTypeValue; labelDe: str
   { value: 'late', labelDe: 'Nur Spaetschicht', labelEn: 'Late only' },
   { value: 'night', labelDe: 'Nur Nachtschicht', labelEn: 'Night only' },
 ];
-const BUILT_IN_SHIFT_CODES = new Set(['E1', 'E2', 'E1SA', 'E1WE', 'L1', 'L2', 'L1WE', 'N', 'DBS', 'FS', 'ABW', 'S']);
+const BUILT_IN_SHIFT_CODES = new Set(['E1', 'E2', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1', 'L2', 'L1WE', 'N', 'DBS', 'FS', 'ABW', 'S']);
 
 function formatFixedShiftType(value: string | null | undefined, isGerman: boolean) {
   switch (String(value || '').trim().toLowerCase()) {
@@ -448,7 +449,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     issuePanelEnabled: parseBooleanSetting(settings['shiftplan.issue_panel_enabled'], DEFAULT_ADVANCED_SETTINGS.issuePanelEnabled),
     issueShowSolutions: parseBooleanSetting(settings['shiftplan.issue_show_solutions'], DEFAULT_ADVANCED_SETTINGS.issueShowSolutions),
     issuePriorityMode: (settings['shiftplan.issue_priority_mode'] as AdvancedPlanningSettings['issuePriorityMode']) || DEFAULT_ADVANCED_SETTINGS.issuePriorityMode,
-    blockedWeekdayEmployees: parseEmployeePoolSetting(settings['shiftplan.blocked_weekday_employee_pool']),
+    blockedDaysEnabled: parseBooleanSetting(settings['shiftplan.blocked_days_enabled'], DEFAULT_ADVANCED_SETTINGS.blockedDaysEnabled),
     adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
     preferredColleaguesEnabled: parseBooleanSetting(settings['shiftplan.preferred_colleagues_enabled'], DEFAULT_ADVANCED_SETTINGS.preferredColleaguesEnabled),
   };
@@ -459,6 +460,7 @@ function extractDbsConfig(settings: Record<string, string>): DbsConfig {
     enabled: parseBooleanSetting(settings['shiftplan.dbs_enabled'], DEFAULT_DBS_CONFIG.enabled),
     shiftCode: settings['shiftplan.dbs_shift_code'] || DEFAULT_DBS_CONFIG.shiftCode,
     freeDaysAfterBlock: parseNumberSetting(settings['shiftplan.dbs_free_days_after_block'], DEFAULT_DBS_CONFIG.freeDaysAfterBlock),
+    fillGaps: parseBooleanSetting(settings['shiftplan.dbs_fill_gaps'], DEFAULT_DBS_CONFIG.fillGaps),
   };
 }
 
@@ -694,7 +696,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const shiftDayOffsetOptions = getShiftDayOffsetOptions(isGerman);
   const [definitions, setDefinitions] = useState<ShiftDefinition[]>([]);
   const [rotation, setRotation] = useState<RotationRules | null>(null);
-  const [shortNightOptions, setShortNightOptions] = useState<ShortNightOptions>({ mode: 'MIXED', enabled: true, start_time: '21:45', end_time: '06:45', free_days_after: 2 });
+  const [shortNightOptions, setShortNightOptions] = useState<ShortNightOptions>({ mode: 'MIXED', enabled: true, start_time: '21:45', end_time: '06:45', free_days_after: 2, series_days: 3 });
   const [fairness, setFairness] = useState<FairnessRules | null>(null);
   const [planConfig, setPlanConfig] = useState<PlanningConfig | null>(null);
   const [exclusions, setExclusions] = useState<ShiftplanExclusion[]>([]);
@@ -703,7 +705,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [dbsConfig, setDbsConfig] = useState<DbsConfig>(DEFAULT_DBS_CONFIG);
   const [coloConfig, setColoConfig] = useState<ColoConfig>(DEFAULT_COLO_CONFIG);
   const [coloSearch, setColoSearch] = useState('');
-  const [blockedWeekdaySearch, setBlockedWeekdaySearch] = useState('');
   const [overtimeConfig, setOvertimeConfig] = useState<OvertimeConfig>(DEFAULT_OVERTIME_CONFIG);
   const [holidayStaffingConfig, setHolidayStaffingConfig] = useState<HolidayStaffingConfig>(extractHolidayStaffingConfig({}));
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedPlanningSettings>(DEFAULT_ADVANCED_SETTINGS);
@@ -898,7 +899,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.issue_panel_enabled': advancedSettings.issuePanelEnabled,
         'shiftplan.issue_show_solutions': advancedSettings.issueShowSolutions,
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
-        'shiftplan.blocked_weekday_employee_pool': JSON.stringify(advancedSettings.blockedWeekdayEmployees),
+        'shiftplan.blocked_days_enabled': advancedSettings.blockedDaysEnabled,
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
         'shiftplan.preferred_colleagues_enabled': advancedSettings.preferredColleaguesEnabled,
       });
@@ -919,6 +920,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.dbs_shift_code': dbsConfig.shiftCode,
         'shiftplan.dbs_required_staff': 1,
         'shiftplan.dbs_free_days_after_block': dbsConfig.freeDaysAfterBlock,
+        'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
       });
       await loadAll();
       showToast(t("shiftAdmin.toastDbsConfigSaved"));
@@ -1303,14 +1305,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const selectedColoEmployees = coloConfig.employeePool.filter((employee) => (
     !normalizedColoSearch || employee.toLocaleLowerCase('de').includes(normalizedColoSearch)
   ));
-  const normalizedBlockedWeekdaySearch = blockedWeekdaySearch.trim().toLocaleLowerCase('de');
-  const availableBlockedWeekdayEmployees = employees.filter((employee) => (
-    !advancedSettings.blockedWeekdayEmployees.includes(employee)
-    && (!normalizedBlockedWeekdaySearch || employee.toLocaleLowerCase('de').includes(normalizedBlockedWeekdaySearch))
-  ));
-  const selectedBlockedWeekdayEmployees = advancedSettings.blockedWeekdayEmployees.filter((employee) => (
-    !normalizedBlockedWeekdaySearch || employee.toLocaleLowerCase('de').includes(normalizedBlockedWeekdaySearch)
-  ));
   const minimumColoPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendDayStaff) + coloConfig.nightStaff;
   const planningAuditErrors = planningAuditIssues.filter((issue) => issue.level === 'error');
   const planningAuditWarnings = planningAuditIssues.filter((issue) => issue.level === 'warning');
@@ -1481,6 +1475,19 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   <div className="xl:col-span-1">
                     <label className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Blocktage' : 'Block days'}</label>
                     <input type="number" min="1" max="31" value={definition.series_days} onChange={(event) => updateDef(definition.id, 'series_days', normalizeSeriesDays(event.target.value, 1))} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  </div>
+                  <div className="xl:col-span-3">
+                    <label className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Freie Tage nach der Schicht' : 'Days off after the shift'}</label>
+                    <input
+                      type="number"
+                      min="0"
+                      max="14"
+                      value={definition.free_days_after ?? ''}
+                      placeholder={isGerman ? 'Standard (globale Regel)' : 'Default (global rule)'}
+                      onChange={(event) => updateDef(definition.id, 'free_days_after', event.target.value === '' ? null : Math.max(0, Math.min(14, Number.parseInt(event.target.value, 10) || 0)))}
+                      className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
+                    />
+                    <p className="mt-1 text-[10px] text-slate-500">{isGerman ? 'Freie Tage nach einem abgeschlossenen Block dieser Schicht. Leer = globale Regeln (Nacht/Wochenende). Ein Schichtmodus mit eigenen freien Tagen hat Vorrang.' : 'Days off after a finished block of this shift. Empty = global rules (night/weekend). A shift mode with its own days off takes precedence.'}</p>
                   </div>
                   <div className="xl:col-span-1">
                     <label className="mb-1 flex items-center text-[10px] uppercase tracking-[0.18em] text-slate-400">{t("shiftAdmin.defMin")} <HelpTooltip textKey="shiftAdmin.helpDefMinMax" t={t} /></label>
@@ -1718,6 +1725,24 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             </div>
           </div>
 
+          <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={dbsConfig.fillGaps} onChange={(event) => setDbsConfig({ ...dbsConfig, fillGaps: event.target.checked })} className="mt-1 rounded border-white/20 bg-slate-950" />
+            <span>
+              <span className="block font-medium">{isGerman ? 'Lückentage durch anderen DBS-Mitarbeiter auffüllen' : 'Fill gap days with another DBS employee'}</span>
+              <span className="mt-1 block text-xs text-slate-400">
+                {isGerman
+                  ? 'Standard: aus. Kann der Mitarbeiter der DBS-Woche einen Tag nicht übernehmen (z. B. Abwesenheit oder gesperrter Tag), bleibt der Tag ohne DBS und der nächste Mitarbeiter startet seinen vollständigen Block zur nächsten Rotation (nächster Montag). Eingeschaltet springt ein anderer Pool-Mitarbeiter für die Lücke ein.'
+                  : 'Default: off. If the employee of the DBS week cannot cover a day (e.g. absence or blocked day), that day stays without DBS and the next employee starts his full block at the next rotation (next Monday). When enabled, another pool member covers the gap.'}
+              </span>
+            </span>
+          </label>
+
+          <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-xs text-slate-400">
+            {isGerman
+              ? 'Hinweis: Die DBS-Zeiten (Von/Bis/Stunden) werden oben in der Schichtkarte der DBS-Schicht bearbeitet, nicht hier.'
+              : 'Note: DBS times (from/to/hours) are edited in the DBS shift card in the shift definitions above, not here.'}
+          </div>
+
           {/* Save DBS config */}
           <div className="flex justify-end">
             <button onClick={saveDbsConfig} disabled={saving === 'dbs-config'} className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-fuchsia-300 disabled:opacity-50">
@@ -1753,7 +1778,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">{entry.employee_name}</div>
               </div>
               <div>
-                <div className="mb-2 flex items-center justify-between gap-3"><label className="text-xs text-slate-400">{isGerman ? 'Tatsächliche DBS-Arbeitstage' : 'Actual DBS working days'}</label><span className="text-xs text-fuchsia-200">{normalizeApplicableDays(entry.working_weekdays).length} {isGerman ? 'Tage pro Woche' : 'days per week'}</span></div>
+                <div className="mb-2 flex items-center justify-between gap-3"><label className="text-xs text-slate-400">{isGerman ? 'Arbeitstage dieses Mitarbeiters im DBS-Block' : 'Working days of this employee within the DBS block'}</label><span className="text-xs text-fuchsia-200">{normalizeApplicableDays(entry.working_weekdays).length} {isGerman ? 'Tage pro Woche' : 'days per week'}</span></div>
                 <div className="flex flex-wrap gap-2">
                   {weekdayOptions.map((option) => {
                     const active = normalizeApplicableDays(entry.working_weekdays).includes(option.value);
@@ -1762,7 +1787,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 </div>
               </div>
               <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="w-full sm:max-w-xs"><label className="text-xs text-slate-400">{isGerman ? 'Freie Tage nach dem DBS-Block' : 'Days off after DBS block'}</label><input type="number" min="0" max="14" value={entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock} onChange={(event) => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, free_days_after_block: Math.max(0, Math.min(14, Number.parseInt(event.target.value, 10) || 0)) })))} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" /></div>
+                <div className="w-full sm:max-w-xs"><label className="text-xs text-slate-400">{isGerman ? 'Freie Tage danach' : 'Days off afterwards'}</label><input type="number" min="0" max="14" value={entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock} onChange={(event) => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, free_days_after_block: Math.max(0, Math.min(14, Number.parseInt(event.target.value, 10) || 0)) })))} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" /></div>
                 <button onClick={() => removeDbsEmployee(entry.employee_name)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20"><Trash2 className="h-4 w-4" />{t("shiftAdmin.dbsRemove")}</button>
               </div>
             </div>
@@ -1937,18 +1962,19 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <label className="block">
                   <span className="block font-medium">{isGerman ? 'Nachtplanungsmodell' : 'Night planning model'}</span>
                   <select value={shortNightOptions.mode} disabled={saving === 'short-night'} onChange={(event) => { const mode = event.target.value as ShortNightOptions['mode']; setShortNightOptions({ ...shortNightOptions, mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); void saveShortNightOptions({ mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); }} className="mt-2 w-full rounded-lg border border-violet-300/25 bg-slate-950/80 px-3 py-2 text-xs text-slate-100">
-                    <option value="SEVEN_DAY_ONLY">{isGerman ? 'Nur normale 7-Tage-Nachtschicht' : 'Normal seven-night blocks only'}</option>
-                    <option value="SHORT_ONLY">{isGerman ? 'Nur kurze Nachtschichten (NK)' : 'Short night blocks (NK) only'}</option>
-                    <option value="MIXED">{isGerman ? 'Mischmodus nach Mitarbeiterwunsch' : 'Mixed mode by employee preference'}</option>
+                    <option value="SEVEN_DAY_ONLY">{isGerman ? 'Nur 7-Tage-Nachtblöcke' : 'Seven-night blocks only'}</option>
+                    <option value="SHORT_ONLY">{isGerman ? 'Nur kurze Nachtblöcke' : 'Short night blocks only'}</option>
+                    <option value="MIXED">{isGerman ? 'Beide Modelle parallel (7-Tage-Blöcke plus kurze Blöcke bis zur Maximalbesetzung)' : 'Both models in parallel (seven-night blocks plus short blocks up to the maximum staffing)'}</option>
                   </select>
                   <span className="mt-2 block text-xs text-slate-400">{isGerman
-                    ? 'Im Mischmodus erhalten Mitarbeitende mit 7-Tage-Wunsch einen vollständigen Nachtblock. Mitarbeitende mit Kurzblock-Wunsch werden in bis zu drei zusammenhängenden Nächten ergänzend und nacheinander geplant.'
-                    : 'In mixed mode, employees preferring seven nights receive a full block. Employees preferring short blocks are added in consecutive blocks of up to three nights.'}</span>
+                    ? `Im Parallelmodus erhalten Mitarbeitende mit 7-Tage-Wunsch einen vollständigen Nachtblock. Zusätzlich werden Mitarbeitende mit Kurzblock-Wunsch in Blöcken von bis zu ${shortNightOptions.series_days ?? 3} Nächten geplant, bis die Maximalbesetzung der Nachtschicht erreicht ist.`
+                    : `In parallel mode, employees preferring seven nights receive a full block. Employees preferring short blocks are additionally planned in blocks of up to ${shortNightOptions.series_days ?? 3} nights until the maximum night staffing is reached.`}</span>
                 </label>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Start' : 'Start'}<input type="time" value={shortNightOptions.start_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, start_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Ende' : 'End'}<input type="time" value={shortNightOptions.end_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, end_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Frei danach' : 'Days off'}<input type="number" min="0" max="14" value={shortNightOptions.free_days_after} onChange={(event) => setShortNightOptions({ ...shortNightOptions, free_days_after: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Länge kurzer Nachtblöcke (Tage)' : 'Length of short night blocks (days)'}<input type="number" min="1" max="7" value={shortNightOptions.series_days ?? 3} onChange={(event) => setShortNightOptions({ ...shortNightOptions, series_days: Math.max(1, Math.min(7, Number.parseInt(event.target.value, 10) || 3)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
                 </div>
                 <p className="mt-2 text-[10px] leading-4 text-violet-100/75">{isGerman ? `N und NK teilen sich dieselbe Obergrenze: maximal ${normalNightStaffCap || '—'} Personen pro Nacht. Die Grenze änderst du bei der normalen Nachtschicht N.` : `N and NK share one cap: at most ${normalNightStaffCap || '—'} people per night. Change the cap on the regular N shift.`}</p>
                 <button type="button" onClick={() => void saveShortNightOptions()} disabled={saving === 'short-night'} className="mt-3 rounded-lg border border-violet-300/30 px-3 py-1.5 text-xs font-semibold text-violet-100 transition hover:bg-violet-300/10 disabled:opacity-50">{saving === 'short-night' ? '…' : (isGerman ? 'NK speichern' : 'Save NK')}</button>
@@ -2301,52 +2327,22 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
-      {/* ── Access to hard weekday exclusions ── */}
-      <Section title={isGerman ? 'Freigabe: Nicht verfügbare Wochentage' : 'Access: unavailable weekdays'} icon={Users} defaultOpen={false}>
-        <div className="space-y-4">
-          <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+      {/* ── Unavailable weekdays (all employees may enter them; admin only switches the generator) ── */}
+      <Section title={isGerman ? 'Nicht verfügbare Wochentage' : 'Unavailable weekdays'} icon={Users} defaultOpen={false}>
+        <div className="space-y-3">
+          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={advancedSettings.blockedDaysEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, blockedDaysEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+            <span>{isGerman ? 'Nicht verfügbare Wochentage im Generator berücksichtigen' : 'Use unavailable weekdays in the generator'}</span>
+          </label>
+          <p className="text-xs leading-5 text-slate-400">
             {isGerman
-              ? 'Nur ausgewählte Mitarbeitende sehen in ihren Einstellungen „Tage, an denen du nicht arbeiten kannst“. Diese Angaben sind für die Planung ein festes Tabu.'
-              : 'Only selected employees can see “Days you cannot work” in their settings. These selections are hard exclusions for scheduling.'}
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-            <span>{isGerman ? 'Mitarbeiterliste aus Benutzerverwaltung und aktueller Planungsbasis' : 'Employee list from user management and the current planning basis'}</span>
-            <span className="rounded-full border border-border/70 bg-background/60 px-2.5 py-1 font-semibold text-foreground">{employees.length} {isGerman ? 'Mitarbeitende' : 'employees'}</span>
-          </div>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-            <input value={blockedWeekdaySearch} onChange={(event) => setBlockedWeekdaySearch(event.target.value)} placeholder={isGerman ? 'Mitarbeiter suchen…' : 'Search employees…'} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 py-2 pl-10 pr-3 text-sm text-slate-100" />
-          </div>
-          <div className="grid gap-4 lg:grid-cols-2">
-            <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-950/45">
-              <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-300">{isGerman ? 'Noch nicht freigegeben' : 'Not enabled yet'}</span>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-300">{availableBlockedWeekdayEmployees.length}</span>
-              </div>
-              <div className="max-h-72 space-y-1 overflow-y-auto p-2">
-                {availableBlockedWeekdayEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Keine weiteren Mitarbeitenden' : 'No additional employees'}</div> : availableBlockedWeekdayEmployees.map((employee) => (
-                  <button key={employee} type="button" onClick={() => setAdvancedSettings((current) => ({ ...current, blockedWeekdayEmployees: [...current.blockedWeekdayEmployees, employee] }))} className="flex w-full items-center justify-between rounded-xl border border-transparent px-3 py-2 text-left text-sm text-slate-200 transition hover:border-amber-400/25 hover:bg-amber-500/10">
-                    <span className="truncate">{employee}</span><span className="text-xs text-amber-200">{isGerman ? 'Freigeben' : 'Allow'}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="overflow-hidden rounded-2xl border border-amber-400/25 bg-amber-500/5">
-              <div className="flex items-center justify-between border-b border-amber-400/15 px-4 py-3">
-                <span className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-100">{isGerman ? 'Für nicht verfügbare Wochentage freigegeben' : 'Enabled for unavailable weekdays'}</span>
-                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs text-amber-100">{advancedSettings.blockedWeekdayEmployees.length}</span>
-              </div>
-              <div className="max-h-72 space-y-1 overflow-y-auto p-2">
-                {selectedBlockedWeekdayEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Noch niemand ausgewählt' : 'No one selected yet'}</div> : selectedBlockedWeekdayEmployees.map((employee) => (
-                  <button key={employee} type="button" onClick={() => setAdvancedSettings((current) => ({ ...current, blockedWeekdayEmployees: current.blockedWeekdayEmployees.filter((entry) => entry !== employee) }))} className="flex w-full items-center justify-between rounded-xl border border-amber-400/15 bg-amber-500/8 px-3 py-2 text-left text-sm text-amber-50 transition hover:border-red-400/25 hover:bg-red-500/10">
-                    <span className="truncate">{employee}</span><span className="text-xs text-slate-400">{isGerman ? 'Entfernen' : 'Remove'}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+              ? 'Alle Mitarbeitenden können in ihren Einstellungen Wochentage wählen, an denen sie nicht arbeiten können. Die Auswahl bleibt immer gespeichert; ist der Schalter aus, ignoriert der Generator sie. Speichern über „Leitstand & Autopilot speichern“ unten.'
+              : 'All employees can pick weekdays they cannot work in their settings. Selections are always stored; while this switch is off the generator ignores them. Save with “Save control & autopilot” below.'}
+          </p>
         </div>
       </Section>
+
+      <PreferenceWeightSettings />
 
       {user.isRoot ? (
         <Section title={isGerman ? 'Interne Admin-Hinweise' : 'Internal admin notes'} icon={ShieldAlert} defaultOpen={false}>

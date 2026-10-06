@@ -9,6 +9,7 @@ import { EnterpriseCard } from '../layout/EnterpriseLayout';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
 import { formatAbsoluteDateTime, formatRelativeTime } from '../../utils/loginStatus';
 import { getHessenHolidayMap } from '../../utils/deHolidays';
+import { VacationWishes } from './VacationWishes';
 import {
   Heart, Moon, Sun, CalendarDays, Users,
   HelpCircle, Save, CheckCircle2, AlertTriangle,
@@ -128,7 +129,7 @@ interface Preferences {
 const SHIFT_CODES = ['E1', 'E2', 'L1', 'L2', 'N'];
 // Legacy half-shift definitions are planning-only and must never be selectable
 // as an employee preference.
-const EMPLOYEE_PREFERENCE_EXCLUDED_CODES = new Set(['DBS', 'E1SA', 'E1WE', 'L1WE', 'HE1', 'HE2', 'HL1', 'HL2']);
+const EMPLOYEE_PREFERENCE_EXCLUDED_CODES = new Set(['DBS', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1WE', 'HE1', 'HE2', 'HL1', 'HL2']);
 const SHIFT_LABELS_DE: Record<string, string> = { E1: 'Frühschicht 1', E2: 'Frühschicht 2', L1: 'Spätschicht 1', L2: 'Spätschicht 2', N: 'Nachtschicht' };
 const SHIFT_LABELS_EN: Record<string, string> = { E1: 'Early shift 1', E2: 'Early shift 2', L1: 'Late shift 1', L2: 'Late shift 2', N: 'Night shift' };
 const DAY_LABELS_DE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
@@ -278,7 +279,7 @@ export default function EmployeePreferences() {
   const [preferenceMonth, setPreferenceMonth] = useState(new Date().getMonth() + 1);
   const [shiftOptions, setShiftOptions] = useState<string[]>(SHIFT_CODES);
   const [shiftNameMap, setShiftNameMap] = useState<Record<string, string>>({});
-  const [canSelectBlockedDays, setCanSelectBlockedDays] = useState(false);
+  const [blockedDaysEnabled, setBlockedDaysEnabled] = useState(false);
   const [colleagueOptions, setColleagueOptions] = useState<Array<{ id: number; name: string }>>([]);
   const [preferredColleaguesEnabled, setPreferredColleaguesEnabled] = useState(false);
 
@@ -304,7 +305,7 @@ export default function EmployeePreferences() {
         api.get('/shift-config/definitions').catch(() => ({ data: { definitions: [] } })),
       ]);
       applyEmployeeSelectableShiftDefinitions(definitionsRes.data?.definitions || [], setShiftOptions, setShiftNameMap);
-      setCanSelectBlockedDays(prefRes.data?.canSelectBlockedDays === true);
+      setBlockedDaysEnabled(prefRes.data?.blockedDaysEnabled === true);
       setColleagueOptions(Array.isArray(prefRes.data?.colleagueOptions) ? prefRes.data.colleagueOptions : []);
       setPreferredColleaguesEnabled(prefRes.data?.preferredColleaguesEnabled === true);
       if (prefRes.data.preferences) {
@@ -617,13 +618,24 @@ export default function EmployeePreferences() {
         </div>
       </EnterpriseCard>
 
-      {/* Unavailable weekdays - only available to employees released by administration. */}
-      {canSelectBlockedDays && <EnterpriseCard>
+      {/* Vacation wishes (self-service; independent of the preference save button) */}
+      <VacationWishes />
+
+      {/* Unavailable weekdays - every employee can select them; the administrator decides
+          whether the generator honours them. */}
+      <EnterpriseCard>
         <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-3">
           <CalendarDays className="w-4 h-4 text-blue-400" />
           {copy.weekDays}
           <HelpTip text={copy.weekDaysHelp} />
         </h3>
+        {!blockedDaysEnabled && (
+          <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-5 text-amber-300">
+            {isGerman
+              ? 'Die Berücksichtigung dieser Tage ist aktuell vom Admin deaktiviert. Deine Auswahl bleibt gespeichert und wird genutzt, sobald die Funktion aktiviert wird.'
+              : 'Considering these days is currently disabled by the administrator. Your selection is kept and used once the feature is enabled.'}
+          </p>
+        )}
         <div className="grid grid-cols-7 gap-2">
           {dayLabels.map((label, idx) => {
             const isBlocked = prefs.blocked_days.includes(idx);
@@ -642,7 +654,7 @@ export default function EmployeePreferences() {
           })}
         </div>
         <p className="text-[10px] text-muted-foreground mt-2">{copy.weekDayLegend}</p>
-      </EnterpriseCard>}
+      </EnterpriseCard>
 
       {/* Preferred colleagues */}
       <EnterpriseCard>

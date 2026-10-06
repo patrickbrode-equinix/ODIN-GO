@@ -70,8 +70,13 @@ function computeHolidays(year, state) {
 
 // GET /api/holidays?year=2026&state=HE
 router.get("/", (req, res) => {
-    const year = parseInt(req.query.year) || new Date().getFullYear();
-    const state = (req.query.state || "DE").toUpperCase();
+    // Public route: bound year and state so the cache cannot grow without limit.
+    const parsedYear = parseInt(req.query.year);
+    const year = Number.isInteger(parsedYear) && parsedYear >= 1970 && parsedYear <= 2100
+        ? parsedYear
+        : new Date().getFullYear();
+    const requestedState = String(req.query.state || "DE").toUpperCase();
+    const state = /^[A-Z]{2}$/.test(requestedState) ? requestedState : "DE";
 
     const cacheKey = `${year}:${state}`;
     if (cache.has(cacheKey)) {

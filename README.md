@@ -1,22 +1,23 @@
 # ODIN Schichtplaner
 
-Dieser Ordner ist eine eigenstaendig startbare Auskopplung des Schichtplaners.
-Er enthaelt Frontend, Backend und eine eigene PostgreSQL-Datenbankkonfiguration.
-Die ODIN-Ticketzuweisung, Queue-Anbindung, Crawler-Routen und Writeback-Funktionen
-sind im Modus `shiftplanner` deaktiviert.
+ODIN GO ist der Schichtplaner mit Frontend, Backend und eigener
+PostgreSQL-Datenbank. Es gibt zwei Zugaenge mit derselben Oberflaeche
+(`/odin-go/*`):
 
-Die Anwendung startet ohne Login direkt im Schichtplan. Es gibt keine Anmeldung,
-Registrierung, Passwortverwaltung oder Abmeldung. Der lokale Betrieb besitzt
-innerhalb dieser eigenstaendigen Anwendung volle Planungsrechte.
+- **Jarvis-Chrome-Erweiterung** (`ChromeExtension`): Mitarbeiter werden ueber ihr
+  Jarvis-SSO-Profil erkannt und sehen u.a. ihre persoenlichen Wuensche.
+- **Webzugang** fuer Fuehrungskraefte ohne taegliche Jarvis-Nutzung. Die Anmeldung
+  erfolgt mit dem Admin-Passwort (`SHIFTPLANNER_ADMIN_PASSWORD`). Persoenliche
+  Wuensche werden dort nicht angeboten.
 
 Enthalten sind insbesondere:
 
-- Schichtplan und Schichtplaner-Steuerung
-- Monats- und Jahresplanung sowie Drafts
-- Mitarbeiterverwaltung und Mitarbeiterwuensche
-- Schichtplan-Einstellungen und Pruefungen
-- TV-Ansicht des Schichtplans
-- optionale Teams- und Verifizierungsfunktionen
+- Dienstplan, Wochenplan, Tagesplan und Drafts
+- Generator fuer Monats- und Jahresplanung
+- Schichtuebergabe, Fremdteam-Tickets, Projekte, Notifications, Feedback, Umfragen
+- Mitarbeiterwuensche (Schichten, Feiertage, Wunschkollegen, Urlaub, nicht
+  verfuegbare Wochentage)
+- Admin-Einstellungen und Benutzerverwaltung
 
 ## Lokaler Start mit npm
 
@@ -36,7 +37,7 @@ Frontend automatisch installiert. Danach ist die Anwendung unter
 ## Start als Container
 
 1. `.env.example` als `.env` ablegen und Passwoerter sowie `JWT_SECRET` setzen.
-2. Im Ordner `Schichtplaner` starten:
+2. Im Projektordner starten:
 
    ```powershell
    docker compose up -d --build
@@ -44,8 +45,8 @@ Frontend automatisch installiert. Danach ist die Anwendung unter
 
 3. Die Anwendung unter `http://localhost:8080` oeffnen.
 
-Der Backend-Status ist ueber `http://localhost:8080/api/health` erreichbar und
-liefert im Standalone-Betrieb `"appMode": "shiftplanner"`.
+Der Backend-Status ist ueber `http://localhost:8080/api/health` und
+`/api/health/ready` erreichbar.
 
 ### Produktivbetrieb auf der internen VM mit Portainer
 
@@ -57,8 +58,7 @@ Das Backend ist nur im Docker-Netz erreichbar. `/odin-go/*` liefert die SPA.
 1. Den vorhandenen Git-verwalteten Stack nicht loeschen und keine Volumes
    entfernen.
 2. `CORS_ORIGINS` auf
-   `https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com` und
-   `COC_PUBLIC_URL` auf `https://eqx-portal.corp.equinix.com` setzen.
+   `https://jarvis-emea.equinix.com,https://eqx-portal.corp.equinix.com` setzen.
 3. Nginx Proxy Manager fuer `eqx-portal.corp.equinix.com` per HTTP an
    `10.144.148.202:8080` weiterleiten lassen.
 4. In Portainer **Pull and redeploy** ausfuehren. PostgreSQL- und Upload-

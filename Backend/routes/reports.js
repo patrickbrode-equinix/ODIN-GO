@@ -136,15 +136,19 @@ router.get('/shiftplan/export', requireAuth, async (req, res) => {
         const fromDate = new Date(from);
         const toDate = new Date(to);
 
+        const spanDays = (toDate - fromDate) / 86_400_000;
+        if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > 366) {
+            return res.status(400).json({ error: 'Invalid date range (max. 366 days)' });
+        }
+
         // Helper to get needed month labels
         const neededMonths = new Set();
-        let cur = new Date(fromDate);
-        cur.setDate(1);
+        let cur = new Date(Date.UTC(fromDate.getUTCFullYear(), fromDate.getUTCMonth(), 1));
         while (cur <= toDate) {
-            const mName = getMonthName(cur.getMonth() + 1);
-            const y = cur.getFullYear();
+            const mName = getMonthName(cur.getUTCMonth() + 1);
+            const y = cur.getUTCFullYear();
             neededMonths.add(`${mName} ${y}`);
-            cur.setMonth(cur.getMonth() + 1);
+            cur = new Date(Date.UTC(y, cur.getUTCMonth() + 1, 1));
         }
 
         const { rows } = await db.query(`SELECT * FROM shifts WHERE month = ANY($1)`, [Array.from(neededMonths)]);
@@ -156,10 +160,10 @@ router.get('/shiftplan/export', requireAuth, async (req, res) => {
         const allDates = [];
 
         // Generate all dates in range
-        let iter = new Date(fromDate);
-        while (iter <= toDate) {
-            allDates.push(iter.toISOString().split('T')[0]);
-            iter.setDate(iter.getDate() + 1);
+        let iterMs = fromDate.getTime();
+        while (iterMs <= toDate.getTime()) {
+            allDates.push(new Date(iterMs).toISOString().split('T')[0]);
+            iterMs += 86_400_000; // UTC day step (no local-time DST drift)
         }
 
         for (const row of rows) {

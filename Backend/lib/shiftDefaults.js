@@ -21,6 +21,8 @@ export const DEFAULT_SHIFT_DEFINITIONS = Object.freeze({
   // Weekend series use the same times as their weekday counterparts.
   E1SA: Object.freeze({ start_time: '06:30', end_time: '15:30', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
   E1WE: Object.freeze({ start_time: '06:30', end_time: '15:30', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
+  E2SA: Object.freeze({ start_time: '07:00', end_time: '16:00', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
+  E2WE: Object.freeze({ start_time: '07:00', end_time: '16:00', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
   L1WE: Object.freeze({ start_time: '13:00', end_time: '22:00', start_day_offset: 0, end_day_offset: 0, duration_hours: 8, min_staff: 1, max_staff: 3 }),
 });
 

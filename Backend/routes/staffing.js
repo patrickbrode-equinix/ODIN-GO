@@ -1,14 +1,17 @@
 import express from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
+import { parseMonthLabel } from '../lib/monthParser.js';
+import { normalizePlanningShiftTypeKey } from '../lib/shiftplanGeneration.js';
+import { classifyShiftCodeToType } from '../lib/understaffingSuggestions.js';
 
 const router = express.Router();
 
-/* 
+/*
   STAFFING RULES & RESULTS
   ------------------------
-  - Rules: Min. headcount per shift type (E, L, N).
-  - Results: Daily status (OK/WARN/FAIL) based on actual vs min.
+  - Rules: Min. headcount per shift type (early / late / night, legacy E / L / N).
+  - Results: Daily status (OK/FAIL) based on actual vs min.
 */
 
 // GET /api/staffing/rules
@@ -54,7 +57,7 @@ router.get('/results', requireAuth, async (req, res) => {
         const endDate = `${year}-${String(month).padStart(2, '0')}-${lastDay}`;
 
         const { rows } = await db.query(
-            `SELECT * FROM staffing_results 
+            `SELECT * FROM staffing_results
        WHERE date >= $1 AND date <= $2
        ORDER BY date ASC`,
             [startDate, endDate]
@@ -66,80 +69,69 @@ router.get('/results', requireAuth, async (req, res) => {
     }
 });
 
+const STAFFING_RESULT_TYPES = ['early', 'late', 'night'];
+
 // POST /api/staffing/recompute
-// Triggers calculation for a month
+// Body: { year, month } (month 1-12). Counts distinct employees per day and
+// shift type (early / late / night; N and NK both count as night) and compares
+// them with staffing_rules.min_count.
 router.post('/recompute', requireAuth, async (req, res) => {
-    const { year, month } = req.body;
-    if (!year || !month) return res.status(400).json({ error: 'Missing year/month' });
+    const year = Number.parseInt(String(req.body?.year ?? ''), 10);
+    const month = Number.parseInt(String(req.body?.month ?? ''), 10);
+    if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+        return res.status(400).json({ error: 'Missing year/month' });
+    }
 
     try {
-        // 1. Fetch Rules
-        const { rows: rules } = await db.query('SELECT * FROM staffing_rules');
-        const ruleMap = {}; // { 'E': 2, 'L': 2, 'N': 1 }
-        rules.forEach(r => ruleMap[r.shift_type] = r.min_count);
+        // 1. Rules: { early: 2, late: 2, night: 1 } (legacy keys E/L/N are normalised)
+        const { rows: rules } = await db.query('SELECT shift_type, min_count FROM staffing_rules');
+        const ruleMap = {};
+        for (const rule of rules) {
+            const type = normalizePlanningShiftTypeKey(rule.shift_type);
+            if (STAFFING_RESULT_TYPES.includes(type)) ruleMap[type] = Number(rule.min_count) || 0;
+        }
 
-        // 2. Fetch Shifts for month
-        const startDate = `${year}-${String(month).padStart(2, '0')}-01`;
-        const lastDay = new Date(year, month, 0).getDate();
-        const endDate = `${year}-${String(month).padStart(2, '0')}-${lastDay}`;
-
-        const { rows: shifts } = await db.query(
-            `SELECT s.date, s.shift_type 
-       FROM shifts s
-       WHERE s.date >= $1 AND s.date <= $2`,
-            [startDate, endDate]
+        // 2. Live shifts of the requested month
+        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        const { rows: definitions } = await db.query('SELECT code, shift_type, is_active FROM shift_definitions');
+        const { rows: shiftRows } = await db.query(
+            'SELECT month, employee_name, day, shift_code FROM shifts WHERE month LIKE $1',
+            [`%${year}%`]
         );
 
-        // 3. Aggregate Counts per Day & Shift Type
-        // Map<"YYYY-MM-DD", { E: 0, L: 0, N: 0 }>
-        const dailyCounts = {};
+        // 3. Distinct employees per day and type
+        const dailyEmployees = {};
+        for (const row of shiftRows) {
+            const parsed = parseMonthLabel(String(row.month || ''));
+            if (!parsed || parsed.year !== year || parsed.month !== month) continue;
+            const day = Number.parseInt(String(row.day ?? ''), 10);
+            if (!Number.isInteger(day) || day < 1 || day > lastDay) continue;
+            const type = classifyShiftCodeToType(row.shift_code, definitions);
+            if (!type) continue;
+            if (!dailyEmployees[day]) dailyEmployees[day] = { early: new Set(), late: new Set(), night: new Set() };
+            dailyEmployees[day][type].add(row.employee_name);
+        }
 
-        // Helper to init day
-        const getDayObj = (dateStr) => {
-            if (!dailyCounts[dateStr]) dailyCounts[dateStr] = { E: 0, L: 0, N: 0 };
-            return dailyCounts[dateStr];
-        };
-
-        shifts.forEach(s => {
-            const d = s.date.toISOString().split('T')[0];
-            const type = s.shift_type.toUpperCase();
-
-            const dayObj = getDayObj(d);
-
-            // Match E1/E2 -> E, L1/L2 -> L, N -> N
-            if (type.startsWith('E')) dayObj.E++;
-            else if (type.startsWith('L')) dayObj.L++;
-            else if (type === 'N') dayObj.N++;
-        });
-
-        // 4. Compare with Rules & Upsert Results
-        const results = [];
-        const shiftTypes = ['E', 'L', 'N'];
-
-        const client = await db.pool.connect();
+        // 4. Replace the month's results in one transaction
+        const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+        const client = await db.connect();
         try {
             await client.query('BEGIN');
+            await client.query(
+                'DELETE FROM staffing_results WHERE date >= $1 AND date <= $2',
+                [`${monthKey}-01`, `${monthKey}-${String(lastDay).padStart(2, '0')}`]
+            );
 
-            // Loop days 1..lastDay
             for (let d = 1; d <= lastDay; d++) {
-                const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-                const dayCounts = dailyCounts[dateStr] || { E: 0, L: 0, N: 0 };
-
-                for (const type of shiftTypes) {
-                    const actual = dayCounts[type] || 0;
+                const dateStr = `${monthKey}-${String(d).padStart(2, '0')}`;
+                for (const type of STAFFING_RESULT_TYPES) {
+                    const actual = dailyEmployees[d]?.[type]?.size || 0;
                     const min = ruleMap[type] || 0;
-                    let status = 'OK';
-
-                    if (actual < min) status = 'FAIL';
-                    else if (actual === min) status = 'OK'; // Exact match is OK
-                    // Could implement WARN logic if needed, e.g. actual == min + 1?
-                    // For now: < min = FAIL, >= min = OK.
-
-                    // UPSERT
+                    const status = actual < min ? 'FAIL' : 'OK';
                     await client.query(
                         `INSERT INTO staffing_results(date, shift_type, actual, min, status)
 VALUES($1, $2, $3, $4, $5)
-             ON CONFLICT(date, shift_type) 
+             ON CONFLICT(date, shift_type)
              DO UPDATE SET actual = EXCLUDED.actual, min = EXCLUDED.min, status = EXCLUDED.status, created_at = NOW()`,
                         [dateStr, type, actual, min, status]
                     );
@@ -148,7 +140,7 @@ VALUES($1, $2, $3, $4, $5)
 
             await client.query('COMMIT');
         } catch (e) {
-            await client.query('ROLLBACK');
+            await client.query('ROLLBACK').catch(() => {});
             throw e;
         } finally {
             client.release();

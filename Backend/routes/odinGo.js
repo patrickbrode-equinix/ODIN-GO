@@ -25,7 +25,7 @@ export function classifyShiftCode(value) {
   const code = String(value || "").trim().toUpperCase();
   if (/^(?:E|HE)/.test(code)) return "early";
   if (/^(?:L|HL)/.test(code)) return "late";
-  if (code === "N" || code.startsWith("NACHT")) return "night";
+  if (code === "N" || code === "NK" || code.startsWith("NACHT")) return "night";
   return null;
 }
 
