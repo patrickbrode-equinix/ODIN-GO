@@ -1,0 +1,4 @@
+frontend-1  | [HPM] Proxy created: /api  -> http://odin-backend:8001
+frontend-1  | [HPM] Proxy created: /uploads  -> http://odin-backend:8001
+frontend-1  | [FRONTEND] Listening on http://0.0.0.0:8000
+frontend-1  | [FRONTEND] Proxying /api/* => http://odin-backend:8001

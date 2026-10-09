@@ -1,0 +1,4 @@
+NAME                 IMAGE                              COMMAND                  SERVICE    CREATED         STATUS                        PORTS
+odin-go-backend-1    odin-shiftplanner-backend:local    "docker-entrypoint.s…"   backend    2 minutes ago   Up About a minute (healthy)   8001/tcp
+odin-go-frontend-1   odin-shiftplanner-frontend:local   "docker-entrypoint.s…"   frontend   2 minutes ago   Up About a minute (healthy)   0.0.0.0:8080->8000/tcp, [::]:8080->8000/tcp
+odin-go-postgres-1   postgres:15-alpine                 "docker-entrypoint.s…"   postgres   2 minutes ago   Up 2 minutes (healthy)        5432/tcp
