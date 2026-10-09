@@ -1,0 +1,2 @@
+wget: can't connect to remote host: Connection refused
+ready check failed

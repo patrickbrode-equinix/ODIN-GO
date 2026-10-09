@@ -1,0 +1,138 @@
+backend-1  | 
+backend-1  | [CONFIG] ── Startup Configuration ──────────────────────
+backend-1  |   NODE_ENV   : production
+backend-1  |   PORT       : 8001
+backend-1  |   TIMEZONE   : Europe/Berlin
+backend-1  |   DATABASE   : postgres:5432/shiftplanner (user: shiftplanner_app)
+backend-1  |   DB_PASS    : ****
+backend-1  |   JWT_SECRET : ****
+backend-1  |   CORS       : strict [https://jarvis-emea.equinix.com, https://eqx-portal.corp.equinix.com]
+backend-1  | ─────────────────────────────────────────────────────────
+backend-1  | 
+backend-1  | [DB] Connecting via postgres:5432/shiftplanner
+backend-1  | [CORS] Strict whitelist active: https://jarvis-emea.equinix.com, https://eqx-portal.corp.equinix.com
+backend-1  | >> [DB] Testing connection...
+backend-1  | >> [DB] CONNECTION SUCCESS ✅
+backend-1  | [MIGRATIONS] Starting migration runner...
+backend-1  | [MIGRATIONS] Pending: 113 migration(s)
+backend-1  | [MIGRATIONS] Applied: 001_core_tables.sql
+backend-1  | [MIGRATIONS] Applied: 002_queue.sql
+backend-1  | [MIGRATIONS] Applied: 003_schedules.sql
+backend-1  | [MIGRATIONS] Applied: 004_handover.sql
+backend-1  | [MIGRATIONS] Applied: 005_commit.sql
+backend-1  | [MIGRATIONS] Applied: 006_wellbeing.sql
+backend-1  | [MIGRATIONS] Applied: 007_coverage.sql
+backend-1  | [MIGRATIONS] Applied: 008_misc.sql
+backend-1  | [MIGRATIONS] Applied: 009_competencies_projects.sql
+backend-1  | [MIGRATIONS] Applied: 010_user_settings_column_schema.sql
+backend-1  | [MIGRATIONS] Applied: 011_calendar_and_cache.sql
+backend-1  | [MIGRATIONS] Applied: 012_missing_tables.sql
+backend-1  | [MIGRATIONS] Applied: 013_events.sql
+backend-1  | [MIGRATIONS] Applied: 014_events_visibility.sql
+backend-1  | [MIGRATIONS] Applied: 015_new_starters.sql
+backend-1  | [MIGRATIONS] Applied: 016_drop_new_starters.sql
+backend-1  | [MIGRATIONS] Applied: 017_assignment_engine.sql
+backend-1  | [MIGRATIONS] Applied: 018_assignment_engine_v2.sql
+backend-1  | [MIGRATIONS] Applied: 019_weekplan_roles.sql
+backend-1  | [MIGRATIONS] Applied: 020_add_car_liste_policy.sql
+backend-1  | [MIGRATIONS] Applied: 021_employee_contacts.sql
+backend-1  | [MIGRATIONS] Applied: 022_odin_productization.sql
+backend-1  | [MIGRATIONS] Applied: 023_engine_status_and_failure_reasons.sql
+backend-1  | [MIGRATIONS] Applied: 024_preferred_colleagues.sql
+backend-1  | [MIGRATIONS] Applied: 025_odin_enhancements.sql
+backend-1  | [MIGRATIONS] Applied: 026_deinstall_queue.sql
+backend-1  | [MIGRATIONS] Applied: 027_shift_planning_overhaul.sql
+backend-1  | [MIGRATIONS] Applied: 028_simplified_roles.sql
+backend-1  | [MIGRATIONS] Applied: 029_snapshot_audit_and_user_provisioning.sql
+backend-1  | [MIGRATIONS] Applied: 030_assignment_subtype_exclusions.sql
+backend-1  | [MIGRATIONS] Applied: 030_remove_car_liste_policy.sql
+backend-1  | [MIGRATIONS] Applied: 031_shift_definition_weekdays_and_dbs_pool.sql
+backend-1  | [MIGRATIONS] Applied: 032_tv_assignment_and_rule_defaults.sql
+backend-1  | [MIGRATIONS] Applied: 033_shift_spans_holidays_and_live_metrics.sql
+backend-1  | [MIGRATIONS] Applied: 034_shift_skill_profiles.sql
+backend-1  | [MIGRATIONS] Applied: 035_shift_verification.sql
+backend-1  | [MIGRATIONS] Applied: 036_ticket_preferences_and_fairness.sql
+backend-1  | [MIGRATIONS] Applied: 037_dbs_config_and_overtime.sql
+backend-1  | [MIGRATIONS] Applied: 038_feedback_status.sql
+backend-1  | [MIGRATIONS] Applied: 039_polls.sql
+backend-1  | [MIGRATIONS] Applied: 040_tv_polls_slide.sql
+backend-1  | [MIGRATIONS] Applied: 041_feedback_screenshot_data.sql
+backend-1  | [MIGRATIONS] Applied: 041_polls_archive.sql
+backend-1  | [MIGRATIONS] Applied: 042_assignment_scheduler_and_shift_scope.sql
+backend-1  | [MIGRATIONS] Applied: 042_employee_monthly_shift_preferences.sql
+backend-1  | [MIGRATIONS] Applied: 043_assignment_decision_trace.sql
+backend-1  | [MIGRATIONS] Applied: 043_shift_definition_modes.sql
+backend-1  | [MIGRATIONS] Applied: 044_half_shifts_and_new_assignment_settings.sql
+backend-1  | [MIGRATIONS] Applied: 045_shift_definition_series_days.sql
+backend-1  | [MIGRATIONS] Applied: 045_weekplan_roles_comment.sql
+backend-1  | [MIGRATIONS] Applied: 046_shiftplan_fixed_shift_type_backfill.sql
+backend-1  | [MIGRATIONS] Applied: 046_teams_communication_mode.sql
+backend-1  | [MIGRATIONS] Applied: 047_shiftplan_employee_monthly_targets.sql
+backend-1  | [MIGRATIONS] Applied: 048_shiftplan_monthly_target_hours_backfill.sql
+backend-1  | [MIGRATIONS] Applied: 049_shiftplan_annual_target_hours.sql
+backend-1  | [MIGRATIONS] Applied: 050_attendance_tracking.sql
+backend-1  | [MIGRATIONS] Applied: 051_tv_assignment_visualization_defaults.sql
+backend-1  | [MIGRATIONS] Applied: 052_manual_shiftplan_employees.sql
+backend-1  | [MIGRATIONS] Applied: 053_assignment_writeback.sql
+backend-1  | [MIGRATIONS] Applied: 054_user_login_name.sql
+backend-1  | [MIGRATIONS] Applied: 055_fixed_week_shift_series.sql
+backend-1  | [MIGRATIONS] Applied: 056_year_plan_recovery_rules.sql
+backend-1  | [MIGRATIONS] Applied: 057_writeback_pilot_employee.sql
+backend-1  | [MIGRATIONS] Applied: 058_shift_late_before_night.sql
+backend-1  | [MIGRATIONS] Applied: 059_shiftplan_draft_metadata.sql
+backend-1  | [MIGRATIONS] Applied: 060_power_automate_webhook_notifications.sql
+backend-1  | [MIGRATIONS] Applied: 061_employee_identity_keys.sql
+backend-1  | [MIGRATIONS] Applied: 062_employee_identity_index_repair.sql
+backend-1  | [MIGRATIONS] Applied: 063_shiftplan_draft_feedback.sql
+backend-1  | [MIGRATIONS] Applied: 064_coc_chain_of_command.sql
+backend-1  | [MIGRATIONS] Applied: 065_employee_sso_only.sql
+backend-1  | [MIGRATIONS] Applied: 066_manual_users_in_shiftplan.sql
+backend-1  | [MIGRATIONS] Applied: 067_login_name_is_sso_email.sql
+backend-1  | [MIGRATIONS] Applied: 068_jarvis_notifications.sql
+backend-1  | [MIGRATIONS] Applied: 069_projects_notifications.sql
+backend-1  | [MIGRATIONS] Applied: 070_notification_kinds.sql
+backend-1  | [MIGRATIONS] Applied: 071_notification_recipients_and_monthly.sql
+backend-1  | [MIGRATIONS] Applied: 072_shiftplan_draft_votes.sql
+backend-1  | [MIGRATIONS] Applied: 073_notification_occurrences.sql
+backend-1  | [MIGRATIONS] Applied: 074_odin_go_preferences.sql
+backend-1  | [MIGRATIONS] Applied: 075_shift_handovers.sql
+backend-1  | [MIGRATIONS] Applied: 076_remove_half_shifts_from_employee_preferences.sql
+backend-1  | [MIGRATIONS] Applied: 077_normalize_employee_night_block_limits.sql
+backend-1  | [MIGRATIONS] Applied: 078_reset_employee_workload_preferences.sql
+backend-1  | [MIGRATIONS] Applied: 079_feedback_workflow.sql
+backend-1  | [MIGRATIONS] Applied: 080_employee_night_model.sql
+backend-1  | [MIGRATIONS] Applied: 081_raise_default_regular_shift_capacity.sql
+backend-1  | [MIGRATIONS] Applied: 082_remove_obsolete_admin_settings.sql
+backend-1  | [MIGRATIONS] Applied: 083_feedback_schema_repair.sql
+backend-1  | [MIGRATIONS] Applied: 084_correct_night_shift_start_time.sql
+backend-1  | [MIGRATIONS] Applied: 085_shift_handovers_update_audit.sql
+backend-1  | [MIGRATIONS] Applied: 086_admin_shift_flexibility.sql
+backend-1  | [MIGRATIONS] Applied: 087_short_night_options.sql
+backend-1  | [MIGRATIONS] Applied: 088_team_handovers_and_status.sql
+backend-1  | [MIGRATIONS] Applied: 089_employee_weekend_block_limit.sql
+backend-1  | [MIGRATIONS] Applied: 090_shiftplan_draft_ownership.sql
+backend-1  | [MIGRATIONS] Applied: 091_poll_comments.sql
+backend-1  | [MIGRATIONS] Applied: 092_assign_unowned_shiftplan_drafts.sql
+backend-1  | [MIGRATIONS] Applied: 093_default_shift_times_and_staffing.sql
+backend-1  | [MIGRATIONS] Applied: 094_shiftplan_exclusion_weekdays.sql
+backend-1  | [MIGRATIONS] Applied: 095_shift_break_hours.sql
+backend-1  | [MIGRATIONS] Applied: 096_weekend_shift_times.sql
+backend-1  | [MIGRATIONS] Applied: 097_preferred_colleagues.sql
+backend-1  | [MIGRATIONS] Applied: 098_night_planning_mode.sql
+backend-1  | [MIGRATIONS] Applied: 099_drop_legacy_features.sql
+backend-1  | [MIGRATIONS] Applied: 100_vacation_wishes_and_blocked_days_switch.sql
+backend-1  | [MIGRATIONS] Applied: 101_weekplan_newcomers.sql
+backend-1  | [MIGRATIONS] Applied: 102_shiftplan_draft_description.sql
+backend-1  | [MIGRATIONS] Applied: 103_shift_definition_free_days.sql
+backend-1  | [MIGRATIONS] Applied: 104_e2_weekend_shifts.sql
+backend-1  | [MIGRATIONS] Applied: 105_staffing_day_limits.sql
+backend-1  | [MIGRATIONS] Applied: 106_dbs_employee_times.sql
+backend-1  | [MIGRATIONS] Applied: 107_dbs_other_planning.sql
+backend-1  | [MIGRATIONS] All migrations applied successfully.
+backend-1  | [SEED] Master account created → admin@local
+backend-1  | [USER PROVISIONING] No user changes required.
+backend-1  | [STARTUP] User provisioning summary: 0 created, 0 updated, 0 skipped.
+backend-1  | 
+backend-1  | ✅ [SERVER] PID: 1
+backend-1  | ✅ [SERVER] Listening on http://0.0.0.0:8001
+backend-1  |    Health: http://localhost:8001/api/health

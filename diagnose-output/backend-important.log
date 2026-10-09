@@ -1,0 +1,25 @@
+backend-1  | 
+backend-1  | [CONFIG] ── Startup Configuration ──────────────────────
+backend-1  |   NODE_ENV   : production
+backend-1  |   PORT       : 8001
+backend-1  |   TIMEZONE   : Europe/Berlin
+backend-1  |   DATABASE   : postgres:5432/shiftplanner (user: shiftplanner_app)
+backend-1  |   DB_PASS    : ****
+backend-1  |   JWT_SECRET : ****
+backend-1  |   CORS       : strict [https://jarvis-emea.equinix.com, https://eqx-portal.corp.equinix.com]
+backend-1  | ─────────────────────────────────────────────────────────
+backend-1  | 
+backend-1  | [DB] Connecting via postgres:5432/shiftplanner
+backend-1  | [CORS] Strict whitelist active: https://jarvis-emea.equinix.com, https://eqx-portal.corp.equinix.com
+backend-1  | >> [DB] Testing connection...
+backend-1  | >> [DB] CONNECTION SUCCESS ✅
+backend-1  | [MIGRATIONS] Starting migration runner...
+backend-1  | [MIGRATIONS] Pending: 113 migration(s)
+backend-1  | [MIGRATIONS] All migrations applied successfully.
+backend-1  | [SEED] Master account created → admin@local
+backend-1  | [USER PROVISIONING] No user changes required.
+backend-1  | [STARTUP] User provisioning summary: 0 created, 0 updated, 0 skipped.
+backend-1  | 
+backend-1  | ✅ [SERVER] PID: 1
+backend-1  | ✅ [SERVER] Listening on http://0.0.0.0:8001
+backend-1  |    Health: http://localhost:8001/api/health
