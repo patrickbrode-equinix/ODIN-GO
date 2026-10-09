@@ -4,7 +4,7 @@ import { requirePageAccess } from '../middleware/requirePageAccess.js';
 import { isDateKey, vacationSummary } from '../lib/vacationDays.js';
 import { recomputeConflictsInternal } from './absences.js';
 
-const vacationColumns = "id, employee_name, employee_id, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date, type, note";
+const vacationColumns = "id, employee_name, employee_id, to_char(start_date, 'YYYY-MM-DD') AS start_date, to_char(end_date, 'YYYY-MM-DD') AS end_date, type, note, source";
 
 export function createVacationRouter(db, { authenticate = requireAuth, recomputeConflicts = recomputeConflictsInternal } = {}) {
   const router = express.Router({ mergeParams: true });
@@ -33,6 +33,20 @@ export function createVacationRouter(db, { authenticate = requireAuth, recompute
          AND start_date <= $4 AND end_date >= $3 ORDER BY start_date, id`,
         [employee.id, employee.employee_name, `${year}-01-01`, `${year}-12-31`]);
       res.json({ entries: rows, ...vacationSummary(rows, year) });
+    } catch (error) { next(error); }
+  });
+
+  // Every vacation of the employee (self-service wishes and entries by the management) from
+  // one year back, so wishes for another year are visible without searching the calendar.
+  router.get('/upcoming', requirePageAccess('user_management', 'view'), async (req, res, next) => {
+    try {
+      const employee = req.vacationEmployee;
+      const { rows } = await db.query(
+        `SELECT ${vacationColumns} FROM absences WHERE type = 'VACATION'
+         AND (employee_id = $1 OR (employee_id IS NULL AND employee_name = $2))
+         AND end_date >= (CURRENT_DATE - INTERVAL '1 year') ORDER BY start_date, id`,
+        [employee.id, employee.employee_name]);
+      res.json({ entries: rows });
     } catch (error) { next(error); }
   });
 

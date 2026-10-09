@@ -20,3 +20,9 @@ export async function addVacation(userId: number, start_date: string, end_date: 
 export async function removeVacation(userId: number, absenceId: number) {
   return (await api.delete(`/admin/users/${userId}/vacations/${absenceId}`)).data;
 }
+
+/** All vacations of the employee from one year back (wishes of the employee and entries by the management). */
+export async function fetchAllVacations(userId: number): Promise<Absence[]> {
+  const data = (await api.get(`/admin/users/${userId}/vacations/upcoming`)).data;
+  return Array.isArray(data?.entries) ? data.entries : [];
+}

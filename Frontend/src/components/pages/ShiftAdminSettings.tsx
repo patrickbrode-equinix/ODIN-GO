@@ -308,6 +308,9 @@ interface SpecialPoolEntry {
   is_active: boolean;
   working_weekdays?: number[];
   free_days_after_block?: number;
+  /** Shifts worked outside DBS (empty = like everybody else) and the day cap per month (null = unlimited). */
+  other_shift_codes?: string[] | null;
+  other_days_per_month?: number | null;
   /** Own times of this DBS employee (HH:MM); null = times of the DBS shift. */
   start_time?: string | null;
   end_time?: string | null;
@@ -345,6 +348,8 @@ interface AdvancedPlanningSettings {
   blockedDaysEnabled: boolean;
   adminFlagsEnabled: boolean;
   preferredColleaguesEnabled: boolean;
+  /** 0-100: how strongly the generator avoids repeating the same blocks (60 = default). */
+  varietyPriority: number;
 }
 
 interface DbsConfig {
@@ -387,6 +392,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   blockedDaysEnabled: false,
   adminFlagsEnabled: false,
   preferredColleaguesEnabled: false,
+  varietyPriority: 60,
 };
 
 const DEFAULT_DBS_CONFIG: DbsConfig = {
@@ -475,6 +481,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     blockedDaysEnabled: parseBooleanSetting(settings['shiftplan.blocked_days_enabled'], DEFAULT_ADVANCED_SETTINGS.blockedDaysEnabled),
     adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
     preferredColleaguesEnabled: parseBooleanSetting(settings['shiftplan.preferred_colleagues_enabled'], DEFAULT_ADVANCED_SETTINGS.preferredColleaguesEnabled),
+    varietyPriority: Math.min(100, Math.max(0, parseNumberSetting(settings['shiftplan.variety_priority'], DEFAULT_ADVANCED_SETTINGS.varietyPriority))),
   };
 }
 
@@ -745,6 +752,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [newDbsEmployee, setNewDbsEmployee] = useState('');
   const [newDefinition, setNewDefinition] = useState({ code: '', name: '', shift_type: 'early', start_time: '06:30', end_time: '15:00', duration_hours: 8, min_staff: 1, max_staff: 5 });
   const [activeShiftModes, setActiveShiftModes] = useState<Record<string, number>>({});
+  // Base shifts a DBS employee can be restricted to outside DBS (weekend variants follow their base shift).
+  const outsideDbsShiftOptions = definitions
+    .filter((definition) => definition.is_active && GLOBAL_STAFFING_TYPES.has(definition.shift_type) && !["E1SA", "E1WE", "E2SA", "E2WE", "L1WE", "NK"].includes(String(definition.code).toUpperCase()))
+    .map((definition) => String(definition.code).toUpperCase());
   const normalNightStaffCap = useMemo(
     () => Math.max(0, Number(staffingRules.find((rule) => rule.shift_type === 'night')?.max_count || 0)),
     [staffingRules]
@@ -925,6 +936,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.blocked_days_enabled': advancedSettings.blockedDaysEnabled,
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
         'shiftplan.preferred_colleagues_enabled': advancedSettings.preferredColleaguesEnabled,
+        'shiftplan.variety_priority': advancedSettings.varietyPriority,
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
     } catch (error: any) {
@@ -961,6 +973,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         free_days_after_block: Math.max(0, Math.min(14, Number(entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock) || 0)),
         start_time: entry.start_time || null,
         end_time: entry.end_time || null,
+        other_shift_codes: (entry.other_shift_codes || []).filter((code) => outsideDbsShiftOptions.includes(code)),
+        other_days_per_month: entry.other_days_per_month ?? null,
       }));
       const { data } = await api.put(`/shift-config/special-pools/${shiftCode}`, { assignments: payload });
       setDbsPool(data.assignments || []);
@@ -1767,6 +1781,28 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   {(entry.start_time || entry.end_time) ? (
                     <button type="button" onClick={() => updateEntry({ start_time: null, end_time: null })} className="ml-2 underline decoration-dotted hover:text-slate-300">{isGerman ? 'Zurücksetzen' : 'Reset'}</button>
                   ) : null}
+                <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                  <div className="text-xs font-medium text-slate-300">{isGerman ? 'Planung außerhalb von DBS' : 'Planning outside DBS'}</div>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    {isGerman
+                      ? 'Welche Schichten dieser Mitarbeiter in den Zeiten ohne DBS arbeitet und an wie vielen Tagen pro Monat. Nichts ausgewählt = wie alle anderen Mitarbeiter.'
+                      : 'Which shifts this employee works when not on DBS and on how many days per month. Nothing selected = planned like every other employee.'}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {outsideDbsShiftOptions.map((code) => {
+                      const selected = (entry.other_shift_codes || []).includes(code);
+                      return <button key={`${entry.employee_name}-other-${code}`} type="button"
+                        onClick={() => updateEntry({ other_shift_codes: selected ? (entry.other_shift_codes || []).filter((value) => value !== code) : [...(entry.other_shift_codes || []), code] })}
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${selected ? 'bg-sky-400/20 text-sky-100 ring-1 ring-sky-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>{code}</button>;
+                    })}
+                  </div>
+                  <div className="mt-3 w-full sm:max-w-xs">
+                    <label className="text-xs text-slate-400">{isGerman ? 'Tage pro Monat außerhalb von DBS (max.)' : 'Days per month outside DBS (max.)'}</label>
+                    <input type="number" min="0" max="31" value={entry.other_days_per_month ?? ''} placeholder={isGerman ? 'unbegrenzt' : 'unlimited'}
+                      onChange={(event) => updateEntry({ other_days_per_month: event.target.value === '' ? null : Math.max(0, Math.min(31, Number.parseInt(event.target.value, 10) || 0)) })}
+                      className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
+                  </div>
+                </div>
                 </p>
               </div>
             );
@@ -2288,6 +2324,20 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             <option value="balanced">{t("shiftAdmin.issueModeBalanced")}</option>
             <option value="fairness_first">{t("shiftAdmin.issueModeFairness")}</option>
           </select>
+        </div>
+      </Section>
+
+      {/* ── Variety ── */}
+      <Section title={isGerman ? 'Abwechslung im Dienstplan' : 'Plan variety'} icon={Users} defaultOpen={false}>
+        <div className="space-y-3">
+          <label className="text-xs font-medium text-slate-300">{isGerman ? 'Abwechslung' : 'Variety'}</label>
+          <input type="range" min="0" max="100" value={advancedSettings.varietyPriority} onChange={(event) => setAdvancedSettings({ ...advancedSettings, varietyPriority: Number.parseInt(event.target.value, 10) || 0 })} className="w-full" />
+          <div className="text-xs text-slate-500">{advancedSettings.varietyPriority}% · {isGerman ? '0 = keine Abwechslung, 60 = Standard, 100 = stark wechselnde Blöcke.' : '0 = none, 60 = default, 100 = strongly changing blocks.'}</div>
+          <p className="text-xs leading-5 text-slate-400">
+            {isGerman
+              ? 'Der Generator vermeidet, dass dieselbe Person Woche für Woche denselben Block (gleiche Schicht, gleiche Schichtart) bekommt, bevorzugt Schichtarten, die zuletzt nicht dabei waren, und verteilt Ausgleichsschichten gleichmäßiger auf die Wochentage. Wünsche und harte Regeln haben immer Vorrang. Speichern über „Leitstand & Autopilot speichern“ unten.'
+              : 'The generator avoids giving the same person the same block week after week, prefers shift types that were not part of the recent blocks and spreads filler shifts more evenly over the weekdays. Wishes and hard rules always win. Save with “Save control & autopilot” below.'}
+          </p>
         </div>
       </Section>
 

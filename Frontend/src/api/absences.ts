@@ -8,6 +8,8 @@ export interface Absence {
     end_date: string; // ISO Date YYYY-MM-DD
     type: 'VACATION' | 'SICK' | 'TRAINING' | 'OFFSITE';
     note?: string;
+    /** 'self' = wish entered by the employee, empty = entered by the management. */
+    source?: string | null;
 }
 
 export interface AbsenceConflict {

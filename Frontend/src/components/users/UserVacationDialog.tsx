@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
-import { addVacation, fetchVacations, removeVacation, type VacationAccount } from '../../api/vacations';
+import { addVacation, fetchAllVacations, fetchVacations, removeVacation, type VacationAccount } from '../../api/vacations';
+import type { Absence } from '../../api/absences';
 
 interface Props {
   userId: number;
@@ -26,6 +27,24 @@ export function UserVacationDialog({ userId, name, canEdit, onClose }: Props) {
   const [end, setEnd] = useState('');
   const [note, setNote] = useState('');
   const [rangeAnchor, setRangeAnchor] = useState<string | null>(null);
+  const [allEntries, setAllEntries] = useState<Absence[]>([]);
+  const initialYearApplied = useRef(false);
+
+  // All entries (including wishes of the employee) from one year back. Opens the year of the
+  // next upcoming vacation instead of an empty current year.
+  useEffect(() => {
+    let active = true;
+    fetchAllVacations(userId).then((entries) => {
+      if (!active) return;
+      setAllEntries(entries);
+      if (initialYearApplied.current) return;
+      initialYearApplied.current = true;
+      const today = new Date().toISOString().slice(0, 10);
+      const next = entries.find((entry) => entry.end_date >= today);
+      if (next) setYear(Number(next.start_date.slice(0, 4)) > new Date().getFullYear() ? Number(next.start_date.slice(0, 4)) : new Date().getFullYear());
+    }).catch(() => { /* the calendar below still works */ });
+    return () => { active = false; };
+  }, [userId]);
 
   useEffect(() => {
     let active = true;
@@ -47,6 +66,7 @@ export function UserVacationDialog({ userId, name, canEdit, onClose }: Props) {
     try {
       await addVacation(userId, start, end, note);
       setAccount(await fetchVacations(userId, year));
+      setAllEntries(await fetchAllVacations(userId));
       setStart(''); setEnd(''); setNote(''); setRangeAnchor(null);
     } catch { setError(de ? 'Urlaub konnte nicht gespeichert werden.' : 'Unable to save vacation.'); }
     finally { setBusy(false); }
@@ -58,6 +78,7 @@ export function UserVacationDialog({ userId, name, canEdit, onClose }: Props) {
     try {
       await removeVacation(userId, id);
       setAccount(await fetchVacations(userId, year));
+      setAllEntries(await fetchAllVacations(userId));
     } catch { setError(de ? 'Urlaub konnte nicht gelöscht werden.' : 'Unable to delete vacation.'); }
     finally { setBusy(false); }
   }
@@ -89,6 +110,18 @@ export function UserVacationDialog({ userId, name, canEdit, onClose }: Props) {
         </div>}
       </div>
       {error && <p role="alert" className="text-sm text-red-500">{error}</p>}
+      {allEntries.length > 0 && <section className="space-y-2 rounded-lg border p-3" aria-label={de ? 'Alle Urlaubseinträge' : 'All vacation entries'}>
+        <h3 className="font-semibold text-sm">{de ? 'Alle Urlaubseinträge (inkl. Wünsche des Mitarbeiters)' : 'All vacation entries (incl. the employee\'s wishes)'}</h3>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {allEntries.map(entry => <button type="button" key={entry.id} onClick={() => setYear(Number(entry.start_date.slice(0, 4)))}
+            className="flex items-start justify-between gap-3 rounded-lg border p-2 text-left text-sm hover:bg-muted/50">
+            <span><strong>{formatDate(entry.start_date)} – {formatDate(entry.end_date)}</strong>{entry.note && <span className="block text-xs text-muted-foreground break-words">{entry.note}</span>}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${entry.source === 'self' ? 'bg-violet-500/20 text-violet-300' : 'bg-slate-500/20 text-slate-300'}`}>
+              {entry.source === 'self' ? (de ? 'Wunsch Mitarbeiter' : 'Employee wish') : (de ? 'Eintrag Leitung' : 'Management entry')}
+            </span>
+          </button>)}
+        </div>
+      </section>}
       {loading && <p className="text-sm text-muted-foreground">{de ? 'Urlaub wird geladen…' : 'Loading vacation…'}</p>}
       {account && <>
         {canEdit && <form onSubmit={event => { event.preventDefault(); void save(); }} className="grid gap-3 rounded-lg border p-3 sm:grid-cols-[1fr_1fr_2fr_auto] items-end">
@@ -123,7 +156,7 @@ export function UserVacationDialog({ userId, name, canEdit, onClose }: Props) {
           <h3 className="font-semibold text-sm">{de ? 'Urlaubseinträge' : 'Vacation entries'}</h3>
           {!account.entries.length && <p className="text-sm text-muted-foreground">{de ? 'Für dieses Jahr sind keine Urlaubstage eingetragen.' : 'No vacation booked for this year.'}</p>}
           {account.entries.map(entry => <div key={entry.id} className="flex justify-between items-center gap-3 rounded-lg border p-3 text-sm">
-            <div><strong>{formatDate(entry.start_date)} – {formatDate(entry.end_date)}</strong>{entry.note && <p className="text-muted-foreground break-words">{entry.note}</p>}</div>
+            <div><strong>{formatDate(entry.start_date)} – {formatDate(entry.end_date)}</strong> {entry.source === 'self' && <span className="ml-2 rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-300">{de ? 'Wunsch Mitarbeiter' : 'Employee wish'}</span>}{entry.note && <p className="text-muted-foreground break-words">{entry.note}</p>}</div>
             {canEdit && <Button size="icon" variant="ghost" disabled={busy} aria-label={de ? 'Urlaubseintrag löschen' : 'Delete vacation entry'} onClick={() => void remove(entry.id)}><Trash2 className="h-4 w-4 text-red-500" /></Button>}
           </div>)}
         </section>

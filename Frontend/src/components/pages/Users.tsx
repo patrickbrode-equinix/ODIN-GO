@@ -26,6 +26,8 @@ import { formatAbsoluteDateTime, formatRelativeTime } from "../../utils/loginSta
 
 import { AddUserModal } from "../users/AddUserModal";
 import { UserVacationDialog } from "../users/UserVacationDialog";
+import { fetchAllVacations } from "../../api/vacations";
+import type { Absence } from "../../api/absences";
 
 /* ------------------------------------------------ */
 /* TYPES                                           */
@@ -58,6 +60,9 @@ interface UserPreferences {
   preferredDays?: string[];
   blockedDays?: string[];
   avoidColleagues?: string[];
+  preferredColleagues?: Array<{ id: number; name: string }>;
+  /** Admin switch "Wunschkollegen im Generator"; the selection is stored either way. */
+  colleaguesGeneratorEnabled?: boolean;
   monthlyPreferences?: Record<string, unknown> | null;
   notes?: string | null;
   updatedAt?: string | null;
@@ -266,6 +271,8 @@ export default function Users() {
   const [editError, setEditError] = useState("");
   const [expandedUserId, setExpandedUserId] = useState<number | null>(null);
   const [preferenceDetails, setPreferenceDetails] = useState<Record<number, UserPreferences | null>>({});
+  // Vacation entries (incl. wishes of the employee) shown inside the expanded wish panel.
+  const [vacationPreview, setVacationPreview] = useState<Record<number, Absence[]>>({});
   const [savingNotesForUser, setSavingNotesForUser] = useState<number | null>(null);
   const [userMessage, setUserMessage] = useState("");
 
@@ -318,11 +325,14 @@ export default function Users() {
     }
 
     setExpandedUserId(userId);
+    fetchAllVacations(userId)
+      .then((entries) => setVacationPreview((prev) => ({ ...prev, [userId]: entries })))
+      .catch(() => setVacationPreview((prev) => ({ ...prev, [userId]: [] })));
     if (Object.prototype.hasOwnProperty.call(preferenceDetails, userId)) return;
 
     try {
       const res = await api.get(`/admin/users/${userId}/preferences`);
-      setPreferenceDetails((prev) => ({ ...prev, [userId]: res.data?.preferences || { notes: null } }));
+      setPreferenceDetails((prev) => ({ ...prev, [userId]: { ...(res.data?.preferences || { notes: null }), colleaguesGeneratorEnabled: res.data?.preferredColleaguesEnabled === true } }));
     } catch (err) {
       console.error("LOAD USER PREFERENCES ERROR:", err);
       setPreferenceDetails((prev) => ({ ...prev, [userId]: null }));
@@ -794,6 +804,29 @@ export default function Users() {
                                     "border-sky-500/20"
                                   )}
                                   {renderPreferenceCard(
+                                    language === "de" ? "Urlaub" : "Vacation",
+                                    language === "de" ? "Eingetragene Urlaube, auch Wünsche des Mitarbeiters." : "Entered vacations, including the employee's wishes.",
+                                    (vacationPreview[user.id] || []).length === 0
+                                      ? <span className="text-xs text-muted-foreground">{language === "de" ? "Kein Urlaub eingetragen" : "No vacation entered"}</span>
+                                      : <div className="space-y-1 text-xs">
+                                        {(vacationPreview[user.id] || []).slice(0, 8).map((entry) => (
+                                          <div key={entry.id} className="flex items-center justify-between gap-2">
+                                            <span>{new Date(`${entry.start_date}T12:00:00`).toLocaleDateString()} – {new Date(`${entry.end_date}T12:00:00`).toLocaleDateString()}</span>
+                                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${entry.source === "self" ? "bg-violet-500/20 text-violet-300" : "bg-slate-500/20 text-slate-300"}`}>{entry.source === "self" ? (language === "de" ? "Wunsch" : "Wish") : (language === "de" ? "Leitung" : "Mgmt")}</span>
+                                          </div>
+                                        ))}
+                                      </div>,
+                                    "border-violet-500/20"
+                                  )}
+                                  {renderPreferenceCard(
+                                    language === "de" ? "Wunschkollegen" : "Preferred colleagues",
+                                    prefs.colleaguesGeneratorEnabled
+                                      ? (language === "de" ? "Werden vom Generator berücksichtigt." : "Considered by the generator.")
+                                      : (language === "de" ? "Gespeichert, aber im Generator derzeit nicht aktiviert." : "Saved, but currently not enabled in the generator."),
+                                    renderPreferenceChips((prefs.preferredColleagues || []).map((colleague) => colleague.name), "success"),
+                                    "border-emerald-500/20"
+                                  )}
+                                  {renderPreferenceCard(
                                     language === "de" ? "Kollegen" : "Colleagues",
                                     language === "de" ? "Mitarbeiter, mit denen nicht geplant werden soll." : "Employees that should be avoided.",
                                     renderPreferenceChips(prefs.avoidColleagues, "warning"),
@@ -823,6 +856,7 @@ export default function Users() {
                               <div><strong>{language === "de" ? "Gewünschte Tage" : "Preferred days"}:</strong> {renderPreferenceValue(prefs.preferredDays)}</div>
                               <div><strong>{language === "de" ? "Gesperrte Tage" : "Blocked days"}:</strong> {renderPreferenceValue(prefs.blockedDays)}</div>
                               <div><strong>{language === "de" ? "Feiertagswünsche" : "Holiday wishes"}:</strong> {renderPreferenceValue(prefs.preferredHolidays)}</div>
+                              <div><strong>{language === "de" ? "Wunschkollegen" : "Preferred colleagues"}:</strong> {renderPreferenceValue((prefs.preferredColleagues || []).map((colleague) => colleague.name))}</div>
                               <div><strong>{language === "de" ? "Kollegen vermeiden" : "Avoid colleagues"}:</strong> {renderPreferenceValue(prefs.avoidColleagues)}</div>
                               <div><strong>{language === "de" ? "Notizen" : "Notes"}:</strong> {renderPreferenceValue(prefs.notes)}</div>
                             </div>
