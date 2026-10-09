@@ -1,0 +1,97 @@
+name: Diagnose deployment
+
+# Temporary diagnostic workflow (branch ci-diagnose only): every check is its own job,
+# so the failing part is visible without reading logs.
+on:
+  push:
+    branches: [ci-diagnose]
+
+env:
+  DB_PASSWORD: ci-only-database-password
+  JWT_SECRET: ci-only-jwt-secret
+  SHIFTPLANNER_API_KEY: ci-only-application-key
+  OPERATIONAL_TIMEZONE: Europe/Berlin
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        file: [adminSeed, coloPlanning, employeeIdentity, holidayPreferences, ingestAndProvisioning, jarvisNotifications, jarvisNotificationSchedule, loginName, market, nameNorm, nightBlockSettings, odinGo, parseMonthLabel, planningPeriods, preferenceStrength, requirePageAccess, shiftDefinitionInput, shiftHandovers, shiftHours, shiftplanGeneration, shiftplanMonth, shiftplanStaffingDefaults, shiftplanTargetHours, sseAuth, ssoAuth, staffingLimits, understaffingSuggestions, userVacations, vacationDays, webAdminSession, wishFulfillment]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix Backend
+      - run: node --test tests/${{ matrix.file }}.test.js
+        working-directory: Backend
+
+  backend-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Syntax check of all backend files
+        run: |
+          failed=0
+          for f in $(find Backend -name '*.js' -not -path '*/node_modules/*'); do
+            node --check "$f" || failed=1
+          done
+          exit $failed
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix Frontend
+      - run: npm run build --prefix Frontend
+        env:
+          VITE_API_BASE_URL: /api
+
+  frontend-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix Frontend
+      - run: npx tsc --noEmit -p Frontend
+
+  frontend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix Frontend
+      - run: npm test --prefix Frontend
+
+  compose-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config --quiet
+
+  compose-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose build
+
+  compose-up:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build --wait --wait-timeout 420
+      - name: Show service state on failure
+        if: failure()
+        run: docker compose ps -a
