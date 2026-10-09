@@ -4315,9 +4315,12 @@ async function addManagementSheets(workbook, drafts) {
  * variant 'team'       : only the shifts, one worksheet per month (no hours, no internal data).
  * variant 'management' : the same month sheets with hours, plus overview sheets with
  *                        target/actual hours and the wish fulfilment per employee.
+ * no variant           : the complete month sheets (version, status, hours), no extra sheets.
  */
 export async function buildExcelWorkbook(drafts, period = null, options = {}) {
-  const isTeam = options.variant !== 'management';
+  // No variant (internal callers, tests): the complete month sheets with version, status and hours.
+  const variant = options.variant || 'full';
+  const isTeam = variant === 'team';
   const showHours = !isTeam;
   drafts = [...drafts].sort((left, right) => left.month.localeCompare(right.month));
   const workbook = new ExcelJS.Workbook();
@@ -4325,7 +4328,7 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   workbook.created = new Date();
 
   // Overview sheets come first, so they are the first thing the readers see.
-  if (!isTeam) await addManagementSheets(workbook, drafts);
+  if (variant === 'management') await addManagementSheets(workbook, drafts);
 
   for (const draft of drafts) {
     const shifts = draft.shifts_json;

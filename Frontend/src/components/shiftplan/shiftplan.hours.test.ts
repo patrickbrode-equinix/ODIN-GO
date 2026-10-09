@@ -48,7 +48,8 @@ describe("computeShiftChangeHoursDelta", () => {
       schedule: { Anna: { 15: "E1SA" } },
       changes: [{ employeeName: "Anna", day: 15, newCode: "ABW" }],
     });
-    expect(result.delta).toBe(-7);
+    // E1SA runs 06:30-15:30: 9 h presence minus the 1 h break.
+    expect(result.delta).toBe(-8);
   });
 
   it("sums multi-day changes and reports target difference", () => {
@@ -58,8 +59,9 @@ describe("computeShiftChangeHoursDelta", () => {
       changes: [17, 18, 19].map((day) => ({ employeeName: "Anna", day, newCode: "N" })),
       sollHours: 100,
     });
-    expect(result.delta).toBe(24);
-    expect(result.resultingDiff).toBe(-76);
+    // N runs 21:15-06:45: 9.5 h presence minus the 1 h break = 8.5 h per night.
+    expect(result.delta).toBe(25.5);
+    expect(result.resultingDiff).toBe(-74.5);
   });
 
   it("returns both employees for a swap", () => {

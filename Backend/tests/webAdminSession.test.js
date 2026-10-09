@@ -35,7 +35,8 @@ describe("web admin session without application key", () => {
     original.query = db.query;
     config.isProd = true;
     config.SHIFTPLANNER_API_KEY = "extension-key-for-tests";
-    db.query = async () => ({ rows: [{ id: 1, login_name: "root", is_root: true }] });
+    // id 7 matches the userId of the identity token used below (requireAuth rejects a token whose user is missing).
+    db.query = async () => ({ rows: [{ id: 7, login_name: "root", is_root: true }] });
   });
 
   afterEach(() => {

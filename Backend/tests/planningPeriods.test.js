@@ -174,3 +174,28 @@ test('Excel month sheets and summary show title and description', async () => {
   assert.match(String(one.worksheets[0].getCell(1, 1).value), /^Q1 Plan – /);
   assert.equal(one.worksheets.length, 1);
 });
+
+test('team Excel shows only the shifts: no version line, no hours column, short summary', async () => {
+  const months = getPlanningMonths(2027, 1);
+  const drafts = months.map((month) => ({ month, version: 3, status: 'draft', shifts_json: [{ employee_name: 'Jane Doe', day: 1, shift_code: 'E1' }], conflicts: [], config_snapshot: {}, fairness: { 'Jane Doe': { actualHours: 160 } }, created_at: '2026-10-06T12:00:00Z', created_by: 'secret-author' }));
+  const workbook = await buildExcelWorkbook(drafts, { type: 'quarter', year: 2027, quarter: 1 }, { variant: 'team' });
+  const restored = new ExcelJS.Workbook();
+  await restored.xlsx.load(await workbook.xlsx.writeBuffer());
+  const month = restored.worksheets[0];
+  assert.doesNotMatch(String(month.getCell(2, 1).value), /Version|secret-author/);
+  assert.equal(month.getCell(4, 32).value, null); // no "Stunden" column behind the 31 days
+  assert.equal(restored.worksheets.at(-1).getCell(3, 2).value, 'Schichten');
+  assert.equal(restored.worksheets.at(-1).getCell(3, 4).value, null);
+});
+
+test('management Excel puts hours and wish sheets in front of the month sheets', async () => {
+  const drafts = [{ month: '2027-01', version: 1, status: 'draft', shifts_json: [{ employee_name: 'Jane Doe', day: 4, shift_code: 'E1' }], conflicts: [], config_snapshot: {}, fairness: { 'Jane Doe': { actualHours: 8, targetHours: 160 } }, created_at: '2026-10-06T12:00:00Z', created_by: 'a' }];
+  const workbook = await buildExcelWorkbook(drafts, null, { variant: 'management' });
+  const restored = new ExcelJS.Workbook();
+  await restored.xlsx.load(await workbook.xlsx.writeBuffer());
+  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Stunden & Wünsche', 'Wunschdetails', 'Januar 2027']);
+  const overview = restored.worksheets[0];
+  assert.equal(overview.getCell(5, 2).value, 'Jane Doe');
+  assert.equal(overview.getCell(5, 3).value, 160);
+  assert.equal(overview.getCell(5, 4).value, 8);
+});
