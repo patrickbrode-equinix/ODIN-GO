@@ -792,3 +792,57 @@ export function applyWeekendBlockSlots({ slots = [], saturday = null, sunday = n
 
   return slots.map((slot) => ({ ...slot, planned_slots: planned.get(slot.code) ?? slot.planned_slots }));
 }
+
+/* ================================================ */
+/* Variety: avoid the same block week after week     */
+/* ================================================ */
+
+export const DEFAULT_VARIETY_PRIORITY = 60;
+
+export function normalizeVarietyPriority(value) {
+  const parsed = Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(parsed)) return DEFAULT_VARIETY_PRIORITY;
+  return Math.min(100, Math.max(0, parsed));
+}
+
+/**
+ * Score adjustment for starting a new block with `nextCode` / `nextType`, based on the last
+ * blocks of the employee (`history`, oldest first, entries { code, type }).
+ * - the same code again and again is penalised (strongest)
+ * - the same shift type in a row is penalised (weaker)
+ * - a type the employee has not had in the last blocks gets a bonus
+ * `priority` 0..100 scales everything (0 = off, 60 = default).
+ */
+export function getVarietyAdjustment({ history = [], nextCode, nextType, priority = DEFAULT_VARIETY_PRIORITY } = {}) {
+  const scale = normalizeVarietyPriority(priority) / DEFAULT_VARIETY_PRIORITY;
+  const recent = (Array.isArray(history) ? history : []).slice(-3);
+  if (scale === 0 || recent.length === 0) return { score: 0, reason: null };
+
+  const code = String(nextCode || '').trim().toUpperCase();
+  const type = normalizePlanningShiftTypeKey(nextType);
+  const sameCode = recent.filter((entry) => String(entry?.code || '').trim().toUpperCase() === code).length;
+  const sameType = recent.filter((entry) => normalizePlanningShiftTypeKey(entry?.type) === type).length;
+  const typeIsNew = sameType === 0;
+
+  const raw = -(sameCode * 160) - (sameType * 90) + (typeIsNew ? 140 : 0);
+  const score = Math.round(raw * scale);
+  if (score === 0) return { score: 0, reason: null };
+  return {
+    score,
+    reason: score < 0
+      ? `Abwechslung: ${code} / ${type} wurde zuletzt bereits ${sameCode}x bzw. ${sameType}x geplant`
+      : `Abwechslung: ${type} war in den letzten Blöcken nicht dabei`,
+  };
+}
+
+/**
+ * Small deterministic jitter (about +-60 points at the default priority). It depends on
+ * employee, month, week and shift code, so ties between similar candidates are broken
+ * differently every week and month, but the same input always yields the same plan.
+ */
+export function getVarietyJitter({ employee, year, month, weekKey, shiftCode, priority = DEFAULT_VARIETY_PRIORITY } = {}) {
+  const scale = normalizeVarietyPriority(priority) / DEFAULT_VARIETY_PRIORITY;
+  if (scale === 0) return 0;
+  const rank = getDeterministicRotationRank({ employee, year, month, weekKey, shiftCode });
+  return Math.round(((rank % 2001) / 1000 - 1) * 60 * scale);
+}

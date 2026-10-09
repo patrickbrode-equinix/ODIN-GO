@@ -199,3 +199,20 @@ test('management Excel puts hours and wish sheets in front of the month sheets',
   assert.equal(overview.getCell(5, 3).value, 160);
   assert.equal(overview.getCell(5, 4).value, 8);
 });
+
+test('Excel colours are written as ARGB so Excel actually shows the shift colours', async () => {
+  const drafts = [{ month: '2027-01', version: 1, status: 'draft', shifts_json: [{ employee_name: 'Jane Doe', day: 4, shift_code: 'E1' }, { employee_name: 'Jane Doe', day: 5, shift_code: 'N' }], conflicts: [], config_snapshot: {}, fairness: {}, created_at: '2026-10-06T12:00:00Z', created_by: 'a' }];
+  for (const variant of ['team', 'management', undefined]) {
+    const workbook = await buildExcelWorkbook(drafts, null, { variant });
+    const restored = new ExcelJS.Workbook();
+    await restored.xlsx.load(await workbook.xlsx.writeBuffer());
+    const sheet = restored.getWorksheet('Januar 2027');
+    const early = sheet.getCell(5, 5); // day 4
+    const night = sheet.getCell(5, 6); // day 5
+    assert.equal(early.value, 'E1');
+    assert.match(String(early.fill?.fgColor?.argb), /^FF[0-9A-F]{6}$/);
+    assert.match(String(night.fill?.fgColor?.argb), /^FF[0-9A-F]{6}$/);
+    assert.notEqual(early.fill.fgColor.argb, night.fill.fgColor.argb);
+    assert.match(String(sheet.getCell(4, 1).fill?.fgColor?.argb), /^FF[0-9A-F]{6}$/);
+  }
+});

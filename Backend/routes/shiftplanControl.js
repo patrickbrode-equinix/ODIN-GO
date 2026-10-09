@@ -26,6 +26,9 @@ import { parseMonthLabel } from '../lib/monthParser.js';
 import { countWeekdaysInRange, getWorkdayBasedTargetHours } from '../lib/shiftHours.js';
 import {
   applyWeekendBlockSlots,
+  getVarietyAdjustment,
+  getVarietyJitter,
+  normalizeVarietyPriority,
   buildDailyShiftSlots,
   buildShiftSlots,
   buildStaffingRulesByShiftType,
@@ -65,7 +68,9 @@ import { mergeMonthlyPreferences } from '../lib/understaffingSuggestions.js';
 import { buildDayLimitMap, buildStaffingForContext, resolveStaffingDayContext } from '../lib/staffingLimits.js';
 import {
   buildEmployeeNameLookup,
+  findEmployeeName,
   normalizeEmployeeName,
+  resolveAbsenceEmployeeName,
   resolveEmployeeName,
 } from '../lib/employeeNameResolution.js';
 import { buildColoRolePlan, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
@@ -574,11 +579,20 @@ function hasSubmittedEmployeePreferences(preferenceRow) {
   );
 }
 
+/** All names a user row can be matched by in a plan: provisioned plan name, "First Last", "Last, First". */
+function userNameCandidates(row) {
+  return [
+    row?.provisioned_employee_name,
+    [row?.first_name, row?.last_name].filter(Boolean).join(' '),
+    [row?.last_name, row?.first_name].filter(Boolean).join(', '),
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+}
+
 async function loadDraftWishStatus(employeeNames) {
   const deduplicatedEmployees = deduplicateEmployees(employeeNames);
   const employeeLookup = buildEmployeeNameLookup(deduplicatedEmployees);
   const { rows } = await pool.query(
-    `SELECT ep.*, u.first_name, u.last_name, u.email
+    `SELECT ep.*, u.first_name, u.last_name, u.email, u.provisioned_employee_name
      FROM employee_preferences ep
      JOIN users u ON u.id = ep.user_id
      ORDER BY ep.updated_at DESC NULLS LAST, u.last_name, u.first_name`
@@ -858,7 +872,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const specialPoolRes = await pool.query(
-    `SELECT shift_code, employee_name, monthly_max_assignments, working_weekdays, free_days_after_block, duration_hours
+    `SELECT shift_code, employee_name, monthly_max_assignments, working_weekdays, free_days_after_block, duration_hours, other_shift_codes, other_days_per_month
      FROM shift_special_pools
      WHERE is_active = TRUE
      ORDER BY shift_code, sort_order, employee_name`
@@ -877,6 +891,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       freeDaysAfterBlock: Math.max(Number.parseInt(String(row.free_days_after_block ?? dbsPlanningConfig.freeDaysAfterBlock), 10) || 0, 0),
       // Own paid hours of this employee for the shift (null = hours of the definition).
       durationHours: row.duration_hours === null || row.duration_hours === undefined ? null : Number(row.duration_hours),
+      // Planning outside the DBS block (DBS pool only): allowed shift codes and a day cap per month.
+      otherShiftCodes: Array.isArray(row.other_shift_codes)
+        ? row.other_shift_codes.map((code) => String(code || '').trim().toUpperCase()).filter(Boolean)
+        : [],
+      otherDaysPerMonth: row.other_days_per_month === null || row.other_days_per_month === undefined ? null : Number(row.other_days_per_month),
     });
   }
   const restrictedPoolShiftCodes = new Set([...specialPoolsByShift.keys()]);
@@ -890,13 +909,25 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const employeeNameLookup = buildEmployeeNameLookup(employees);
 
   const absRes = await pool.query(
-    `SELECT employee_name, start_date, end_date, type FROM absences WHERE start_date <= $1 AND end_date >= $2`,
+    `SELECT employee_name, employee_id, start_date, end_date, type, source FROM absences WHERE start_date <= $1 AND end_date >= $2`,
     [`${month}-${numDays}`, `${month}-01`]
   );
+  // Vacation wishes of employees must reach the plan even when the stored name is spelled
+  // differently from the plan (umlauts, "Last, First"): match by name first, then by the
+  // names of the linked user account.
+  const absenceUserIds = [...new Set(absRes.rows.map((row) => Number(row.employee_id)).filter((id) => Number.isInteger(id) && id > 0))];
+  const absenceUserRows = absenceUserIds.length
+    ? (await pool.query('SELECT id, first_name, last_name, provisioned_employee_name FROM users WHERE id = ANY($1::int[])', [absenceUserIds])).rows
+    : [];
+  const userNameCandidatesById = new Map(absenceUserRows.map((row) => [row.id, userNameCandidates(row)]));
   const absenceMap = new Map();
+  const unmatchedAbsences = [];
   for (const absence of absRes.rows) {
-    // Key by the plan's spelling of the employee so vacation wishes always match.
-    const absenceKey = resolveEmployeeName(absence.employee_name, employeeNameLookup) || absence.employee_name;
+    const absenceKey = resolveAbsenceEmployeeName(absence, employeeNameLookup, userNameCandidatesById);
+    if (!absenceKey) {
+      unmatchedAbsences.push(absence);
+      continue;
+    }
     if (!absenceMap.has(absenceKey)) absenceMap.set(absenceKey, []);
     absenceMap.get(absenceKey).push(absence);
   }
@@ -946,10 +977,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   for (const row of wellbeingRows) historyMap.set(row.employee_name, row);
 
   const empPrefRes = await pool.query(
-    `SELECT ep.*, u.first_name, u.last_name, u.email
+    `SELECT ep.*, u.first_name, u.last_name, u.email, u.provisioned_employee_name
      FROM employee_preferences ep
      JOIN users u ON u.id = ep.user_id`
   );
+  // Every spelling a user account is known by (plan name, "First Last", "Last, First").
+  const resolveUserPlanName = (row) => findEmployeeName(row.provisioned_employee_name, employeeNameLookup)
+    || userNameCandidates(row).map((candidate) => findEmployeeName(candidate, employeeNameLookup)).find(Boolean)
+    || resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup);
   // Admin switch: saved "days I do not want to work" are only honoured while on.
   const blockedDaysSetting = await pool.query(
     "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1"
@@ -957,7 +992,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const blockedDaysEnabled = String(blockedDaysSetting.rows[0]?.value ?? 'false') === 'true';
   const empPrefsMap = new Map();
   for (const row of empPrefRes.rows) {
-    const employeeName = resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup);
+    const employeeName = resolveUserPlanName(row);
     if (!employeeName) continue;
     // Saved weekday exclusions apply to every employee, including catch-up work.
     empPrefsMap.set(employeeName, blockedDaysEnabled ? row : { ...row, blocked_days: [] });
@@ -977,24 +1012,27 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     [`${PREFERENCE_STRENGTH_KEY_PREFIX}%`]
   );
   const prefStrength = parsePreferenceStrengths(prefStrengthRes.rows);
+  // Admin setting "Abwechslung" (0-100): how strongly the plan avoids repeating the same blocks.
+  const varietySetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.variety_priority' LIMIT 1");
+  const varietyPriority = normalizeVarietyPriority(varietySetting.rows[0]?.value);
   const preferredColleagueMap = new Map();
   const preferredColleagueWishes = [];
   if (preferredColleaguesEnabled) {
     const colleagueIds = [...new Set(empPrefRes.rows.flatMap((row) => (Array.isArray(row.preferred_colleagues) ? row.preferred_colleagues : [])
       .map((id) => Number.parseInt(String(id), 10)).filter(Number.isInteger)))];
     const colleagueUsers = colleagueIds.length
-      ? await pool.query('SELECT id, first_name, last_name FROM users WHERE id = ANY($1::int[])', [colleagueIds])
+      ? await pool.query('SELECT id, first_name, last_name, provisioned_employee_name FROM users WHERE id = ANY($1::int[])', [colleagueIds])
       : { rows: [] };
     const colleagueNameById = new Map(colleagueUsers.rows.map((row) => [
       row.id,
-      resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup),
+      resolveUserPlanName(row),
     ]));
     const addColleaguePair = (left, right) => {
       if (!preferredColleagueMap.has(left)) preferredColleagueMap.set(left, new Set());
       preferredColleagueMap.get(left).add(right);
     };
     for (const row of empPrefRes.rows) {
-      const employeeName = resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup);
+      const employeeName = resolveUserPlanName(row);
       if (!employeeName) continue;
       for (const rawId of (Array.isArray(row.preferred_colleagues) ? row.preferred_colleagues : []).slice(0, 4)) {
         const colleagueName = colleagueNameById.get(Number.parseInt(String(rawId), 10));
@@ -1086,6 +1124,23 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  // Never drop an absence silently: report the ones that could not be assigned to a plan row.
+  if (unmatchedAbsences.length > 0) {
+    const formatDay = (value) => (value instanceof Date
+      ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+      : String(value || '').slice(0, 10));
+    for (const absence of unmatchedAbsences) {
+      conflicts.push({
+        day: 1,
+        date: `${month}-01`,
+        shift: String(absence.type || 'ABW').toUpperCase(),
+        severity: 'warning',
+        type: 'absence_unmatched',
+        message: `${absence.type === 'VACATION' ? 'Urlaub' : 'Abwesenheit'} von "${absence.employee_name}" (${formatDay(absence.start_date)} bis ${formatDay(absence.end_date)}) konnte keinem Mitarbeiter im Plan zugeordnet werden und wurde nicht berücksichtigt.`,
+      });
+    }
+  }
+
   const planReport = {
     totalEmployees: employees.length,
     excludedEmployees: shiftExcludedSet.size,
@@ -1111,6 +1166,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const empLastWorkedShiftType = {};
   const empLastWorkedDay = {};
   const empForcedNextShiftCode = {};
+  // Blocks started so far (plus the last one of the previous month): input for the variety score.
+  const empBlockHistory = {};
 
   const activeEmployees = employees.filter((employee) => !shiftExcludedSet.has(employee));
   planReport.activeEmployees = activeEmployees.length;
@@ -1197,6 +1254,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empLastWorkedShiftType[employee] = carried.lastWorkedShiftType || null;
     empLastWorkedDay[employee] = null;
     empForcedNextShiftCode[employee] = carried.forcedNextShiftCode || null;
+    empBlockHistory[employee] = carried.lastWorkedShiftCode
+      ? [{ code: String(carried.lastWorkedShiftCode).toUpperCase(), type: carried.lastWorkedShiftType || null }]
+      : [];
   }
 
   // pg returns DATE columns as local-midnight Date objects; compare calendar keys to avoid timezone drift.
@@ -1274,6 +1334,26 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       empRecoveryReason[employee] = 'Kurze Nachtschicht';
     }
   }
+  // DBS pool members can have their own rule for the time outside DBS: which shifts and how many
+  // days per month. Without a rule they are planned like everybody else.
+  const getDbsOutsideRule = (employee) => {
+    if (!dbsPlanningConfig.enabled) return null;
+    const entry = specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.get(employee);
+    if (!entry || (entry.otherShiftCodes.length === 0 && entry.otherDaysPerMonth === null)) return null;
+    return entry;
+  };
+  const countDaysOutsideDbs = (employee) => Object.values(empDayAssignment[employee] || {})
+    .filter((code) => code && String(code).trim().toUpperCase() !== dbsPlanningConfig.shiftCode).length;
+  const describeDbsOutsideRule = (rule) => `${rule.otherShiftCodes.length ? `nur ${rule.otherShiftCodes.join(', ')}` : 'alle Schichten'}${rule.otherDaysPerMonth !== null ? `, höchstens ${rule.otherDaysPerMonth} Tage/Monat` : ''}`;
+  const isOutsideDbsAllowed = (employee, definition, additionalDays = 1) => {
+    const rule = getDbsOutsideRule(employee);
+    if (!rule) return true;
+    const code = String(definition?.code || '').trim().toUpperCase();
+    if (code === dbsPlanningConfig.shiftCode) return true;
+    if (rule.otherShiftCodes.length > 0 && !rule.otherShiftCodes.some((allowed) => getPreferenceShiftCode(allowed) === getPreferenceShiftCode(code))) return false;
+    if (rule.otherDaysPerMonth !== null && countDaysOutsideDbs(employee) + additionalDays > rule.otherDaysPerMonth) return false;
+    return true;
+  };
   const getShiftHoursForDay = (definition, day) => getShiftDurationHours(definition, dayOfWeek(year, mon, day));
   const isPoolEmployeeWorkingOnWeekday = (definition, employeeName, weekday) => {
     const shiftCode = String(definition?.code || '').trim().toUpperCase();
@@ -1347,6 +1427,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       ? (continuingBlock ? Math.max(remainingBefore - 1, 0) : seriesDays - 1)
       : 0;
     const blockEndsToday = remainingAfter === 0;
+    if (!continuingBlock) {
+      empBlockHistory[emp].push({ code: String(shiftDef.code || '').toUpperCase(), type: normalizePlanningShiftTypeKey(shiftDef.shift_type) });
+    }
 
     if (remainingAfter > 0) {
       empSeriesCode[emp] = shiftDef.code;
@@ -2099,6 +2182,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             }
           }
 
+          const dbsOutsideRule = getDbsOutsideRule(employee);
+          if (dbsOutsideRule && !isOutsideDbsAllowed(employee, shiftDef, seriesDays)) {
+            hardBlocked = true;
+            reasons.push(`DBS-Mitarbeiter: außerhalb von DBS gilt ${describeDbsOutsideRule(dbsOutsideRule)}`);
+          }
+
           if (hardBlocked) {
             return { emp: employee, score: Number.NEGATIVE_INFINITY, reasons, hardBlocked: true };
           }
@@ -2153,6 +2242,18 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const stabilityPriority = Math.max(0, Math.min(Number(rotation.stability_priority ?? 70), 100));
           score += continuity.score * (stabilityPriority / 50);
           if (continuity.reason) reasons.push(continuity.reason);
+
+          // Variety: not the same block week after week, plus a small deterministic jitter.
+          const variety = getVarietyAdjustment({
+            history: empBlockHistory[employee],
+            nextCode: shiftDef.code,
+            nextType: shiftDef.shift_type,
+            priority: varietyPriority,
+          });
+          score += variety.score;
+          if (variety.reason) reasons.push(variety.reason);
+          const varietyJitter = getVarietyJitter({ employee, year, month: mon, weekKey: getWeekendBlockKey(year, mon, day), shiftCode: shiftDef.code, priority: varietyPriority });
+          score += varietyJitter;
 
           const previousWorkedType = empLastWorkedShiftType[employee];
           const isShiftTypeChange = previousWorkedType && previousWorkedType !== shiftDef.shift_type;
@@ -2272,6 +2373,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             colleagueMatches,
             dbsRoster: isRosterDbsAssignment,
             targetHoursGap: Math.max(remainingToTarget, 0),
+            // The candidate order is decided by the open target hours first. Variety moves a candidate
+            // by up to about one shift (20 points = 1 hour), so repeating the same block no longer wins
+            // against an equally suitable colleague.
+            varietyHours: (variety.score + varietyJitter) / 20,
           };
         });
 
@@ -2301,7 +2406,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (left.preferencePenalty !== right.preferencePenalty) return left.preferencePenalty - right.preferencePenalty;
           // Contractual hours remain the first fairness guard. Within one
           // shift's worth of open hours, honour the selected shift wish.
-          const targetGapDifference = right.targetHoursGap - left.targetHoursGap;
+          const targetGapDifference = (right.targetHoursGap + right.varietyHours) - (left.targetHoursGap + left.varietyHours);
           if (Math.abs(targetGapDifference) > getShiftHoursForDay(shiftDef, day)) return targetGapDifference;
           // Open Colo cover is filled by a pool member whose wishes fit.
           if (left.coloBoost !== right.coloBoost) return left.coloBoost ? -1 : 1;
@@ -2552,6 +2657,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[dateStr] || null);
     if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) return false;
     if (wouldExceedEmployeeWeekendLimit(employee, [day])) return false;
+    // Upgrading an already planned day (E1SA -> E1WE) does not add a day outside DBS.
+    if (!isOutsideDbsAllowed(employee, definition, empDayAssignment[employee]?.[day] ? 0 : 1)) return false;
     const maxStaff = Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0);
     if (maxStaff === 0) return false;
     const code = String(definition?.code || '').trim().toUpperCase();
@@ -2574,6 +2681,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const candidateDefinitions = regularCatchupDefinitions
       .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
       .filter((definition) => !evaluateShiftWishForPrefs(prefs, definition.code).hardBlocked)
+      .filter((definition) => isOutsideDbsAllowed(employee, definition, 1))
       .sort((left, right) => {
         // Soft wishes (< 100 %): prefer definitions that do not violate a wish.
         const penaltyDifference = evaluateShiftWishForPrefs(prefs, left.code).penalty - evaluateShiftWishForPrefs(prefs, right.code).penalty;
@@ -2584,6 +2692,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const leftContinuity = left.code === empLastWorkedShiftCode[employee] ? 1 : 0;
         const rightContinuity = right.code === empLastWorkedShiftCode[employee] ? 1 : 0;
         if (rightContinuity !== leftContinuity) return rightContinuity - leftContinuity;
+        // Variety: no fixed first definition (always E1) for everybody. The order differs per
+        // employee and month but is reproducible.
+        if (varietyPriority > 0) {
+          const leftRank = getDeterministicRotationRank({ employee, year, month: mon, weekKey: 'catchup', shiftCode: left.code });
+          const rightRank = getDeterministicRotationRank({ employee, year, month: mon, weekKey: 'catchup', shiftCode: right.code });
+          if (leftRank !== rightRank) return leftRank - rightRank;
+        }
         return Number(left.sort_order || 0) - Number(right.sort_order || 0);
       });
     const catchupDefinition = candidateDefinitions[0];
@@ -2614,9 +2729,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const sameTypeNeighbor = getAssignedShiftType(employee, day - 1) === normalizePlanningShiftTypeKey(catchupDefinition.shift_type)
           || getAssignedShiftType(employee, day + 1) === normalizePlanningShiftTypeKey(catchupDefinition.shift_type);
         const recoveryEntry = explanations[`${employee}_${day}`]?.reasons?.some((reason) => String(reason).includes('Erholung'));
+        // Level the coverage: days that already have many colleagues of this shift type come last, so
+        // the filler shifts do not all pile up on the same days (e.g. every Wed-Fri).
+        const catchupType = normalizePlanningShiftTypeKey(catchupDefinition.shift_type);
+        const colleaguesOfTypeThatDay = shifts.filter((entry) => Number(entry.day) === day
+          && normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type) === catchupType).length;
         availableDays.push({
           day,
           score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) - (recoveryEntry ? 50 : 0)
+            - colleaguesOfTypeThatDay * 8 * (varietyPriority / 60)
             - getBlockedDayPenalty(employee, dow) - getShiftWishPenaltyOnDate(employee, dateStr, catchupDefinition.code),
         });
       }
@@ -3045,7 +3166,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           .filter((employee) => coverageDays.every((coverageDay) => isPoolEmployeeWorkingOnWeekday(suggestionDefinition, employee, dayOfWeek(year, mon, coverageDay)))))
         : null;
       const suggestions = rankSafeSubstituteCandidates({
-        candidates: substituteCandidates,
+        candidates: substituteCandidates.filter((candidate) => isOutsideDbsAllowed(candidate.employee, suggestionDefinition, coverageDays.length)),
         shiftType,
         shiftCode: suggestionDefinition?.code,
         coverageDays,
@@ -4079,7 +4200,115 @@ const SHIFT_COLORS = {
   ABW:{ fill: 'D1D5DB', font: '1F2937' },
   DBS:{ fill: 'E0E7FF', font: '3730A3' },
   S:  { fill: 'F3F4F6', font: '374151' },
+  // Absences that are not planned shifts (taken from the absence table).
+  URL: { fill: 'EDE9FE', font: '5B21B6' },
+  KRANK: { fill: 'FEE2E2', font: '991B1B' },
+  SEM: { fill: 'CCFBF1', font: '115E59' },
+  EXT: { fill: 'E0F2FE', font: '075985' },
 };
+
+const ABSENCE_EXCEL_CODES = { VACATION: 'URL', SICK: 'KRANK', TRAINING: 'SEM', OFFSITE: 'EXT' };
+
+/** Excel wants ARGB (8 hex digits). A bare RGB value is read as an invalid colour and drops the fill. */
+function toExcelArgb(value) {
+  const text = String(value || '');
+  return /^[0-9a-fA-F]{6}$/.test(text) ? `FF${text.toUpperCase()}` : value;
+}
+
+function normalizeWorkbookColors(workbook) {
+  workbook.eachSheet((worksheet) => {
+    worksheet.eachRow({ includeEmpty: false }, (row) => {
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        const fill = cell.fill;
+        if (fill?.type === 'pattern' && fill.fgColor?.argb && toExcelArgb(fill.fgColor.argb) !== fill.fgColor.argb) {
+          cell.fill = { ...fill, fgColor: { ...fill.fgColor, argb: toExcelArgb(fill.fgColor.argb) } };
+        }
+        const font = cell.font;
+        if (font?.color?.argb && toExcelArgb(font.color.argb) !== font.color.argb) {
+          cell.font = { ...font, color: { ...font.color, argb: toExcelArgb(font.color.argb) } };
+        }
+        const border = cell.border;
+        if (border) {
+          const next = { ...border };
+          let changed = false;
+          for (const side of ['top', 'bottom', 'left', 'right']) {
+            const color = border[side]?.color;
+            if (color?.argb && toExcelArgb(color.argb) !== color.argb) {
+              next[side] = { ...border[side], color: { ...color, argb: toExcelArgb(color.argb) } };
+              changed = true;
+            }
+          }
+          if (changed) cell.border = next;
+        }
+      });
+    });
+  });
+}
+
+function localDayKey(value) {
+  if (value instanceof Date) {
+    return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  }
+  return String(value || '').slice(0, 10);
+}
+
+/**
+ * Absences (vacation wishes, sickness, training ...) that fall into the months of the drafts,
+ * assigned to the employee spelling used in each draft:
+ *   Map<month, { marks: Map<employee, Map<day, {code,type,source}>>, vacations: Map<employee, [{start_date,end_date,source,note}]> }>
+ * Never throws: without a database the export simply has no absence marks.
+ */
+async function loadAbsenceInfoForDrafts(drafts) {
+  const result = new Map();
+  if (!drafts.length) return result;
+  try {
+    const months = drafts.map((draft) => draft.month).sort();
+    const [lastYear, lastMonth] = months[months.length - 1].split('-').map(Number);
+    const lastDay = new Date(lastYear, lastMonth, 0).getDate();
+    const { rows } = await pool.query(
+      `SELECT employee_name, employee_id, start_date, end_date, type, source, note
+         FROM absences WHERE start_date <= $2 AND end_date >= $1`,
+      [`${months[0]}-01`, `${months[months.length - 1]}-${String(lastDay).padStart(2, '0')}`],
+    );
+    const userIds = [...new Set(rows.map((row) => Number(row.employee_id)).filter((id) => Number.isInteger(id) && id > 0))];
+    const userRows = userIds.length
+      ? (await pool.query('SELECT id, first_name, last_name, provisioned_employee_name FROM users WHERE id = ANY($1::int[])', [userIds])).rows
+      : [];
+    const candidatesById = new Map(userRows.map((row) => [row.id, userNameCandidates(row)]));
+
+    for (const draft of drafts) {
+      const [year, mon] = draft.month.split('-').map(Number);
+      const monthStart = `${draft.month}-01`;
+      const monthEnd = `${draft.month}-${String(new Date(year, mon, 0).getDate()).padStart(2, '0')}`;
+      const planNames = new Set([...(draft.shifts_json || []).map((shift) => shift.employee_name), ...Object.keys(draft.fairness || {})]);
+      const lookup = buildEmployeeNameLookup([...planNames].filter(Boolean));
+      const marks = new Map();
+      const vacations = new Map();
+      for (const row of rows) {
+        const start = localDayKey(row.start_date);
+        const end = localDayKey(row.end_date);
+        if (end < monthStart || start > monthEnd) continue;
+        const employee = resolveAbsenceEmployeeName(row, lookup, candidatesById);
+        if (!employee) continue;
+        const code = ABSENCE_EXCEL_CODES[String(row.type || '').toUpperCase()] || 'ABW';
+        if (!marks.has(employee)) marks.set(employee, new Map());
+        const from = start < monthStart ? 1 : Number(start.slice(8, 10));
+        const to = end > monthEnd ? Number(monthEnd.slice(8, 10)) : Number(end.slice(8, 10));
+        for (let day = from; day <= to; day++) {
+          if (!marks.get(employee).has(day)) marks.get(employee).set(day, { code, type: row.type, source: row.source });
+        }
+        if (String(row.type || '').toUpperCase() === 'VACATION') {
+          if (!vacations.has(employee)) vacations.set(employee, []);
+          vacations.get(employee).push({ start_date: start, end_date: end, source: row.source, note: row.note });
+        }
+      }
+      result.set(draft.month, { marks, vacations });
+    }
+  } catch (error) {
+    console.warn('Excel export: absences could not be loaded:', error?.message || error);
+  }
+  return result;
+}
 
 function resolveExcelShiftColors(rawCode) {
   const code = String(rawCode || '').trim().toUpperCase();
@@ -4121,7 +4350,7 @@ function statusFill(status) {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
 }
 
-async function addManagementSheets(workbook, drafts) {
+async function addManagementSheets(workbook, drafts, absenceInfo = new Map()) {
   const allNames = new Set();
   for (const draft of drafts) {
     for (const shift of draft.shifts_json || []) if (shift.employee_name) allNames.add(shift.employee_name);
@@ -4131,13 +4360,13 @@ async function addManagementSheets(workbook, drafts) {
 
   // Current saved wishes. They are matched to the draft's employee names.
   const prefRes = await pool.query(
-    `SELECT ep.*, u.first_name, u.last_name
+    `SELECT ep.*, u.first_name, u.last_name, u.provisioned_employee_name
        FROM employee_preferences ep
        JOIN users u ON u.id = ep.user_id`
   ).catch(() => ({ rows: [] }));
   const prefsByEmployee = new Map();
   for (const row of prefRes.rows) {
-    const name = resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), nameLookup);
+    const name = userNameCandidates(row).map((candidate) => findEmployeeName(candidate, nameLookup)).find(Boolean);
     if (name) prefsByEmployee.set(name, row);
   }
   const blockedSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1").catch(() => ({ rows: [] }));
@@ -4173,6 +4402,7 @@ async function addManagementSheets(workbook, drafts) {
         blockedDaysEnabled,
         definitions,
         colleagueWishes: colleagueWishes.filter((wish) => wish.employee === employee),
+        vacations: absenceInfo.get(draft.month)?.vacations?.get(employee) || [],
       });
       summaryRows.push({
         monthKey: draft.month,
@@ -4182,6 +4412,7 @@ async function addManagementSheets(workbook, drafts) {
         actual: Number.isFinite(actual) ? actual : null,
         wishPercent: wishes.percent,
         wishCount: wishes.items.length,
+        vacationDays: [...(absenceInfo.get(draft.month)?.marks?.get(employee)?.values() || [])].filter((mark) => mark.code === 'URL').length,
         wishScoreSum: wishes.items.reduce((sum, entry) => sum + entry.score, 0),
       });
       for (const entry of wishes.items) detailRows.push({ monthLabel, employee, ...entry });
@@ -4190,16 +4421,16 @@ async function addManagementSheets(workbook, drafts) {
 
   /* ---- Sheet 1: hours and wish percent per month ---- */
   const ws = workbook.addWorksheet('Stunden & Wünsche');
-  ws.mergeCells(1, 1, 1, 8);
+  ws.mergeCells(1, 1, 1, 9);
   ws.getCell(1, 1).value = 'Soll-/Ist-Stunden und Wunscherfüllung';
   ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
   ws.getRow(1).height = 28;
-  ws.mergeCells(2, 1, 2, 8);
+  ws.mergeCells(2, 1, 2, 9);
   ws.getCell(2, 1).value = 'Wunscherfüllung = Durchschnitt der Erfüllung aller hinterlegten Wünsche des Monats (Details im Blatt „Wunschdetails“). Basis sind die aktuell gespeicherten Wünsche.';
   ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
   ws.getCell(2, 1).alignment = { wrapText: true, vertical: 'top' };
   ws.getRow(2).height = 28;
-  const headers = ['Monat', 'Mitarbeiter', 'Soll (h)', 'Ist (h)', 'Differenz (h)', 'Soll erreicht', 'Wünsche', 'Wunscherfüllung'];
+  const headers = ['Monat', 'Mitarbeiter', 'Soll (h)', 'Ist (h)', 'Differenz (h)', 'Soll erreicht', 'Urlaub (Tage)', 'Wünsche', 'Wunscherfüllung'];
   headers.forEach((header, index) => { ws.getCell(4, index + 1).value = header; });
   styleExcelHeaderRow(ws, 4, headers.length);
 
@@ -4207,7 +4438,7 @@ async function addManagementSheets(workbook, drafts) {
     const rowNumber = index + 5;
     const diff = entry.target !== null && entry.actual !== null ? Number((entry.actual - entry.target).toFixed(2)) : null;
     const reached = entry.target > 0 && entry.actual !== null ? Math.round((entry.actual / entry.target) * 100) : null;
-    const values = [entry.monthLabel, entry.employee, entry.target, entry.actual, diff, reached === null ? null : reached / 100, entry.wishCount, entry.wishPercent === null ? null : entry.wishPercent / 100];
+    const values = [entry.monthLabel, entry.employee, entry.target, entry.actual, diff, reached === null ? null : reached / 100, entry.vacationDays, entry.wishCount, entry.wishPercent === null ? null : entry.wishPercent / 100];
     values.forEach((value, i) => {
       const cell = ws.getCell(rowNumber, i + 1);
       cell.value = value === null ? '–' : value;
@@ -4219,14 +4450,15 @@ async function addManagementSheets(workbook, drafts) {
     ws.getCell(rowNumber, 4).numFmt = '0.0';
     ws.getCell(rowNumber, 5).numFmt = '+0.0;-0.0;0.0';
     ws.getCell(rowNumber, 6).numFmt = '0%';
-    ws.getCell(rowNumber, 8).numFmt = '0%';
+    ws.getCell(rowNumber, 9).numFmt = '0%';
     if (diff !== null) ws.getCell(rowNumber, 5).font = { name: 'Calibri', size: 10, bold: true, color: { argb: diff < 0 ? 'B91C1C' : '047857' } };
     const reachedFill = percentFill(reached);
     if (reachedFill) ws.getCell(rowNumber, 6).fill = reachedFill;
     const wishFill = percentFill(entry.wishPercent);
-    if (wishFill) ws.getCell(rowNumber, 8).fill = wishFill;
+    if (wishFill) ws.getCell(rowNumber, 9).fill = wishFill;
+    if (entry.vacationDays > 0) ws.getCell(rowNumber, 7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'EDE9FE' } };
   });
-  [14, 24, 10, 10, 13, 13, 10, 16].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
+  [14, 24, 10, 10, 13, 13, 13, 10, 16].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
   ws.views = [{ state: 'frozen', ySplit: 4, xSplit: 2, activeCell: 'C5' }];
   ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + summaryRows.length, column: headers.length } };
   ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, printTitlesRow: '4:4' };
@@ -4328,7 +4560,8 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   workbook.created = new Date();
 
   // Overview sheets come first, so they are the first thing the readers see.
-  if (variant === 'management') await addManagementSheets(workbook, drafts);
+  const absenceInfo = await loadAbsenceInfoForDrafts(drafts);
+  if (variant === 'management') await addManagementSheets(workbook, drafts, absenceInfo);
 
   for (const draft of drafts) {
     const shifts = draft.shifts_json;
@@ -4346,6 +4579,9 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       if (!byEmployee[s.employee_name]) byEmployee[s.employee_name] = {};
       byEmployee[s.employee_name][s.day] = s.shift_code;
     }
+    // Employees that are planned but have no shift this month still get a row (absence marks).
+    for (const name of Object.keys(draft.fairness || {})) if (!byEmployee[name]) byEmployee[name] = {};
+    const monthMarks = absenceInfo.get(draft.month)?.marks || new Map();
     const empNames = Object.keys(byEmployee).sort((a, b) => a.localeCompare(b, 'de'));
 
     // Title row
@@ -4436,7 +4672,9 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
 
       let fallbackHours = 0;
       for (let d = 1; d <= numDays; d++) {
-        const code = byEmployee[emp][d] || '';
+        const plannedCode = byEmployee[emp][d] || '';
+        // Vacation wishes, sickness etc. show up on days without a planned shift.
+        const code = plannedCode || monthMarks.get(emp)?.get(d)?.code || '';
         const cell = ws.getCell(row, d + 1);
         cell.value = code;
         cell.alignment = { horizontal: 'center', vertical: 'middle' };
@@ -4444,7 +4682,7 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
         cell.border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
 
         const colors = resolveExcelShiftColors(code);
-        if (code) fallbackHours += durationByCode.get(String(code).trim().toUpperCase()) || 8;
+        if (plannedCode) fallbackHours += durationByCode.get(String(code).trim().toUpperCase()) || 8;
         if (colors) {
           cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.fill } };
           cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: colors.font } };
@@ -4555,6 +4793,7 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     for (let c = 2; c <= columns.length; c++) summaryWs.getColumn(c).width = 14;
   }
 
+  normalizeWorkbookColors(workbook);
   return workbook;
 }
 

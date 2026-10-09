@@ -537,7 +537,8 @@ router.get('/special-pools/:shiftCode', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT id, shift_code, employee_name, monthly_max_assignments, sort_order, is_active,
               working_weekdays, free_days_after_block,
-              to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time, duration_hours
+              to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time, duration_hours,
+              other_shift_codes, other_days_per_month
        FROM shift_special_pools
        WHERE shift_code = $1 AND is_active = TRUE
        ORDER BY sort_order, employee_name`,
@@ -584,17 +585,26 @@ router.put('/special-pools/:shiftCode', requirePageAccess('shiftplan_control', '
       const ownStart = hasOwnTimes ? String(entry.start_time) : null;
       const ownEnd = hasOwnTimes ? String(entry.end_time) : null;
       const ownDuration = hasOwnTimes ? getDurationHours({ startTime: ownStart, endTime: ownEnd }) : null;
+      // Planning outside DBS: allowed shift codes (existing plannable shifts) and a day cap per month.
+      const otherCodes = [...new Set((Array.isArray(entry.other_shift_codes) ? entry.other_shift_codes : [])
+        .map((code) => String(code || '').trim().toUpperCase())
+        .filter((code) => /^[A-Z0-9_]{1,10}$/.test(code) && code !== shiftCode))].slice(0, 12);
+      const rawOtherDays = entry.other_days_per_month;
+      const otherDays = rawOtherDays === null || rawOtherDays === undefined || rawOtherDays === ''
+        ? null
+        : Math.max(0, Math.min(31, Number.parseInt(String(rawOtherDays), 10) || 0));
       await client.query(
-        `INSERT INTO shift_special_pools (shift_code, employee_name, monthly_max_assignments, sort_order, is_active, working_weekdays, free_days_after_block, start_time, end_time, duration_hours)
-         VALUES ($1, $2, $3, $4, TRUE, $5::jsonb, $6, $7, $8, $9)`,
-        [shiftCode, employeeName, monthlyMaxAssignments, index, JSON.stringify(workingWeekdays), freeDaysAfterBlock, ownStart, ownEnd, ownDuration]
+        `INSERT INTO shift_special_pools (shift_code, employee_name, monthly_max_assignments, sort_order, is_active, working_weekdays, free_days_after_block, start_time, end_time, duration_hours, other_shift_codes, other_days_per_month)
+         VALUES ($1, $2, $3, $4, TRUE, $5::jsonb, $6, $7, $8, $9, $10::jsonb, $11)`,
+        [shiftCode, employeeName, monthlyMaxAssignments, index, JSON.stringify(workingWeekdays), freeDaysAfterBlock, ownStart, ownEnd, ownDuration, otherCodes.length ? JSON.stringify(otherCodes) : null, otherDays]
       );
     }
 
     const { rows } = await client.query(
       `SELECT id, shift_code, employee_name, monthly_max_assignments, sort_order, is_active,
               working_weekdays, free_days_after_block,
-              to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time, duration_hours
+              to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time, duration_hours,
+              other_shift_codes, other_days_per_month
        FROM shift_special_pools
        WHERE shift_code = $1 AND is_active = TRUE
        ORDER BY sort_order, employee_name`,

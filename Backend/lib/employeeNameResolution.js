@@ -52,6 +52,8 @@ export function buildEmployeeAliasKeys(raw) {
     for (const variant of variants) aliases.add(variant.toLowerCase());
   }
 
+  for (const alias of [...aliases]) for (const folded of foldNameVariants(alias)) aliases.add(folded);
+
   return [...aliases];
 }
 
@@ -76,4 +78,45 @@ export function resolveEmployeeName(raw, lookup) {
   }
 
   return normalizeEmployeeName(raw);
+}
+
+/**
+ * Spelling variants without umlauts / accents, so "Wießmann", "Wiessmann" and
+ * "Wiessmann" (and "Drüssler" / "Druessler" / "Drussler") end up under one key.
+ */
+function foldNameVariants(value) {
+  const lower = String(value || '').toLowerCase();
+  const expanded = lower
+    .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss');
+  const stripped = lower
+    .replace(/ä/g, 'a').replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ß/g, 'ss');
+  const plain = (text) => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  return [...new Set([plain(expanded), plain(stripped)])].filter((variant) => variant !== lower);
+}
+
+/** Like resolveEmployeeName, but returns null when the name matches nobody in the lookup. */
+export function findEmployeeName(raw, lookup) {
+  if (!lookup || lookup.size === 0) return null;
+  for (const key of buildEmployeeAliasKeys(raw)) {
+    const resolved = lookup.get(key);
+    if (resolved) return resolved;
+  }
+  return null;
+}
+
+/**
+ * Maps a stored absence (vacation wish ...) to the spelling used in the plan. Tries the stored
+ * name first, then every name the linked user account is known by (provisioned name,
+ * "First Last", "Last, First"), so a differently spelled absence is not silently lost.
+ * Returns null when nothing matches.
+ */
+export function resolveAbsenceEmployeeName(absence, lookup, userNameCandidatesById = new Map()) {
+  const direct = findEmployeeName(absence?.employee_name, lookup);
+  if (direct) return direct;
+  const candidates = userNameCandidatesById.get(Number(absence?.employee_id)) || [];
+  for (const candidate of candidates) {
+    const resolved = findEmployeeName(candidate, lookup);
+    if (resolved) return resolved;
+  }
+  return null;
 }

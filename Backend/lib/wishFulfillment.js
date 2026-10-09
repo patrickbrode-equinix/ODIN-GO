@@ -55,6 +55,7 @@ function weekendBlockKey(year, month, day) {
  * @param {boolean} [input.blockedDaysEnabled] admin switch for "days I do not want to work"
  * @param {Array} [input.definitions] shift definitions ({ code, shift_type }) to recognise night shifts
  * @param {Array} [input.colleagueWishes] [{ colleague, sharedDays, employeeDays }]
+ * @param {Array} [input.vacations] [{ start_date, end_date, source, note }] (vacation wishes / entries, YYYY-MM-DD)
  */
 export function evaluateMonthWishes({
   year,
@@ -65,6 +66,7 @@ export function evaluateMonthWishes({
   blockedDaysEnabled = false,
   definitions = [],
   colleagueWishes = [],
+  vacations = [],
 } = {}) {
   const items = [];
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -165,6 +167,28 @@ export function evaluateMonthWishes({
         `${blocks.size} Wochenenden eingeplant`,
       ));
     }
+  }
+
+  // 8. Vacation: every vacation entry that touches the month. Working a vacation day counts against it.
+  const monthStart = `${year}-${pad2(month)}-01`;
+  const monthEnd = `${year}-${pad2(month)}-${pad2(daysInMonth)}`;
+  for (const vacation of vacations) {
+    const start = String(vacation?.start_date || '').slice(0, 10);
+    const end = String(vacation?.end_date || '').slice(0, 10);
+    if (!start || !end || end < monthStart || start > monthEnd) continue;
+    const from = start < monthStart ? 1 : Number(start.slice(8, 10));
+    const to = end > monthEnd ? daysInMonth : Number(end.slice(8, 10));
+    const totalDays = to - from + 1;
+    if (totalDays <= 0) continue;
+    const worked = workedDays.filter((day) => day >= from && day <= to);
+    const label = `Urlaub ${pad2(from)}.${pad2(month)}.–${pad2(to)}.${pad2(month)}.`;
+    const origin = vacation.source === 'self' ? 'Mitarbeiterwunsch' : 'Eintrag der Leitung';
+    items.push(item(
+      'Urlaub',
+      `${label} (${origin})`,
+      1 - worked.length / totalDays,
+      worked.length ? `Trotzdem eingeplant: ${listDays(worked, shiftsByDay, month)}` : `Frei, ${totalDays} Tage`,
+    ));
   }
 
   // 7. Preferred colleagues (taken from the plan report of the draft).
