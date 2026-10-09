@@ -48,6 +48,8 @@ interface User {
   shiftplanManual?: boolean;
   provisionedEmployeeName?: string | null;
   hasShiftPreferences?: boolean;
+  /** Number of months with different shift wishes than the employee's usual ones. */
+  monthlyDeviationCount?: number;
   lastLogin?: string | null;
   createdAt: string;
 }
@@ -63,7 +65,7 @@ interface UserPreferences {
   preferredColleagues?: Array<{ id: number; name: string }>;
   /** Admin switch "Wunschkollegen im Generator"; the selection is stored either way. */
   colleaguesGeneratorEnabled?: boolean;
-  monthlyPreferences?: Record<string, unknown> | null;
+  monthlyPreferences?: Record<string, { preferred_shifts?: string[]; unwanted_shifts?: string[] }> | null;
   notes?: string | null;
   updatedAt?: string | null;
 }
@@ -421,6 +423,24 @@ export default function Users() {
     return String(value);
   }
 
+  /** Months in which the employee asked for other shifts than usual (sorted, with a readable label). */
+  function deviatingMonths(prefs: UserPreferences | null | undefined) {
+    const monthly = prefs?.monthlyPreferences;
+    if (!monthly || typeof monthly !== "object") return [];
+    return Object.entries(monthly)
+      .map(([key, value]) => {
+        const preferred = Array.isArray(value?.preferred_shifts) ? value.preferred_shifts.map(String) : [];
+        const unwanted = Array.isArray(value?.unwanted_shifts) ? value.unwanted_shifts.map(String) : [];
+        const [year, month] = key.split("-").map(Number);
+        const label = Number.isInteger(year) && Number.isInteger(month)
+          ? new Date(year, month - 1, 1).toLocaleDateString(language === "de" ? "de-DE" : "en-US", { month: "long", year: "numeric" })
+          : key;
+        return { key, label, preferred, unwanted };
+      })
+      .filter((entry) => entry.preferred.length > 0 || entry.unwanted.length > 0)
+      .sort((left, right) => left.key.localeCompare(right.key));
+  }
+
   function renderPreferenceChips(value: unknown, tone: "default" | "success" | "warning" | "danger" = "default") {
     const entries = Array.isArray(value)
       ? value.map((entry) => String(entry ?? "").trim()).filter(Boolean)
@@ -688,6 +708,11 @@ export default function Users() {
                               {copy.shiftPrefsNo}
                             </Badge>
                           )}
+                          {(user.monthlyDeviationCount || 0) > 0 ? (
+                            <Badge className="border-violet-500/30 bg-violet-500/15 text-violet-300" title={language === "de" ? "Abweichende Schichtwünsche für einzelne Monate/Tage – im aufgeklappten Wunsch-Bereich einsehbar" : "Different shift wishes for individual months/days – see the expanded wish area"}>
+                              {language === "de" ? `Abweichend: ${user.monthlyDeviationCount} Monat(e)` : `Deviating: ${user.monthlyDeviationCount} month(s)`}
+                            </Badge>
+                          ) : null}
                           <span
                             className={`inline-flex h-3 w-3 shrink-0 rounded-full ${user.hasShiftPreferences ? "bg-emerald-400 shadow-[0_0_9px_rgba(52,211,153,0.55)]" : "border border-slate-600 bg-slate-800"}`}
                             title={user.hasShiftPreferences ? (language === "de" ? "Wuensche wurden abgegeben" : "Preferences submitted") : (language === "de" ? "Keine Wuensche abgegeben" : "No preferences submitted")}
@@ -802,6 +827,22 @@ export default function Users() {
                                       <div><span className="text-muted-foreground">Nachtlimit:</span> <strong>{renderPreferenceValue(prefs.maxNightsPerMonth)}</strong></div>
                                     </div>,
                                     "border-sky-500/20"
+                                  )}
+                                  {renderPreferenceCard(
+                                    language === "de" ? "Abweichende Wünsche" : "Deviating wishes",
+                                    language === "de" ? "Schichtwünsche, die für einzelne Monate vom Standard abweichen." : "Shift wishes that differ from the usual ones for single months.",
+                                    deviatingMonths(prefs).length === 0
+                                      ? <span className="text-xs text-muted-foreground">{language === "de" ? "Keine abweichenden Wünsche" : "No deviating wishes"}</span>
+                                      : <div className="space-y-2 text-xs">
+                                        {deviatingMonths(prefs).map((entry) => (
+                                          <div key={entry.key} className="rounded-lg border border-violet-500/30 bg-violet-500/10 p-2">
+                                            <div className="font-semibold text-violet-200">{entry.label}</div>
+                                            {entry.preferred.length > 0 ? <div><span className="text-muted-foreground">{language === "de" ? "Gewünscht" : "Wanted"}:</span> {entry.preferred.join(", ")}</div> : null}
+                                            {entry.unwanted.length > 0 ? <div><span className="text-muted-foreground">{language === "de" ? "Nicht gewünscht" : "Not wanted"}:</span> {entry.unwanted.join(", ")}</div> : null}
+                                          </div>
+                                        ))}
+                                      </div>,
+                                    "border-violet-500/30"
                                   )}
                                   {renderPreferenceCard(
                                     language === "de" ? "Urlaub" : "Vacation",
