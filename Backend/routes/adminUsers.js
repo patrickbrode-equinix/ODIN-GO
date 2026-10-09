@@ -113,6 +113,7 @@ function dedupeUserRows(rows = []) {
     group.row = {
       ...preferCanonicalUserRow(previousRow, row),
       hasShiftPreferences: Boolean(group.row.hasShiftPreferences || row.hasShiftPreferences),
+      monthlyDeviationCount: Math.max(Number(group.row.monthlyDeviationCount) || 0, Number(row.monthlyDeviationCount) || 0),
       lastLogin: latestTimestamp(previousRow.lastLogin, row.lastLogin),
     };
     group.mergedIds.push(row.id);
@@ -154,7 +155,14 @@ router.get(
           u.provisioned_employee_name AS "provisionedEmployeeName",
           u.created_at AS "createdAt",
           COALESCE(u.last_login, u.last_seen_at) AS "lastLogin",
-          CASE WHEN ep.id IS NOT NULL THEN true ELSE false END AS "hasShiftPreferences"
+          CASE WHEN ep.id IS NOT NULL THEN true ELSE false END AS "hasShiftPreferences",
+          -- Months in which the employee asked for different shifts than usual.
+          COALESCE((
+            SELECT COUNT(*)::int
+              FROM jsonb_each(CASE WHEN jsonb_typeof(ep.monthly_preferences) = 'object' THEN ep.monthly_preferences ELSE '{}'::jsonb END) AS months(month_key, month_value)
+             WHERE jsonb_array_length(CASE WHEN jsonb_typeof(months.month_value->'preferred_shifts') = 'array' THEN months.month_value->'preferred_shifts' ELSE '[]'::jsonb END) > 0
+                OR jsonb_array_length(CASE WHEN jsonb_typeof(months.month_value->'unwanted_shifts') = 'array' THEN months.month_value->'unwanted_shifts' ELSE '[]'::jsonb END) > 0
+          ), 0) AS "monthlyDeviationCount"
         FROM users u
         LEFT JOIN employee_preferences ep ON ep.user_id = u.id
         WHERE u.is_root = false
