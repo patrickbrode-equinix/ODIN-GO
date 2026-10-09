@@ -56,3 +56,22 @@ export async function fetchShiftConfigStaffingRules(): Promise<ShiftConfigStaffi
   const response = await api.get<{ ok: boolean; rules?: ShiftConfigStaffingRule[] }>("/shift-config/staffing-rules");
   return Array.isArray(response.data?.rules) ? response.data.rules : [];
 }
+
+export interface ShiftConfigStaffingDayLimit {
+  day_context: "saturday" | "sunday" | "holiday";
+  shift_type: "early" | "late";
+  min_count: number;
+  max_count: number | null;
+}
+
+/** GET /shift-config/staffing-rules incl. the Saturday / Sunday / holiday limits. */
+export async function fetchShiftConfigStaffingLimits(): Promise<{
+  rules: ShiftConfigStaffingRule[];
+  dayLimits: ShiftConfigStaffingDayLimit[];
+}> {
+  const response = await api.get<{ ok: boolean; rules?: ShiftConfigStaffingRule[]; day_limits?: ShiftConfigStaffingDayLimit[] }>("/shift-config/staffing-rules");
+  return {
+    rules: Array.isArray(response.data?.rules) ? response.data.rules : [],
+    dayLimits: Array.isArray(response.data?.day_limits) ? response.data.day_limits : [],
+  };
+}

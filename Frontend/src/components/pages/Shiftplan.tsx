@@ -43,9 +43,9 @@ import { getHessenHolidayMap, getIslamicHolidayMap, HolidayMap } from "../../uti
 import { api } from "../../api/api";
 import { logActivityEventSafe } from "../../api/activity";
 import { fetchShiftHours, type ShiftHoursEmployee } from "../../api/shiftHours";
-import { computeUnderstaffWarnings, type StaffingDefinitionLike, type StaffingRuleLike } from "../shiftplan/shiftplan.warnings";
+import { computeUnderstaffWarnings, type StaffingDefinitionLike, type StaffingDayLimitLike, type StaffingRuleLike } from "../shiftplan/shiftplan.warnings";
 import {
-  fetchShiftConfigStaffingRules,
+  fetchShiftConfigStaffingLimits,
   fetchUnderstaffingSuggestions,
   type UnderstaffingSuggestionItem,
 } from "../../api/shiftplanSuggestions";
@@ -215,6 +215,9 @@ export default function Shiftplan() {
   const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
   const [shiftDefinitions, setShiftDefinitions] = useState<StaffingDefinitionLike[]>([]);
   const [staffingRuleConfig, setStaffingRuleConfig] = useState<StaffingRuleLike[]>([]);
+  const [staffingDayLimits, setStaffingDayLimits] = useState<StaffingDayLimitLike[]>([]);
+  // DBS pool members can have individual times; their paid hours replace the shift default.
+  const [dbsOwnHours, setDbsOwnHours] = useState<Record<string, Record<string, number>>>({});
   const [suggestionsMap, setSuggestionsMap] = useState<Map<string, UnderstaffingSuggestionItem>>(new Map());
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
@@ -378,9 +381,25 @@ export default function Shiftplan() {
         setShiftTimes({});
         setShiftDefinitions([]);
       });
-    fetchShiftConfigStaffingRules()
-      .then((rules) => setStaffingRuleConfig(rules))
-      .catch(() => setStaffingRuleConfig([]));
+    api.get("/shift-config/special-pools/DBS")
+      .then(({ data }) => {
+        const next: Record<string, Record<string, number>> = {};
+        for (const entry of data?.assignments || []) {
+          const hours = Number(entry?.duration_hours);
+          if (entry?.employee_name && Number.isFinite(hours) && hours > 0) next[String(entry.employee_name)] = { DBS: hours };
+        }
+        setDbsOwnHours(next);
+      })
+      .catch(() => setDbsOwnHours({}));
+    fetchShiftConfigStaffingLimits()
+      .then(({ rules, dayLimits }) => {
+        setStaffingRuleConfig(rules);
+        setStaffingDayLimits(dayLimits);
+      })
+      .catch(() => {
+        setStaffingRuleConfig([]);
+        setStaffingDayLimits([]);
+      });
   }, []);
 
   // Load Hessen Holidays per year
@@ -597,8 +616,10 @@ export default function Shiftplan() {
       computeUnderstaffWarnings(schedule || {}, selectedYear, monthIndex1, daysInMonth, new Date(), {
         definitions: shiftDefinitions,
         staffingRules: staffingRuleConfig,
+        staffingDayLimits,
+        holidays,
       }),
-    [schedule, selectedYear, monthIndex1, daysInMonth, shiftDefinitions, staffingRuleConfig]
+    [schedule, selectedYear, monthIndex1, daysInMonth, shiftDefinitions, staffingRuleConfig, staffingDayLimits, holidays]
   );
 
   const warningsForMonthTable = warningsVisible ? warningsComputed : [];
@@ -969,12 +990,13 @@ export default function Shiftplan() {
         holidays,
         hourLimits,
         defaultTargetHours,
-        absencesByEmployee.get(name) || []
+        absencesByEmployee.get(name) || [],
+        dbsOwnHours[name] || {}
       );
       map.set(name, stats);
     }
     return map;
-  }, [visibleSchedule, selectedYear, monthIndex1, daysInMonth, holidays, hourLimits, defaultTargetHours, absencesByEmployee]);
+  }, [visibleSchedule, selectedYear, monthIndex1, daysInMonth, holidays, hourLimits, defaultTargetHours, absencesByEmployee, dbsOwnHours]);
 
   // Hours effect shown in the shift change confirmation (one entry per affected employee).
   const manualChangeHoursDelta = useMemo(() => {

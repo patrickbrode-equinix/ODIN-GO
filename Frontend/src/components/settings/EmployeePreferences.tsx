@@ -142,8 +142,10 @@ const HOLIDAY_OPTIONS_DE = [
   { value: 'Christi Himmelfahrt', label: 'Christi Himmelfahrt', scope: 'Bundesweit' },
   { value: 'Pfingstmontag', label: 'Pfingstmontag', scope: 'Bundesweit' },
   { value: 'Tag der Deutschen Einheit', label: 'Tag der Deutschen Einheit', scope: 'Bundesweit' },
+  { value: 'Heiligabend', label: 'Heiligabend (24.12.)', scope: 'Betrieblich' },
   { value: '1. Weihnachtstag', label: '1. Weihnachtstag', scope: 'Bundesweit' },
   { value: '2. Weihnachtstag', label: '2. Weihnachtstag', scope: 'Bundesweit' },
+  { value: 'Silvester', label: 'Silvester (31.12.)', scope: 'Betrieblich' },
   { value: 'Fronleichnam', label: 'Fronleichnam', scope: 'Hessen' },
 ] as const;
 const HOLIDAY_OPTIONS_EN = [
@@ -154,8 +156,10 @@ const HOLIDAY_OPTIONS_EN = [
   { value: 'Christi Himmelfahrt', label: 'Ascension Day', scope: 'Nationwide' },
   { value: 'Pfingstmontag', label: 'Whit Monday', scope: 'Nationwide' },
   { value: 'Tag der Deutschen Einheit', label: 'German Unity Day', scope: 'Nationwide' },
+  { value: 'Heiligabend', label: 'Christmas Eve (24 Dec)', scope: 'Company' },
   { value: '1. Weihnachtstag', label: 'Christmas Day', scope: 'Nationwide' },
   { value: '2. Weihnachtstag', label: 'Boxing Day', scope: 'Nationwide' },
+  { value: 'Silvester', label: "New Year's Eve (31 Dec)", scope: 'Company' },
   { value: 'Fronleichnam', label: 'Corpus Christi', scope: 'Hesse' },
 ] as const;
 
@@ -187,6 +191,8 @@ const HOLIDAY_DATE_NAMES: Record<string, string> = {
   'Tag der Deutschen Einheit': 'Tag der Deutschen Einheit',
   '1. Weihnachtstag': '1. Weihnachtstag',
   '2. Weihnachtstag': '2. Weihnachtstag',
+  Heiligabend: 'Heiligabend',
+  Silvester: 'Silvester',
   Fronleichnam: 'Fronleichnam',
 };
 

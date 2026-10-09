@@ -157,7 +157,7 @@ function getPlanningAuditIssues({
     if (code && codes.has(code)) add(`duplicate-code-${code}`, 'error', `Der Schichtcode „${code}" ist mehrfach aktiv.`, `The shift code "${code}" is active more than once.`);
     codes.add(code);
     if (Number(definition.duration_hours) <= 0) add(`invalid-duration-${definition.id}`, 'error', `Die Schicht „${definition.code}" hat keine gültige Dauer.`, `Shift "${definition.code}" has no valid duration.`);
-    if (Number(definition.min_staff) > Number(definition.max_staff)) add(`invalid-staffing-${definition.id}`, 'error', `Bei „${definition.code}" ist die Mindestbesetzung höher als die Maximalbesetzung.`, `For "${definition.code}", minimum staffing is higher than maximum staffing.`);
+    if (!GLOBAL_STAFFING_TYPES.has(definition.shift_type) && Number(definition.min_staff) > Number(definition.max_staff)) add(`invalid-staffing-${definition.id}`, 'error', `Bei „${definition.code}" ist die Mindestbesetzung höher als die Maximalbesetzung.`, `For "${definition.code}", minimum staffing is higher than maximum staffing.`);
     if (normalizeApplicableDays(definition.applicable_days).length === 0) add(`no-days-${definition.id}`, 'error', `Die aktive Schicht „${definition.code}" ist keinem Wochentag zugeordnet.`, `The active shift "${definition.code}" is not assigned to any weekday.`);
     if (overtimeConfig.dailyMode === 'block' && Number(overtimeConfig.maxDailyHours) > 0 && Number(definition.duration_hours) > Number(overtimeConfig.maxDailyHours)) {
       add(`daily-limit-${definition.id}`, 'error', `„${definition.code}" dauert länger als die als harte Grenze gesetzte tägliche Höchstarbeitszeit.`, `"${definition.code}" is longer than the hard daily maximum working-time limit.`);
@@ -290,6 +290,9 @@ function formatExclusionWeekdays(value: unknown, isGerman: boolean): string {
   return getWeekdayOptions(isGerman).filter((option) => weekdays.includes(option.value)).map((option) => option.label).join(', ');
 }
 
+/** Early/late/night staffing is set globally in the admin tab "Besetzung", not per shift. */
+const GLOBAL_STAFFING_TYPES = new Set(["early", "late", "night"]);
+
 interface StaffingRuleRow {
   shift_type: 'early' | 'late' | 'night';
   min_count: number;
@@ -305,6 +308,24 @@ interface SpecialPoolEntry {
   is_active: boolean;
   working_weekdays?: number[];
   free_days_after_block?: number;
+  /** Own times of this DBS employee (HH:MM); null = times of the DBS shift. */
+  start_time?: string | null;
+  end_time?: string | null;
+  duration_hours?: number | null;
+}
+
+/** Paid hours for own DBS times: presence minus 1 h break from 6 h presence (mirrors the backend). */
+function getDbsOwnPaidHours(start?: string | null, end?: string | null): number | null {
+  const toMinutes = (value?: string | null) => {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || ""));
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+  };
+  const from = toMinutes(start);
+  const to = toMinutes(end);
+  if (from === null || to === null) return null;
+  const presence = ((to <= from ? to + 1440 : to) - from) / 60;
+  const paid = presence > 6 ? presence - 1 : presence;
+  return Math.round(paid * 100) / 100;
 }
 
 interface AdminEmployeeFlag {
@@ -401,8 +422,10 @@ const HOLIDAY_STAFFING_OPTIONS = [
   { value: 'Pfingstmontag', labelDe: 'Pfingstmontag', labelEn: 'Whit Monday' },
   { value: 'Fronleichnam', labelDe: 'Fronleichnam', labelEn: 'Corpus Christi' },
   { value: 'Tag der Deutschen Einheit', labelDe: 'Tag der Deutschen Einheit', labelEn: 'German Unity Day' },
+  { value: 'Heiligabend', labelDe: 'Heiligabend (24.12.)', labelEn: 'Christmas Eve (24 Dec)' },
   { value: '1. Weihnachtstag', labelDe: '1. Weihnachtstag', labelEn: 'Christmas Day' },
   { value: '2. Weihnachtstag', labelDe: '2. Weihnachtstag', labelEn: 'Boxing Day' },
+  { value: 'Silvester', labelDe: 'Silvester (31.12.)', labelEn: "New Year's Eve (31 Dec)" },
 ] as const;
 
 type FixedShiftTypeValue = '' | 'early' | 'late' | 'night';
@@ -723,8 +746,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [newDefinition, setNewDefinition] = useState({ code: '', name: '', shift_type: 'early', start_time: '06:30', end_time: '15:00', duration_hours: 8, min_staff: 1, max_staff: 5 });
   const [activeShiftModes, setActiveShiftModes] = useState<Record<string, number>>({});
   const normalNightStaffCap = useMemo(
-    () => Math.max(0, Number(definitions.find((definition) => String(definition.code || '').toUpperCase() === 'N')?.max_staff || 0)),
-    [definitions]
+    () => Math.max(0, Number(staffingRules.find((rule) => rule.shift_type === 'night')?.max_count || 0)),
+    [staffingRules]
   );
 
   const showToast = useCallback((msg: string, type: 'ok' | 'err' = 'ok') => {
@@ -911,8 +934,14 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }
   };
 
-  const saveDbsConfig = async () => {
-    setSaving('dbs-config');
+  /** One save for the whole DBS block: rotation settings and every employee profile. */
+  const saveDbs = async () => {
+    const incomplete = dbsPool.find((entry) => Boolean(entry.start_time) !== Boolean(entry.end_time));
+    if (incomplete) {
+      showToast(isGerman ? `Bei ${incomplete.employee_name} fehlt Beginn oder Ende.` : `${incomplete.employee_name} needs both start and end.`, 'err');
+      return;
+    }
+    setSaving('dbs');
     try {
       await api.put('/app-settings', {
         'shiftplan.dbs_enabled': dbsConfig.enabled,
@@ -922,30 +951,21 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.dbs_free_days_after_block': dbsConfig.freeDaysAfterBlock,
         'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
       });
-      await loadAll();
-      showToast(t("shiftAdmin.toastDbsConfigSaved"));
-    } catch (error: any) {
-      showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
-    } finally {
-      setSaving('');
-    }
-  };
-
-  const saveDbsPool = async () => {
-    setSaving('dbs-pool');
-    try {
       const shiftCode = String(dbsConfig.shiftCode || 'DBS').trim().toUpperCase() || 'DBS';
       const payload = dbsPool.map((entry, index) => ({
         employee_name: entry.employee_name,
-        // DBS remains a single-person rotation; each profile controls its own working days and recovery.
+        // DBS remains a single-person rotation; each profile controls its own working days, times and recovery.
         monthly_max_assignments: 31,
         sort_order: index,
         working_weekdays: normalizeApplicableDays(entry.working_weekdays),
         free_days_after_block: Math.max(0, Math.min(14, Number(entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock) || 0)),
+        start_time: entry.start_time || null,
+        end_time: entry.end_time || null,
       }));
       const { data } = await api.put(`/shift-config/special-pools/${shiftCode}`, { assignments: payload });
       setDbsPool(data.assignments || []);
-      showToast(t("shiftAdmin.toastDbsPoolSaved"));
+      await loadAll();
+      showToast(isGerman ? 'DBS gespeichert' : 'DBS saved');
     } catch (error: any) {
       showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
     } finally {
@@ -1175,28 +1195,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     return next.length > 0 ? next.sort((left, right) => left - right) : current;
   };
 
-  const updateStaffingRule = (shiftType: StaffingRuleRow['shift_type'], field: 'min_count' | 'max_count', value: number | null) => {
-    setStaffingRules((current) => {
-      const existing = current.find((rule) => rule.shift_type === shiftType) || { shift_type: shiftType, min_count: 0, max_count: null };
-      const nextRule = { ...existing, [field]: value };
-      return current.some((rule) => rule.shift_type === shiftType)
-        ? current.map((rule) => rule.shift_type === shiftType ? nextRule : rule)
-        : [...current, nextRule];
-    });
-  };
-
-  const saveStaffingRules = async () => {
-    setSaving('staffing-rules');
-    try {
-      const { data } = await api.put('/shift-config/staffing-rules', { rules: staffingRules });
-      setStaffingRules(data.rules || staffingRules);
-      showToast(isGerman ? 'Besetzung je Schichtart gespeichert' : 'Staffing per shift type saved');
-    } catch (error: any) {
-      showToast(error?.response?.data?.error || t("shiftAdmin.error"), 'err');
-    } finally {
-      setSaving('');
-    }
-  };
 
   const resetToDefaults = async (scope: 'all' | 'definitions' | 'staffing', code?: string) => {
     const label = code
@@ -1393,50 +1391,16 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             : 'Half-day shifts are intentionally hidden here. They remain available for ad-hoc adjustments, but are no longer used for automatic draft planning.'}
         </div>
 
-        <div className="mb-4 rounded-3xl border border-emerald-400/20 bg-emerald-500/5 p-4">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold text-emerald-100">{isGerman ? 'Besetzung je Schichtart (kumuliert)' : 'Staffing per shift type (cumulative)'}</div>
-              <div className="mt-1 text-xs text-slate-400">
-                {isGerman
-                  ? 'Summe aller Schichten einer Art pro Tag, z. B. Früh = E1 + E2. Leeres Maximum bedeutet unbegrenzt. Standard: Früh min 6 / unbegrenzt, Spät min 4 / max 8, Nacht min 4 / max 5.'
-                  : 'Sum of all shifts of one type per day, e.g. early = E1 + E2. Empty maximum means unlimited. Default: early min 6 / unlimited, late min 4 / max 8, night min 4 / max 5.'}
-              </div>
-            </div>
-            <button type="button" onClick={() => void resetToDefaults('all')} disabled={saving.startsWith('reset-')} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
-              <RotateCcw className="h-4 w-4" />
-              {isGerman ? 'Alle Standardwerte wiederherstellen' : 'Restore all defaults'}
-            </button>
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3 rounded-3xl border border-emerald-400/20 bg-emerald-500/5 p-4">
+          <div className="text-xs text-slate-300">
+            {isGerman
+              ? 'Die Mindest- und Maximalbesetzung für Früh, Spät und Nacht (Werktag, Samstag, Sonntag, Feiertag) stellst du im Reiter „Besetzung“ ein. Hier gibt es sie nicht mehr je Schicht.'
+              : 'Minimum and maximum staffing for early, late and night (weekday, Saturday, Sunday, holiday) is set in the "Staffing" tab. It is no longer set per shift here.'}
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
-            {(['early', 'late', 'night'] as const).map((shiftType) => {
-              const rule = staffingRules.find((entry) => entry.shift_type === shiftType) || { shift_type: shiftType, min_count: 0, max_count: null };
-              const label = shiftType === 'early' ? (isGerman ? 'Früh' : 'Early') : shiftType === 'late' ? (isGerman ? 'Spät' : 'Late') : (isGerman ? 'Nacht' : 'Night');
-              return (
-                <div key={shiftType} className="rounded-2xl border border-white/10 bg-slate-950/50 p-3">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-300">{label}</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="text-[10px] text-slate-400">{isGerman ? 'Mindestens' : 'Minimum'}
-                      <input type="number" min="0" value={rule.min_count} onChange={(event) => updateStaffingRule(shiftType, 'min_count', Math.max(Number.parseInt(event.target.value, 10) || 0, 0))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-sm text-slate-100" />
-                    </label>
-                    <label className="text-[10px] text-slate-400">{isGerman ? 'Maximal' : 'Maximum'}
-                      <input type="number" min="0" value={rule.max_count ?? ''} placeholder={isGerman ? 'unbegrenzt' : 'unlimited'} onChange={(event) => updateStaffingRule(shiftType, 'max_count', event.target.value === '' ? null : Math.max(Number.parseInt(event.target.value, 10) || 0, 0))} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500" />
-                    </label>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-3 flex flex-wrap justify-end gap-2">
-            <button type="button" onClick={() => void resetToDefaults('staffing')} disabled={saving.startsWith('reset-')} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
-              <RotateCcw className="h-4 w-4" />
-              {isGerman ? 'Besetzung auf Standard' : 'Reset staffing'}
-            </button>
-            <button type="button" onClick={() => void saveStaffingRules()} disabled={saving === 'staffing-rules'} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:opacity-50">
-              <Save className="h-4 w-4" />
-              {saving === 'staffing-rules' ? '…' : (isGerman ? 'Besetzung speichern' : 'Save staffing')}
-            </button>
-          </div>
+          <button type="button" onClick={() => void resetToDefaults('all')} disabled={saving.startsWith('reset-')} className="inline-flex items-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
+            <RotateCcw className="h-4 w-4" />
+            {isGerman ? 'Alle Standardwerte wiederherstellen' : 'Restore all defaults'}
+          </button>
         </div>
 
         <div className="space-y-4">
@@ -1489,6 +1453,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                     />
                     <p className="mt-1 text-[10px] text-slate-500">{isGerman ? 'Freie Tage nach einem abgeschlossenen Block dieser Schicht. Leer = globale Regeln (Nacht/Wochenende). Ein Schichtmodus mit eigenen freien Tagen hat Vorrang.' : 'Days off after a finished block of this shift. Empty = global rules (night/weekend). A shift mode with its own days off takes precedence.'}</p>
                   </div>
+                  {!GLOBAL_STAFFING_TYPES.has(definition.shift_type) ? (<>
                   <div className="xl:col-span-1">
                     <label className="mb-1 flex items-center text-[10px] uppercase tracking-[0.18em] text-slate-400">{t("shiftAdmin.defMin")} <HelpTooltip textKey="shiftAdmin.helpDefMinMax" t={t} /></label>
                     <input type="number" min="0" value={definition.min_staff} onChange={(event) => updateDef(definition.id, 'min_staff', Number.parseInt(event.target.value, 10) || 0)} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
@@ -1497,6 +1462,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                     <label className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">{t("shiftAdmin.defMax")}</label>
                     <input type="number" min="0" value={definition.max_staff} onChange={(event) => updateDef(definition.id, 'max_staff', Number.parseInt(event.target.value, 10) || 0)} className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
                   </div>
+                  </>) : null}
                   <div className="xl:col-span-2">
                     <label className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">{t("shiftAdmin.defColorStatus")}</label>
                     <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2">
@@ -1637,7 +1603,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                     {shiftDefaults[String(definition.code || '').trim().toUpperCase()] ? (() => {
                       const defaults = shiftDefaults[String(definition.code || '').trim().toUpperCase()];
                       return (
-                        <button type="button" onClick={() => void resetToDefaults('definitions', definition.code)} disabled={saving.startsWith('reset-')} title={`${isGerman ? 'Standard' : 'Default'}: ${defaults.start_time}–${defaults.end_time}, ${defaults.duration_hours}h, Min ${defaults.min_staff} / Max ${defaults.max_staff}`} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
+                        <button type="button" onClick={() => void resetToDefaults('definitions', definition.code)} disabled={saving.startsWith('reset-')} title={`${isGerman ? 'Standard' : 'Default'}: ${defaults.start_time}–${defaults.end_time}, ${defaults.duration_hours}h`} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/15 px-4 py-2 text-sm font-medium text-slate-200 transition hover:bg-white/5 disabled:opacity-50">
                           <RotateCcw className="h-4 w-4" />
                           {isGerman ? `Standard (${defaults.start_time}–${defaults.end_time})` : `Default (${defaults.start_time}–${defaults.end_time})`}
                         </button>
@@ -1686,18 +1652,16 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           </div>
         ) : null}
 
-        {/* DBS global config */}
+        {/* DBS: one block - rotation settings on top, everything else per employee */}
         <div className="mb-6 space-y-4 rounded-2xl border border-white/10 bg-slate-900/45 p-4">
-          {/* Row 1: Enabled toggle */}
-          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={dbsConfig.enabled} onChange={(event) => setDbsConfig({ ...dbsConfig, enabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            <span className="flex items-center">
-              {t("shiftAdmin.dbsEnabled")}
-              <HelpTooltip textKey="shiftAdmin.helpDbsEnabled" t={t} />
-            </span>
-          </label>
-
           <div className="grid gap-4 md:grid-cols-2">
+            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200">
+              <input type="checkbox" checked={dbsConfig.enabled} onChange={(event) => setDbsConfig({ ...dbsConfig, enabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+              <span className="flex items-center">
+                {t("shiftAdmin.dbsEnabled")}
+                <HelpTooltip textKey="shiftAdmin.helpDbsEnabled" t={t} />
+              </span>
+            </label>
             <div>
               <label className="flex items-center text-xs text-slate-400">
                 {t("shiftAdmin.dbsShiftCode")}
@@ -1707,21 +1671,14 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 {shiftCodeOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
               </select>
             </div>
-            <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 px-4 py-3 text-sm text-slate-200">
-              <div className="font-medium">{isGerman ? 'Eine Person pro Kalenderwoche' : 'One person per calendar week'}</div>
-              <div className="mt-1 text-xs text-slate-400">{isGerman ? 'Der Generator rotiert die DBS-Blöcke im Pool. Rhythmus, Referenzdatum und Mehrfachbesetzung sind bewusst nicht konfigurierbar.' : 'The generator rotates DBS blocks through the pool. Rhythm, reference date, and multiple staffing are deliberately not configurable.'}</div>
-            </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 px-4 py-3 text-sm text-slate-200">
-              <div className="font-medium">{isGerman ? 'Fester DBS-Block: Montag bis Sonntag' : 'Fixed DBS block: Monday through Sunday'}</div>
-              <div className="mt-1 text-xs text-slate-400">{isGerman ? 'DBS wird immer als zusammenhängende 7-Tage-Serie geplant.' : 'DBS is always planned as one continuous seven-day series.'}</div>
-            </div>
-            <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Freie Tage nach DBS' : 'Days off after DBS'}</label>
-              <input type="number" min="0" max="7" value={dbsConfig.freeDaysAfterBlock} onChange={(event) => setDbsConfig({ ...dbsConfig, freeDaysAfterBlock: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              <p className="mt-1 text-xs text-slate-500">{isGerman ? 'Standard: zwei komplette Erholungstage nach jedem DBS-Block.' : 'Default: two full recovery days after each DBS block.'}</p>
+          <div className="rounded-2xl border border-fuchsia-400/20 bg-fuchsia-500/5 px-4 py-3 text-sm text-slate-200">
+            <div className="font-medium">{isGerman ? 'Eine Person pro Kalenderwoche, Rotation im Pool' : 'One person per calendar week, rotating through the pool'}</div>
+            <div className="mt-1 text-xs text-slate-400">
+              {isGerman
+                ? 'DBS wird als zusammenhängender Block ab Montag geplant. Welche Tage der Woche jemand arbeitet, seine Zeiten und die freien Tage danach stellst du unten für jeden Mitarbeiter einzeln ein – es gibt keine globalen Zeiten oder Erholungstage mehr.'
+                : 'DBS is planned as one continuous block starting Monday. Working days, times and the days off afterwards are set below for each employee individually – there are no global times or recovery days any more.'}
             </div>
           </div>
 
@@ -1736,23 +1693,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               </span>
             </span>
           </label>
-
-          <div className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-xs text-slate-400">
-            {isGerman
-              ? 'Hinweis: Die DBS-Zeiten (Von/Bis/Stunden) werden oben in der Schichtkarte der DBS-Schicht bearbeitet, nicht hier.'
-              : 'Note: DBS times (from/to/hours) are edited in the DBS shift card in the shift definitions above, not here.'}
-          </div>
-
-          {/* Save DBS config */}
-          <div className="flex justify-end">
-            <button onClick={saveDbsConfig} disabled={saving === 'dbs-config'} className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-fuchsia-300 disabled:opacity-50">
-              <Save className="h-4 w-4" />
-              {saving === 'dbs-config' ? t("shiftAdmin.dbsSavingConfig") : t("shiftAdmin.dbsSaveConfig")}
-            </button>
-          </div>
         </div>
 
-        {/* DBS employee pool */}
+        {/* DBS employees: own days, own times, own days off */}
         <div className="mb-3 flex items-center text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
           {t("shiftAdmin.dbsPool")}
         </div>
@@ -1771,33 +1714,69 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         <div className="space-y-3">
           {dbsPool.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-400">{t("shiftAdmin.dbsEmptyPool")}</div>
-          ) : dbsPool.map((entry) => (
-            <div key={entry.employee_name} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-slate-900/55 p-4">
-              <div>
-                <label className="mb-1 block text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Mitarbeiter' : 'Employee'}</label>
-                <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">{entry.employee_name}</div>
-              </div>
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-3"><label className="text-xs text-slate-400">{isGerman ? 'Arbeitstage dieses Mitarbeiters im DBS-Block' : 'Working days of this employee within the DBS block'}</label><span className="text-xs text-fuchsia-200">{normalizeApplicableDays(entry.working_weekdays).length} {isGerman ? 'Tage pro Woche' : 'days per week'}</span></div>
-                <div className="flex flex-wrap gap-2">
-                  {weekdayOptions.map((option) => {
-                    const active = normalizeApplicableDays(entry.working_weekdays).includes(option.value);
-                    return <button key={`${entry.employee_name}-${option.value}`} type="button" onClick={() => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, working_weekdays: active ? normalizeApplicableDays(item.working_weekdays).filter((day) => day !== option.value) : [...normalizeApplicableDays(item.working_weekdays), option.value] })))} className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? 'bg-fuchsia-400/20 text-fuchsia-100 ring-1 ring-fuchsia-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>{option.label}</button>;
-                  })}
+          ) : dbsPool.map((entry) => {
+            const updateEntry = (patch: Partial<SpecialPoolEntry>) => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, ...patch })));
+            const dbsDefinition = definitions.find((definition) => String(definition.code || '').toUpperCase() === String(dbsConfig.shiftCode || 'DBS').toUpperCase());
+            const ownHours = getDbsOwnPaidHours(entry.start_time, entry.end_time);
+            const activeDays = normalizeApplicableDays(entry.working_weekdays);
+            const defaultTimes = dbsDefinition ? ` (${dbsDefinition.start_time || '–'}–${dbsDefinition.end_time || '–'})` : '';
+            return (
+              <div key={entry.employee_name} className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-slate-900/55 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm font-medium text-slate-100">{entry.employee_name}</div>
+                  <button onClick={() => removeDbsEmployee(entry.employee_name)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20"><Trash2 className="h-4 w-4" />{t("shiftAdmin.dbsRemove")}</button>
                 </div>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <label className="text-xs text-slate-400">{isGerman ? 'Arbeitstage im DBS-Block' : 'Working days within the DBS block'}</label>
+                    <span className="text-xs text-fuchsia-200">{activeDays.length} {isGerman ? 'Tage pro Woche' : 'days per week'}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {weekdayOptions.map((option) => {
+                      const active = activeDays.includes(option.value);
+                      return <button key={`${entry.employee_name}-${option.value}`} type="button" onClick={() => updateEntry({ working_weekdays: active ? activeDays.filter((day) => day !== option.value) : [...activeDays, option.value] })} className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? 'bg-fuchsia-400/20 text-fuchsia-100 ring-1 ring-fuchsia-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>{option.label}</button>;
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div>
+                    <label className="text-xs text-slate-400">{isGerman ? 'Beginn' : 'Start'}</label>
+                    <input type="time" value={entry.start_time || ''} onChange={(event) => updateEntry({ start_time: event.target.value || null })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">{isGerman ? 'Ende' : 'End'}</label>
+                    <input type="time" value={entry.end_time || ''} onChange={(event) => updateEntry({ end_time: event.target.value || null })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">{isGerman ? 'Bezahlte Stunden pro Tag' : 'Paid hours per day'}</label>
+                    <div className="mt-1 rounded-2xl border border-white/10 bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                      {ownHours !== null ? `${String(ownHours).replace('.', ',')} h` : (dbsDefinition ? `${String(dbsDefinition.duration_hours).replace('.', ',')} h` : '—')}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-slate-400">{isGerman ? 'Freie Tage danach' : 'Days off afterwards'}</label>
+                    <input type="number" min="0" max="14" value={entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock} onChange={(event) => updateEntry({ free_days_after_block: Math.max(0, Math.min(14, Number.parseInt(event.target.value, 10) || 0)) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {entry.start_time && entry.end_time
+                    ? (isGerman ? 'Eigene Zeiten dieses Mitarbeiters. Die Pause (1 h ab 6 h Anwesenheit) ist bereits abgezogen.' : 'Own times of this employee. The break (1 h from 6 h presence) is already deducted.')
+                    : (isGerman ? `Keine eigenen Zeiten: es gelten die Zeiten der DBS-Schicht${defaultTimes}. Beginn und Ende ausfüllen, um sie für diesen Mitarbeiter zu überschreiben.` : `No own times: the DBS shift times apply${defaultTimes}. Fill in start and end to override them for this employee.`)}
+                  {(entry.start_time || entry.end_time) ? (
+                    <button type="button" onClick={() => updateEntry({ start_time: null, end_time: null })} className="ml-2 underline decoration-dotted hover:text-slate-300">{isGerman ? 'Zurücksetzen' : 'Reset'}</button>
+                  ) : null}
+                </p>
               </div>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="w-full sm:max-w-xs"><label className="text-xs text-slate-400">{isGerman ? 'Freie Tage danach' : 'Days off afterwards'}</label><input type="number" min="0" max="14" value={entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock} onChange={(event) => setDbsPool((current) => current.map((item) => item.employee_name !== entry.employee_name ? item : ({ ...item, free_days_after_block: Math.max(0, Math.min(14, Number.parseInt(event.target.value, 10) || 0)) })))} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" /></div>
-                <button onClick={() => removeDbsEmployee(entry.employee_name)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20"><Trash2 className="h-4 w-4" />{t("shiftAdmin.dbsRemove")}</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="mt-4 flex justify-end">
-          <button onClick={saveDbsPool} disabled={saving === 'dbs-pool'} className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-fuchsia-300 disabled:opacity-50">
+          <button onClick={saveDbs} disabled={saving === 'dbs'} className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-fuchsia-300 disabled:opacity-50">
             <Save className="h-4 w-4" />
-            {saving === 'dbs-pool' ? t("shiftAdmin.dbsSavingPool") : t("shiftAdmin.dbsSavePool")}
+            {saving === 'dbs' ? '…' : (isGerman ? 'DBS speichern' : 'Save DBS')}
           </button>
         </div>
       </Section>

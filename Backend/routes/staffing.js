@@ -4,6 +4,8 @@ import { requireAuth } from '../middleware/authMiddleware.js';
 import { parseMonthLabel } from '../lib/monthParser.js';
 import { normalizePlanningShiftTypeKey } from '../lib/shiftplanGeneration.js';
 import { classifyShiftCodeToType } from '../lib/understaffingSuggestions.js';
+import { buildHessenHolidayMap } from '../lib/hessenHolidays.js';
+import { buildDayLimitMap, buildStaffingForContext, resolveStaffingDayContext } from '../lib/staffingLimits.js';
 
 const router = express.Router();
 
@@ -91,6 +93,11 @@ router.post('/recompute', requireAuth, async (req, res) => {
             if (STAFFING_RESULT_TYPES.includes(type)) ruleMap[type] = Number(rule.min_count) || 0;
         }
 
+        // Saturday / Sunday / holiday minimums replace the weekday value on those days.
+        const { rows: dayLimitRows } = await db.query('SELECT day_context, shift_type, min_count, max_count FROM staffing_day_limits').catch(() => ({ rows: [] }));
+        const dayLimitMap = buildDayLimitMap(dayLimitRows);
+        const holidayMap = buildHessenHolidayMap(year);
+
         // 2. Live shifts of the requested month
         const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
         const { rows: definitions } = await db.query('SELECT code, shift_type, is_active FROM shift_definitions');
@@ -126,7 +133,12 @@ router.post('/recompute', requireAuth, async (req, res) => {
                 const dateStr = `${monthKey}-${String(d).padStart(2, '0')}`;
                 for (const type of STAFFING_RESULT_TYPES) {
                     const actual = dailyEmployees[d]?.[type]?.size || 0;
-                    const min = ruleMap[type] || 0;
+                    const dayStaffing = buildStaffingForContext({
+                        context: resolveStaffingDayContext({ dayOfWeek: new Date(Date.UTC(year, month - 1, d)).getUTCDay(), holidayName: holidayMap[dateStr] }),
+                        weekdayRules: ruleMap,
+                        dayLimitMap,
+                    });
+                    const min = dayStaffing.rules[type] || 0;
                     const status = actual < min ? 'FAIL' : 'OK';
                     await client.query(
                         `INSERT INTO staffing_results(date, shift_type, actual, min, status)

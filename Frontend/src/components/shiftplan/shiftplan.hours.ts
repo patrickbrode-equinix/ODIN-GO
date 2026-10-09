@@ -17,6 +17,34 @@ export const BREAK_HOURS = 1;
 const CREDITED_SHIFT_CODES = new Set(["ABW", "SEMINAR"]);
 const CREDITED_ABSENCE_TYPES = new Set(["VACATION", "SICK", "TRAINING"]);
 
+/** Heiligabend (24.12.) and Silvester (31.12.): hours from 12:00 onwards count double. */
+export const DOUBLE_PAY_FROM_MINUTE = 12 * 60;
+/** On these days the break is only deducted when the presence is at least this long. */
+export const DOUBLE_PAY_DAY_BREAK_THRESHOLD_HOURS = 6;
+
+export function isDoublePayDay(monthIndex1: number, day: number): boolean {
+    return (monthIndex1 === 12 && (day === 24 || day === 31));
+}
+
+/**
+ * Paid hours of a shift on a double-pay day:
+ * presence - break (only from 6h presence) + presence from 12:00 until midnight
+ * (that part is paid twice). Time range format: "HH:MM-HH:MM".
+ */
+export function getDoublePayDayHours(range: string): number {
+    const match = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(String(range || "").trim());
+    if (!match) return 0;
+    const startMin = Number(match[1]) * 60 + Number(match[2]);
+    let endMin = Number(match[3]) * 60 + Number(match[4]);
+    if (endMin <= startMin) endMin += 24 * 60; // overnight
+
+    const presenceHours = (endMin - startMin) / 60;
+    const breakHours = presenceHours >= DOUBLE_PAY_DAY_BREAK_THRESHOLD_HOURS ? BREAK_HOURS : 0;
+    // Only the part on the day itself is doubled (12:00 - 24:00).
+    const bonusMinutes = Math.max(0, Math.min(endMin, 24 * 60) - Math.max(startMin, DOUBLE_PAY_FROM_MINUTE));
+    return Math.max(0, presenceHours - breakHours + bonusMinutes / 60);
+}
+
 export type HourLimitsConfig = {
     maxDailyHours: number;   // 0 = no limit
     maxWeeklyHours: number;  // 0 = no limit
@@ -88,6 +116,8 @@ export function calculateEmployeeHours(
     limits?: HourLimitsConfig,
     sollHours: number = SOLL_HOURS,
     absences: Absence[] = [],
+    /** Own paid hours per shift code of this employee (e.g. DBS pool members with individual times). */
+    ownShiftHours: Record<string, number> = {},
 ): EmployeeMonthlyStats {
     let ist = 0;
     let earlyCount = 0;
@@ -113,6 +143,10 @@ export function calculateEmployeeHours(
         if (type) {
             if (CREDITED_SHIFT_CODES.has(String(code || "").toUpperCase()) && !isWeekend) {
                 h = HOLIDAY_CREDIT_HOURS;
+            } else if (code && ownShiftHours[String(code).toUpperCase()] > 0) {
+                h = ownShiftHours[String(code).toUpperCase()];
+            } else if (isDoublePayDay(monthIndex1, day)) {
+                h = getDoublePayDayHours(type.time);
             } else {
                 h = parseHoursFromRange(type.time);
                 // Deduct 1h break per working day

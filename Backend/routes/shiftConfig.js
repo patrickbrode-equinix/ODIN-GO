@@ -14,6 +14,13 @@ import { recomputeConflictsInternal } from './absences.js';
 import { normalizeFreeDaysAfter, normalizeShortNightSeriesDays, sanitizeShiftModes } from '../lib/shiftDefinitionInput.js';
 import { DEFAULT_SHIFT_DEFINITIONS,DEFAULT_STAFFING_RULES, STAFFING_SHIFT_TYPES, getPaidShiftHours } from '../lib/shiftDefaults.js';
 
+import {
+  DEFAULT_STAFFING_DAY_LIMITS,
+  STAFFING_DAY_LIMIT_CONTEXTS,
+  STAFFING_DAY_LIMIT_TYPES,
+  buildDayLimitMap,
+} from '../lib/staffingLimits.js';
+
 const router = express.Router();
 router.use(requireAuth);
 router.use(async (_req, _res, next) => {
@@ -377,13 +384,45 @@ async function upsertStaffingRule(client, shiftType, minCount, maxCount) {
   );
 }
 
+// Saturday / Sunday / holiday limits for early and late, flattened for the UI.
+async function loadStaffingDayLimitRows(client = pool) {
+  let rows = [];
+  try {
+    ({ rows } = await client.query('SELECT day_context, shift_type, min_count, max_count FROM staffing_day_limits'));
+  } catch (err) {
+    console.warn('staffing_day_limits unavailable, using defaults:', err.message);
+  }
+  const map = buildDayLimitMap(rows);
+  return STAFFING_DAY_LIMIT_CONTEXTS.flatMap((context) => STAFFING_DAY_LIMIT_TYPES.map((shiftType) => ({
+    day_context: context,
+    shift_type: shiftType,
+    min_count: map[context][shiftType].min_count,
+    max_count: map[context][shiftType].max_count,
+  })));
+}
+
+async function upsertStaffingDayLimit(client, context, shiftType, minCount, maxCount) {
+  await client.query(
+    `INSERT INTO staffing_day_limits (day_context, shift_type, min_count, max_count)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (day_context, shift_type) DO UPDATE SET min_count = EXCLUDED.min_count, max_count = EXCLUDED.max_count`,
+    [context, shiftType, minCount, maxCount]
+  );
+}
+
 router.get('/defaults', (_req, res) => {
-  res.json({ ok: true, definitions: DEFAULT_SHIFT_DEFINITIONS, staffing: DEFAULT_STAFFING_RULES });
+  res.json({ ok: true, definitions: DEFAULT_SHIFT_DEFINITIONS, staffing: DEFAULT_STAFFING_RULES, staffing_day_limits: DEFAULT_STAFFING_DAY_LIMITS });
 });
 
 router.get('/staffing-rules', async (_req, res) => {
   try {
-    res.json({ ok: true, rules: await loadStaffingRuleRows(), defaults: DEFAULT_STAFFING_RULES });
+    res.json({
+      ok: true,
+      rules: await loadStaffingRuleRows(),
+      day_limits: await loadStaffingDayLimitRows(),
+      defaults: DEFAULT_STAFFING_RULES,
+      day_limit_defaults: DEFAULT_STAFFING_DAY_LIMITS,
+    });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -404,13 +443,31 @@ router.put('/staffing-rules', requirePageAccess('shiftplan_control', 'write'), a
     }
     normalized.push({ shiftType, minCount, maxCount });
   }
+  const dayLimitInput = Array.isArray(req.body?.day_limits) ? req.body.day_limits : [];
+  const normalizedDayLimits = [];
+  for (const limit of dayLimitInput) {
+    const context = String(limit?.day_context || '').trim().toLowerCase();
+    const shiftType = String(limit?.shift_type || '').trim().toLowerCase();
+    if (!STAFFING_DAY_LIMIT_CONTEXTS.includes(context) || !STAFFING_DAY_LIMIT_TYPES.includes(shiftType)) {
+      return res.status(400).json({ ok: false, error: 'Ungültiger Tag oder Schichttyp' });
+    }
+    const minCount = Number.parseInt(String(limit?.min_count ?? 0), 10);
+    const rawMax = limit?.max_count;
+    const maxCount = rawMax === null || rawMax === undefined || rawMax === '' ? null : Number.parseInt(String(rawMax), 10);
+    if (!Number.isInteger(minCount) || minCount < 0) return res.status(400).json({ ok: false, error: 'Ungültige Mindestbesetzung' });
+    if (maxCount !== null && (!Number.isInteger(maxCount) || maxCount < minCount)) {
+      return res.status(400).json({ ok: false, error: 'Die Maximalbesetzung darf die Mindestbesetzung nicht unterschreiten' });
+    }
+    normalizedDayLimits.push({ context, shiftType, minCount, maxCount });
+  }
   let client;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
     for (const rule of normalized) await upsertStaffingRule(client, rule.shiftType, rule.minCount, rule.maxCount);
+    for (const limit of normalizedDayLimits) await upsertStaffingDayLimit(client, limit.context, limit.shiftType, limit.minCount, limit.maxCount);
     await client.query('COMMIT');
-    res.json({ ok: true, rules: await loadStaffingRuleRows() });
+    res.json({ ok: true, rules: await loadStaffingRuleRows(), day_limits: await loadStaffingDayLimitRows() });
   } catch (err) {
     await client?.query('ROLLBACK').catch(() => {});
     res.status(500).json({ ok: false, error: err.message });
@@ -453,6 +510,12 @@ router.post('/defaults/reset', requirePageAccess('shiftplan_control', 'write'), 
         const defaults = DEFAULT_STAFFING_RULES[shiftType];
         await upsertStaffingRule(client, shiftType, defaults.min_count, defaults.max_count);
       }
+      for (const context of STAFFING_DAY_LIMIT_CONTEXTS) {
+        for (const shiftType of STAFFING_DAY_LIMIT_TYPES) {
+          const defaults = DEFAULT_STAFFING_DAY_LIMITS[context][shiftType];
+          await upsertStaffingDayLimit(client, context, shiftType, defaults.min_count, defaults.max_count);
+        }
+      }
     }
     await client.query('COMMIT');
     res.json({ ok: true, rules: await loadStaffingRuleRows() });
@@ -473,7 +536,8 @@ router.get('/special-pools/:shiftCode', async (req, res) => {
     const shiftCode = String(req.params.shiftCode || '').trim().toUpperCase();
     const { rows } = await pool.query(
       `SELECT id, shift_code, employee_name, monthly_max_assignments, sort_order, is_active,
-              working_weekdays, free_days_after_block
+              working_weekdays, free_days_after_block,
+              to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time, duration_hours
        FROM shift_special_pools
        WHERE shift_code = $1 AND is_active = TRUE
        ORDER BY sort_order, employee_name`,
@@ -514,16 +578,23 @@ router.put('/special-pools/:shiftCode', requirePageAccess('shiftplan_control', '
       const monthlyMaxAssignments = Math.max(Number.parseInt(String(entry.monthly_max_assignments ?? 0), 10) || 0, 0);
       const workingWeekdays = normalizeWeekdays(entry.working_weekdays);
       const freeDaysAfterBlock = Math.max(0, Math.min(14, Number.parseInt(String(entry.free_days_after_block ?? 2), 10) || 0));
+      // Optional own times; both or none. Duration (paid hours) is derived, never trusted from the client.
+      const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
+      const hasOwnTimes = timePattern.test(String(entry.start_time || '')) && timePattern.test(String(entry.end_time || ''));
+      const ownStart = hasOwnTimes ? String(entry.start_time) : null;
+      const ownEnd = hasOwnTimes ? String(entry.end_time) : null;
+      const ownDuration = hasOwnTimes ? getDurationHours({ startTime: ownStart, endTime: ownEnd }) : null;
       await client.query(
-        `INSERT INTO shift_special_pools (shift_code, employee_name, monthly_max_assignments, sort_order, is_active, working_weekdays, free_days_after_block)
-         VALUES ($1, $2, $3, $4, TRUE, $5::jsonb, $6)`,
-        [shiftCode, employeeName, monthlyMaxAssignments, index, JSON.stringify(workingWeekdays), freeDaysAfterBlock]
+        `INSERT INTO shift_special_pools (shift_code, employee_name, monthly_max_assignments, sort_order, is_active, working_weekdays, free_days_after_block, start_time, end_time, duration_hours)
+         VALUES ($1, $2, $3, $4, TRUE, $5::jsonb, $6, $7, $8, $9)`,
+        [shiftCode, employeeName, monthlyMaxAssignments, index, JSON.stringify(workingWeekdays), freeDaysAfterBlock, ownStart, ownEnd, ownDuration]
       );
     }
 
     const { rows } = await client.query(
       `SELECT id, shift_code, employee_name, monthly_max_assignments, sort_order, is_active,
-              working_weekdays, free_days_after_block
+              working_weekdays, free_days_after_block,
+              to_char(start_time, 'HH24:MI') AS start_time, to_char(end_time, 'HH24:MI') AS end_time, duration_hours
        FROM shift_special_pools
        WHERE shift_code = $1 AND is_active = TRUE
        ORDER BY sort_order, employee_name`,

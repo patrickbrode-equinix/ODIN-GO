@@ -21,6 +21,7 @@ import { api } from "../../api/api";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 import { ShiftplanUploadStatus } from "../shiftplan/ShiftplanUploadStatus";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
+import { isPanelVisible } from "../../hooks/usePanelVisible";
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
@@ -761,7 +762,7 @@ export default function TagesplanungPage() {
   }, []);
 
   useEffect(() => {
-    timerRef.current = setInterval(() => setNow(Date.now()), 1_000);
+    timerRef.current = setInterval(() => { if (isPanelVisible()) setNow(Date.now()); }, 1_000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, []);
 

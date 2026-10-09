@@ -57,6 +57,22 @@ export function getWorkdayBasedTargetHours({
   return Number(((normalizedAnnual * weekdays) / yearWeekdays).toFixed(2));
 }
 
+/** code -> { startTime, endTime, startDayOffset, endDayOffset } for the double-pay days. */
+export function buildShiftTimesLookup(shiftDefinitions) {
+  const lookup = new Map();
+  for (const definition of Array.isArray(shiftDefinitions) ? shiftDefinitions : []) {
+    const code = String(definition?.code || '').trim().toUpperCase();
+    if (!code || !definition?.start_time || !definition?.end_time) continue;
+    lookup.set(code, {
+      startTime: definition.start_time,
+      endTime: definition.end_time,
+      startDayOffset: definition.start_day_offset,
+      endDayOffset: definition.end_day_offset,
+    });
+  }
+  return lookup;
+}
+
 export function buildShiftHoursLookup(shiftDefinitions) {
   const lookup = new Map();
   for (const definition of Array.isArray(shiftDefinitions) ? shiftDefinitions : []) {
@@ -67,12 +83,48 @@ export function buildShiftHoursLookup(shiftDefinitions) {
   return lookup;
 }
 
-export function getDailyCreditedHours({ shiftCode, shiftHours = 0, absenceType = null, isWeekend = false, isHoliday = false }) {
+// Heiligabend (24.12.) and Silvester (31.12.) count as holidays whose hours from
+// 12:00 onwards are paid twice. The break is only deducted from 6h presence.
+export const DOUBLE_PAY_FROM_MINUTE = 12 * 60;
+export const DOUBLE_PAY_BREAK_THRESHOLD_HOURS = 6;
+export const DOUBLE_PAY_BREAK_HOURS = 1;
+
+export function isDoublePayDay(date) {
+  return date.getMonth() === 11 && (date.getDate() === 24 || date.getDate() === 31);
+}
+
+function timeToMinutes(value) {
+  const match = /^(\d{1,2}):(\d{2})/.exec(String(value ?? '').trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+/**
+ * Paid hours of a shift on a double-pay day: presence - break (from 6h presence)
+ * + presence between 12:00 and midnight of that day (paid twice).
+ * Returns null when the shift has no usable times.
+ */
+export function getDoublePayDayHours({ startTime, endTime, startDayOffset = 0, endDayOffset = 0 }) {
+  const startMin = timeToMinutes(startTime);
+  const endClock = timeToMinutes(endTime);
+  if (startMin === null || endClock === null) return null;
+
+  const start = (Number(startDayOffset) || 0) * 1440 + startMin;
+  let end = (Number(endDayOffset) || 0) * 1440 + endClock;
+  if (end <= start) end += 1440;
+
+  const presenceHours = (end - start) / 60;
+  const breakHours = presenceHours >= DOUBLE_PAY_BREAK_THRESHOLD_HOURS ? DOUBLE_PAY_BREAK_HOURS : 0;
+  const bonusMinutes = Math.max(0, Math.min(end, 1440) - Math.max(start, DOUBLE_PAY_FROM_MINUTE));
+  return Number(Math.max(0, presenceHours - breakHours + bonusMinutes / 60).toFixed(2));
+}
+
+export function getDailyCreditedHours({ shiftCode, shiftHours = 0, absenceType = null, isWeekend = false, isHoliday = false, doublePayHours = null }) {
   const normalizedCode = String(shiftCode || '').trim().toUpperCase();
   const normalizedAbsenceType = String(absenceType || '').trim().toUpperCase();
 
   if (normalizedCode === 'FS') return 0;
   if (normalizedCode) {
+    if (doublePayHours !== null && !CREDITED_SHIFT_CODES.has(normalizedCode)) return doublePayHours;
     if (isHoliday) return normalizeTargetHours(shiftHours, 0);
     if (!isWeekend && CREDITED_SHIFT_CODES.has(normalizedCode)) return CREDITED_ABSENCE_HOURS;
     return normalizeTargetHours(shiftHours, 0);
@@ -114,9 +166,13 @@ export function aggregateYearlyHours({
   shifts,
   absences,
   shiftHoursLookup,
+  shiftTimesLookup = null,
+  /** Map "employee__CODE" -> own paid hours (DBS pool members with individual times). */
+  employeeShiftHours = null,
   monthlyTargetHours = DEFAULT_MONTHLY_TARGET_HOURS,
   annualTargetHours,
 }) {
+  const timesLookup = shiftTimesLookup instanceof Map ? shiftTimesLookup : new Map(Object.entries(shiftTimesLookup || {}));
   const normalizedMonthlyTargetHours = normalizeTargetHours(monthlyTargetHours, DEFAULT_MONTHLY_TARGET_HOURS);
   const normalizedAnnualTargetHours = normalizeAnnualTargetHours(annualTargetHours, normalizedMonthlyTargetHours);
   const hoursLookup = shiftHoursLookup instanceof Map ? shiftHoursLookup : new Map(Object.entries(shiftHoursLookup || {}));
@@ -157,10 +213,12 @@ export function aggregateYearlyHours({
     if (date.getMonth() !== parsedMonth.month - 1 || date.getFullYear() !== year) continue;
 
     const shiftCode = String(row?.shift_code || '').trim().toUpperCase();
+    const shiftTimes = isDoublePayDay(date) ? timesLookup.get(shiftCode) : null;
     const hours = getDailyCreditedHours({
       shiftCode,
-      shiftHours: hoursLookup.get(shiftCode) ?? 0,
+      shiftHours: employeeShiftHours?.get(`${employeeName}__${shiftCode}`) ?? hoursLookup.get(shiftCode) ?? 0,
       isWeekend: isWeekend(date),
+      doublePayHours: shiftTimes ? getDoublePayDayHours(shiftTimes) : null,
     });
     const dateKey = toDateKey(date);
     const employeeDateKey = `${employeeName}__${dateKey}`;

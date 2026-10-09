@@ -45,7 +45,24 @@ const ADMIN_PAGE_KEYS = new Set([
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+/**
+ * The backend finishes the authentik login by redirecting to `/#sso_token=…`
+ * (or `/#sso_error=…`). The fragment is consumed once and removed from the URL.
+ */
+function consumeSsoRedirect() {
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const token = hash.get("sso_token");
+  const error = hash.get("sso_error");
+  if (!token && !error) return null;
+
+  if (token) sessionStorage.setItem("shiftplanner_admin_token", token);
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return error;
+}
+
 function consumeExtensionContext() {
+  const ssoError = consumeSsoRedirect();
+  if (ssoError) sessionStorage.setItem("shiftplanner_sso_error", ssoError);
   const params = new URLSearchParams(window.location.search);
   const adminToken = params.get("adminToken");
   const identityToken = params.get("identityToken");

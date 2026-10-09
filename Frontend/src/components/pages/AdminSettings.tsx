@@ -13,15 +13,17 @@ import { fetchShiftHistory, type ShiftChangeLog } from "../../api/history";
 import { api } from "../../api/api";
 import { ShiftPlanningSettingsPanel } from "./ShiftAdminSettings";
 import WellbeingStatistics from "./WellbeingStatistics";
+import StaffingLimitsTab from "./StaffingLimitsTab";
 import AccessDenied from "./AccessDenied";
 import {
-  Loader2, History, CalendarClock, KeyRound, HeartPulse,
+  Loader2, History, CalendarClock, KeyRound, HeartPulse, Users,
 } from "lucide-react";
 
-type TabId = "shiftplan" | "wellbeing" | "audit" | "security";
+type TabId = "shiftplan" | "staffing" | "wellbeing" | "audit" | "security";
 
 const TAB_SPECS: { id: TabId; icon: ElementType; accent: string }[] = [
   { id: "shiftplan", icon: CalendarClock, accent: "from-sky-500/25 via-cyan-500/10 to-transparent" },
+  { id: "staffing", icon: Users, accent: "from-emerald-500/25 via-teal-500/10 to-transparent" },
   { id: "wellbeing", icon: HeartPulse, accent: "from-violet-500/25 via-fuchsia-500/10 to-transparent" },
   { id: "security", icon: KeyRound, accent: "from-slate-500/25 via-zinc-500/10 to-transparent" },
   { id: "audit", icon: History, accent: "from-zinc-500/25 via-slate-500/10 to-transparent" },
@@ -33,6 +35,8 @@ function getTabs(t: (key: any) => string, language: string) {
     switch (tab.id) {
       case "shiftplan":
         return { ...tab, label: t('admin.tabShiftplan'), description: t('admin.tabShiftplanDesc') };
+      case "staffing":
+        return { ...tab, label: isGerman ? "Besetzung" : "Staffing", description: isGerman ? "Minimum und Maximum je Früh, Spät, Nacht und Tagesart" : "Minimum and maximum per early, late, night and day type" };
       case "wellbeing":
         return { ...tab, label: "Wellbeing", description: isGerman ? "Belastung und Erholung im Team" : "Team workload and recovery" };
       case "audit":
@@ -47,6 +51,7 @@ function getTabs(t: (key: any) => string, language: string) {
 
 const TAB_ACCESS: Record<TabId, Array<{ pageKey: string; min?: "view" | "write" }>> = {
   shiftplan: [{ pageKey: "shiftplan_control", min: "view" }],
+  staffing: [{ pageKey: "shiftplan_control", min: "view" }],
   wellbeing: [{ pageKey: "admin_settings", min: "view" }],
   audit: [{ pageKey: "admin_settings", min: "view" }, { pageKey: "protokoll", min: "view" }],
   security: [{ pageKey: "admin_settings", min: "view" }],
@@ -172,6 +177,7 @@ export default function AdminSettings() {
       </div>
 
       {activeTab === "shiftplan" && <ShiftPlanningSettingsPanel embedded />}
+      {activeTab === "staffing" && <StaffingLimitsTab />}
       {activeTab === "wellbeing" && <WellbeingStatistics embedded />}
       {activeTab === "audit" && <AuditTab />}
       {activeTab === "security" && <AdminPasswordTab />}

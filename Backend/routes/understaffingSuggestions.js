@@ -117,6 +117,7 @@ router.get(
         'SELECT * FROM shift_definitions WHERE is_active = TRUE ORDER BY sort_order, code',
       );
       const staffingRes = await pool.query('SELECT * FROM staffing_rules');
+      const dayLimitRes = await pool.query('SELECT day_context, shift_type, min_count, max_count FROM staffing_day_limits').catch(() => ({ rows: [] }));
       const rotationRes = await pool.query('SELECT * FROM shift_rotation_rules WHERE id=1');
       const planningRes = await pool.query('SELECT respect_employee_wishes FROM shift_planning_config WHERE id=1');
       const wellbeingRes = await pool.query("SELECT * FROM wellbeing_config WHERE scope = 'global'");
@@ -210,6 +211,7 @@ router.get(
         today: berlinTodayKey(),
         definitions: definitionRes.rows,
         staffingRules: staffingRes.rows,
+        staffingDayLimits: dayLimitRes.rows,
         schedule,
         prevMonthSchedule,
         nextMonthSchedule,

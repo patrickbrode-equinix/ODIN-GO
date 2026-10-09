@@ -74,3 +74,32 @@ describe('shiftHours helpers', () => {
     assert.equal(result.employees.length, 0);
   });
 });
+
+describe('double-pay days (24.12. / 31.12.)', () => {
+  it('pays hours from 12:00 twice and deducts the break only from 6h presence', async () => {
+    const { getDoublePayDayHours } = await import('../lib/shiftHours.js');
+    // 06:30-15:30: 9h presence - 1h break + 3.5h after 12:00
+    assert.equal(getDoublePayDayHours({ startTime: '06:30:00', endTime: '15:30:00' }), 11.5);
+    // 13:00-22:00: 9h - 1h + 9h
+    assert.equal(getDoublePayDayHours({ startTime: '13:00', endTime: '22:00' }), 17);
+    // 06:30-10:30: 4h presence, no break, nothing after 12:00
+    assert.equal(getDoublePayDayHours({ startTime: '06:30', endTime: '10:30' }), 4);
+    // Night 21:15-06:45: only 21:15-24:00 (2.75h) is doubled, 9.5h - 1h break
+    assert.equal(getDoublePayDayHours({ startTime: '21:15', endTime: '06:45', endDayOffset: 1 }), 11.25);
+  });
+
+  it('uses the double-pay rule for 24.12. in the yearly aggregation only', () => {
+    const times = new Map([['E1', { startTime: '06:30', endTime: '15:30', startDayOffset: 0, endDayOffset: 0 }]]);
+    const result = aggregateYearlyHours({
+      year: 2026,
+      shifts: [
+        { month: 'Dezember 2026', employee_name: 'Alice', day: 24, shift_code: 'E1' },
+        { month: 'Dezember 2026', employee_name: 'Alice', day: 22, shift_code: 'E1' },
+      ],
+      absences: [],
+      shiftHoursLookup: { E1: 8 },
+      shiftTimesLookup: times,
+    });
+    assert.equal(result.employees[0].actual_hours, 11.5 + 8);
+  });
+});

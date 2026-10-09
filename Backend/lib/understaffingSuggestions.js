@@ -21,6 +21,7 @@ import {
   parsePreferenceStrengths,
   resolveSingleWish,
 } from './preferenceStrength.js';
+import { buildDayLimitMap, buildStaffingForContext, resolveStaffingDayContext } from './staffingLimits.js';
 
 export const WISH_VIOLATION_REASON = 'entgegen Wunsch (gewichtet)';
 export const SUGGESTION_SHIFT_TYPES = Object.freeze(['night', 'late', 'early']);
@@ -176,9 +177,29 @@ function getApplicableDefinitions(definitions, shiftType, dayOfWeek) {
  * operational coverage: the max_staff of 'N' is used (else the largest night
  * definition) instead of the sum.
  */
-export function getTypeMaximum({ definitions = [], staffingRules = [], shiftType, dayOfWeek } = {}) {
+/**
+ * Global mode: when dayLimitMap is given, the global limits of the day context
+ * (weekday / Saturday / Sunday / holiday) are the only source. A missing
+ * maximum means "unlimited", so the minimum is the target.
+ */
+function getGlobalTypeLimits({ staffingRules, dayLimitMap, shiftType, dayOfWeek, holidayName }) {
+  const type = normalizePlanningShiftTypeKey(shiftType);
+  const rows = Array.isArray(staffingRules) ? staffingRules : [];
+  const staffing = buildStaffingForContext({
+    context: resolveStaffingDayContext({ dayOfWeek, holidayName }),
+    weekdayRules: buildStaffingRulesByShiftType(rows),
+    weekdayMaximums: buildStaffingMaximumsByShiftType(rows),
+    dayLimitMap,
+  });
+  const min = nonNegativeInt(staffing.rules[type]);
+  const cap = staffing.maximums[type];
+  return { min, max: Number.isFinite(cap) ? Math.max(cap, min) : min };
+}
+
+export function getTypeMaximum({ definitions = [], staffingRules = [], shiftType, dayOfWeek, dayLimitMap = null, holidayName = null } = {}) {
   const type = normalizePlanningShiftTypeKey(shiftType);
   const applicable = getApplicableDefinitions(definitions, type, dayOfWeek);
+  if (dayLimitMap) return applicable.length > 0 ? getGlobalTypeLimits({ staffingRules, dayLimitMap, shiftType: type, dayOfWeek, holidayName }).max : 0;
   const maxStaffOf = (definition) => nonNegativeInt(definition?.max_staff);
 
   let total = 0;
@@ -206,8 +227,13 @@ export function getTypeMaximum({ definitions = [], staffingRules = [], shiftType
  * understaffed audit: max(staffing_rules.min_count, sum of min_staff of the
  * applicable active definitions). NK is not added on top of N.
  */
-export function getTypeMinimum({ definitions = [], staffingRules = [], shiftType, dayOfWeek } = {}) {
+export function getTypeMinimum({ definitions = [], staffingRules = [], shiftType, dayOfWeek, dayLimitMap = null, holidayName = null } = {}) {
   const type = normalizePlanningShiftTypeKey(shiftType);
+  if (dayLimitMap) {
+    return getApplicableDefinitions(definitions, type, dayOfWeek).length > 0
+      ? getGlobalTypeLimits({ staffingRules, dayLimitMap, shiftType: type, dayOfWeek, holidayName }).min
+      : 0;
+  }
   const applicable = getApplicableDefinitions(definitions, type, dayOfWeek)
     .filter((definition) => !(type === 'night' && normalizeCode(definition.code) === 'NK'));
   const definitionMinimum = applicable.reduce((sum, definition) => sum + nonNegativeInt(definition?.min_staff), 0);
@@ -326,6 +352,8 @@ export function computeUnderstaffingSuggestions(input = {}) {
   const today = String(input.today || '').slice(0, 10);
   const definitions = Array.isArray(input.definitions) ? input.definitions : [];
   const staffingRules = Array.isArray(input.staffingRules) ? input.staffingRules : [];
+  // Global mode (route supplies it): per-day global limits replace the per-definition values.
+  const dayLimitMap = input.staffingDayLimits ? buildDayLimitMap(input.staffingDayLimits) : null;
   const rules = normalizeRotationRules(input.rotationRules);
   const wellbeing = normalizeWellbeingConfig(input.wellbeingConfig);
   const respectWishes = input.respectWishes !== false;
@@ -447,7 +475,7 @@ export function computeUnderstaffingSuggestions(input = {}) {
     if (freeToday) {
       reasons.push('Frei an diesem Tag');
     } else {
-      const minimumOfOrigin = getTypeMinimum({ definitions, staffingRules, shiftType: currentType, dayOfWeek: dow });
+      const minimumOfOrigin = getTypeMinimum({ definitions, staffingRules, shiftType: currentType, dayOfWeek: dow, dayLimitMap, holidayName: holidayMap[iso] });
       const remaining = (countsByDay.get(day)?.[currentType] || 0) - 1;
       if (remaining < minimumOfOrigin) return null;
       reasons.push(`Wird aus ${currentCode} umgesetzt, ${TYPE_LABELS[currentType]} bleibt besetzt (${remaining}/${minimumOfOrigin} Minimum)`);
@@ -599,14 +627,14 @@ export function computeUnderstaffingSuggestions(input = {}) {
     const dow = dayOfWeekIso(iso);
 
     for (const type of SUGGESTION_SHIFT_TYPES) {
-      const max = getTypeMaximum({ definitions, staffingRules, shiftType: type, dayOfWeek: dow });
+      const max = getTypeMaximum({ definitions, staffingRules, shiftType: type, dayOfWeek: dow, dayLimitMap, holidayName: holidayMap[iso] });
       if (!(max > 0)) continue;
       const actual = countsByDay.get(day)[type];
       const missing = max - actual;
       const severity = severityForMissing(missing);
       if (!severity) continue;
 
-      const min = getTypeMinimum({ definitions, staffingRules, shiftType: type, dayOfWeek: dow });
+      const min = getTypeMinimum({ definitions, staffingRules, shiftType: type, dayOfWeek: dow, dayLimitMap, holidayName: holidayMap[iso] });
       const typeCodes = [...new Set(getApplicableDefinitions(definitions, type, dow)
         .map((definition) => normalizeCode(definition.code))
         .filter(Boolean))];

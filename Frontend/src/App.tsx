@@ -6,6 +6,12 @@ import { useAuth } from "./context/AuthContext";
 /* Public – small, always needed immediately */
 const OdinGoWorkspace = lazy(() => import("./components/pages/OdinGoWorkspace"));
 
+/* The shift plan is the landing page of the extension: load its chunk in parallel with the
+ * workspace shell instead of after it (removes one network round trip from every open). */
+if (typeof window !== "undefined" && /^\/odin-go\/shiftplan\/?$/.test(window.location.pathname)) {
+  void import("./components/pages/Shiftplan");
+}
+
 /*
  * Both access paths use the same UI: the ODIN GO workspace.
  *  - Jarvis extension: iframe with ?embed=1

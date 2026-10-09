@@ -38,6 +38,7 @@ import shiftplanControlRoutes from "./routes/shiftplanControl.js";
 import shiftConfigRoutes from "./routes/shiftConfig.js";
 import standaloneAdminRoutes, { resetStandaloneAdminPasswordIfRequested } from "./routes/standaloneAdmin.js";
 import standaloneIdentityRoutes from "./routes/standaloneIdentity.js";
+import ssoAuthRoutes from "./routes/ssoAuth.js";
 import jarvisNotificationsRoutes from "./routes/jarvisNotifications.js";
 import odinGoRoutes from "./routes/odinGo.js";
 import shiftHandoverRoutes from "./routes/shiftHandovers.js";
@@ -95,6 +96,7 @@ app.use(express.json({ limit: "50mb" }));
 
 app.use("/api/standalone-admin", standaloneAdminRoutes);
 app.use("/api/standalone-identity", standaloneIdentityRoutes);
+app.use("/api/auth/sso", ssoAuthRoutes);
 
 /* ------------------------------------------------ */
 /* STATIC FILES                                     */

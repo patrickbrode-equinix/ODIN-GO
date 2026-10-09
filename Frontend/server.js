@@ -122,15 +122,98 @@ app.use(
 /* SERVE STATIC FILES                                */
 /* ------------------------------------------------ */
 
-app.use(express.static(path.join(__dirname, "dist")));
+/*
+ * Performance: the embedded page is loaded on every open of the panel.
+ *  - Vite emits content-hashed files under /assets: cache them for a year.
+ *  - index.html must always be revalidated so a deployment is picked up at once.
+ *  - Text assets are compressed (brotli/gzip) once and kept in memory.
+ */
+const zlib = require("zlib");
+const fs = require("fs");
+const COMPRESSIBLE = /\.(?:js|mjs|css|html|json|svg|map|txt)$/i;
+const compressedCache = new Map(); // `${file}:${encoding}:${mtime}` -> Buffer
+const DIST_DIR = path.join(__dirname, "dist");
+
+function chooseEncoding(acceptEncoding) {
+    const header = String(acceptEncoding || "");
+    if (/\bbr\b/.test(header)) return "br";
+    if (/\bgzip\b/.test(header)) return "gzip";
+    return null;
+}
+
+app.use((req, res, next) => {
+    if ((req.method !== "GET" && req.method !== "HEAD") || !COMPRESSIBLE.test(req.path)) return next();
+    const encoding = chooseEncoding(req.headers["accept-encoding"]);
+    if (!encoding) return next();
+    let file;
+    try {
+        file = path.join(DIST_DIR, path.normalize(decodeURIComponent(req.path)));
+    } catch {
+        return next();
+    }
+    if (!file.startsWith(DIST_DIR)) return next();
+    fs.stat(file, (statError, stat) => {
+        if (statError || !stat.isFile()) return next();
+        const key = `${file}:${encoding}:${stat.mtimeMs}`;
+        const send = (body) => {
+            res.setHeader("Content-Encoding", encoding);
+            res.setHeader("Vary", "Accept-Encoding");
+            res.setHeader("Content-Type", express.static.mime.lookup(file) || "application/octet-stream");
+            res.setHeader("Content-Length", body.length);
+            res.setHeader("Cache-Control", req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache");
+            res.end(req.method === "HEAD" ? undefined : body);
+        };
+        if (compressedCache.has(key)) return send(compressedCache.get(key));
+        fs.readFile(file, (readError, content) => {
+            if (readError) return next();
+            const done = (compressError, body) => {
+                if (compressError) return next();
+                compressedCache.set(key, body);
+                send(body);
+            };
+            if (encoding === "br") {
+                zlib.brotliCompress(content, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 5 } }, done);
+            } else {
+                zlib.gzip(content, { level: 6 }, done);
+            }
+        });
+    });
+});
+
+app.use(express.static(DIST_DIR, {
+    index: false,
+    setHeaders(res, filePath) {
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        else res.setHeader("Cache-Control", "no-cache");
+    },
+}));
 
 /* ------------------------------------------------ */
 /* SPA FALLBACK – return index.html for all other    */
 /* routes (React Router)                             */
 /* ------------------------------------------------ */
 
-app.get("*", (_req, res) => {
-    res.sendFile(path.join(__dirname, "dist", "index.html"));
+app.get("*", (req, res) => {
+    res.setHeader("Cache-Control", "no-cache");
+    const encoding = chooseEncoding(req.headers["accept-encoding"]);
+    const indexFile = path.join(DIST_DIR, "index.html");
+    if (!encoding) return res.sendFile(indexFile);
+    return fs.readFile(indexFile, (error, content) => {
+        if (error) return res.sendFile(indexFile);
+        const key = `${indexFile}:${encoding}:${content.length}`;
+        const send = (body) => {
+            res.setHeader("Content-Encoding", encoding);
+            res.setHeader("Vary", "Accept-Encoding");
+            res.type("html").send(body);
+        };
+        if (compressedCache.has(key)) return send(compressedCache.get(key));
+        const done = (compressError, body) => {
+            if (compressError) return res.sendFile(indexFile);
+            compressedCache.set(key, body);
+            send(body);
+        };
+        return encoding === "br" ? zlib.brotliCompress(content, done) : zlib.gzip(content, done);
+    });
 });
 
 /* ------------------------------------------------ */

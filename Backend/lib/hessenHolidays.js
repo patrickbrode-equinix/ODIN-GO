@@ -45,8 +45,11 @@ export function buildHessenHolidayMap(year) {
     [toIsoDate(addDays(easter, 50))]: 'Pfingstmontag',
     [toIsoDate(addDays(easter, 60))]: 'Fronleichnam',
     [toIsoDate(new Date(year, 9, 3))]: 'Tag der Deutschen Einheit',
+    // Company holidays: treated like public holidays (see shiftHours.js for the pay rule).
+    [toIsoDate(new Date(year, 11, 24))]: 'Heiligabend',
     [toIsoDate(new Date(year, 11, 25))]: '1. Weihnachtstag',
     [toIsoDate(new Date(year, 11, 26))]: '2. Weihnachtstag',
+    [toIsoDate(new Date(year, 11, 31))]: 'Silvester',
   };
 
   return map;

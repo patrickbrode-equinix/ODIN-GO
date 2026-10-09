@@ -54,8 +54,10 @@ function computeHolidays(year, state) {
         { date: toISO(addDays(easter, 39)), name: "Christi Himmelfahrt" },
         { date: toISO(addDays(easter, 50)), name: "Pfingstmontag" },
         { date: toISO(new Date(year, 9, 3)), name: "Tag der Deutschen Einheit" },
+        { date: toISO(new Date(year, 11, 24)), name: "Heiligabend" },
         { date: toISO(new Date(year, 11, 25)), name: "1. Weihnachtstag" },
         { date: toISO(new Date(year, 11, 26)), name: "2. Weihnachtstag" },
+        { date: toISO(new Date(year, 11, 31)), name: "Silvester" },
     ];
 
     // Hessen-specific: Fronleichnam (Corpus Christi) = Easter + 60 days

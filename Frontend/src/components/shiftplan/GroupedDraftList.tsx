@@ -1,14 +1,15 @@
 import { useState, type ReactNode } from 'react';
-import { ChevronDown, FileSpreadsheet, Pencil } from 'lucide-react';
+import { BarChart3, ChevronDown, FileSpreadsheet, Pencil } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
-import { exportPlanningGroup, isEditableGroupId, updateGroupMetadata, type PlanningDraftGroup, type PlanningDraftSummary } from '../../api/planningPeriods';
+import { exportPlanningGroup, isEditableGroupId, type ExcelExportVariant, updateGroupMetadata, type PlanningDraftGroup, type PlanningDraftSummary } from '../../api/planningPeriods';
 import { Button } from '../ui/button';
 
 interface Props<D extends PlanningDraftSummary> {
   groups: PlanningDraftGroup<D>[];
   activeId?: number;
   onOpen: (draft: D) => void;
-  onExportMonth: (draft: D) => void;
+  onExportMonth: (draft: D, variant: ExcelExportVariant) => void;
   onError: (message: string) => void;
   renderMonth?: (draft: D) => ReactNode;
   /** Called after group title/description were saved so the parent can reload. */
@@ -24,6 +25,9 @@ const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'v
 export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activeId, onOpen, onExportMonth, onError, renderMonth, onMetadataSaved }: Props<D>) {
   const { language, t } = useLanguage();
   const de = language === 'de';
+  // The management workbook contains personal wishes and hours: administrators only.
+  const { user } = useAuth();
+  const canExportManagement = user.isAdmin === true;
   const locale = getLanguageLocale(language);
   const [exporting, setExporting] = useState<string | null>(null);
   const [openState, setOpenState] = useState<Record<string, boolean>>({});
@@ -34,9 +38,9 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
   const monthLabel = (month: string) => new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 1).toLocaleDateString(locale, { month: 'long', year: 'numeric' });
   const time = (value: string) => { const parsed = new Date(value).getTime(); return Number.isFinite(parsed) ? parsed : 0; };
 
-  async function exportGroup(id: string) {
-    setExporting(id);
-    try { await exportPlanningGroup(id); }
+  async function exportGroup(id: string, variant: ExcelExportVariant = 'team') {
+    setExporting(`${id}:${variant}`);
+    try { await exportPlanningGroup(id, variant); }
     catch { onError(de ? 'Der Planungsexport ist fehlgeschlagen.' : 'Unable to export the plan.'); }
     finally { setExporting(null); }
   }
@@ -85,7 +89,8 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
         </p>
         <p className="mt-1 text-[10px] text-muted-foreground">{new Date(draft.created_at).toLocaleString(locale)}{draft.created_by ? ` · ${draft.created_by}` : ''}</p>
       </button>
-      <Button type="button" size="icon" variant="ghost" aria-label={`${de ? 'Monat als Excel exportieren' : 'Export month'}: ${monthLabel(draft.month)}, v${draft.version}`} onClick={() => onExportMonth(draft)}><FileSpreadsheet className="h-4 w-4" /></Button>
+      <Button type="button" size="icon" variant="ghost" title={de ? 'Excel für das Team (nur Schichten)' : 'Excel for the team (shifts only)'} aria-label={`${de ? 'Monat als Team-Excel exportieren' : 'Export month for the team'}: ${monthLabel(draft.month)}, v${draft.version}`} onClick={() => onExportMonth(draft, 'team')}><FileSpreadsheet className="h-4 w-4" /></Button>
+      {canExportManagement && <Button type="button" size="icon" variant="ghost" title={de ? 'Excel für die Leitung (Stunden und Wünsche)' : 'Excel for management (hours and wishes)'} aria-label={`${de ? 'Monat als Leitungs-Excel exportieren' : 'Export month for management'}: ${monthLabel(draft.month)}, v${draft.version}`} onClick={() => onExportMonth(draft, 'management')}><BarChart3 className="h-4 w-4" /></Button>}
     </div>
     {renderMonth?.(draft)}
   </div>;
@@ -124,9 +129,12 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
             <ChevronDown className={`mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
           </button>
           {editable && <Button type="button" size="icon" variant="ghost" aria-label={de ? 'Titel und Beschreibung bearbeiten' : 'Edit title and description'} onClick={() => startEdit(group, defaultTitle)}><Pencil className="h-4 w-4" /></Button>}
-          <Button type="button" size="icon" variant="ghost" aria-label={de ? 'Gesamte Planung als Excel' : 'Export entire plan'} disabled={exporting !== null} onClick={() => void exportGroup(group.id)}>
-            <FileSpreadsheet className={`h-4 w-4 ${exporting === group.id ? 'animate-pulse' : ''}`} />
+          <Button type="button" size="icon" variant="ghost" title={de ? 'Gesamte Planung als Team-Excel (nur Schichten)' : 'Entire plan for the team (shifts only)'} aria-label={de ? 'Gesamte Planung als Team-Excel' : 'Export entire plan for the team'} disabled={exporting !== null} onClick={() => void exportGroup(group.id, 'team')}>
+            <FileSpreadsheet className={`h-4 w-4 ${exporting === `${group.id}:team` ? 'animate-pulse' : ''}`} />
           </Button>
+          {canExportManagement && <Button type="button" size="icon" variant="ghost" title={de ? 'Gesamte Planung als Leitungs-Excel (Stunden und Wünsche)' : 'Entire plan for management (hours and wishes)'} aria-label={de ? 'Gesamte Planung als Leitungs-Excel' : 'Export entire plan for management'} disabled={exporting !== null} onClick={() => void exportGroup(group.id, 'management')}>
+            <BarChart3 className={`h-4 w-4 ${exporting === `${group.id}:management` ? 'animate-pulse' : ''}`} />
+          </Button>}
         </div>
         {open && <div className="space-y-2 border-t border-border/20 p-3">
           {editingId === group.id && <div className="space-y-2 rounded-lg border border-border/30 p-2">

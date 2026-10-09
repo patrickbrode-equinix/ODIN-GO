@@ -15,24 +15,26 @@
       * { box-sizing: border-box; }
       button, input { font: inherit; }
       .launcher { position: fixed; z-index: 2147483646; top: 8px; left: 108px; display: none; width: 122px; height: 34px; padding: 1px; overflow: hidden; isolation: isolate; touch-action:none; user-select:none; border: 0; border-radius: 8px; background:#2a2a2a; color:#fff; font:700 12px/1 Arial,"Helvetica Neue","Segoe UI",sans-serif; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.45),0 6px 16px rgba(0,0,0,.35),0 0 0 1px rgba(233,28,36,.12),0 0 18px rgba(233,28,36,.18); transition:transform .18s ease,box-shadow .25s ease; }
-      .launcher::before { content:""; position:absolute; z-index:-1; left:50%; top:50%; width:180%; aspect-ratio:1; transform:translate(-50%,-50%) rotate(0deg); background:conic-gradient(from 0deg,transparent 0deg,rgba(233,28,36,0) 40deg,#e91c24 90deg,#ff6b5e 115deg,rgba(233,28,36,0) 160deg,transparent 180deg,rgba(255,255,255,.0) 220deg,rgba(255,255,255,.55) 270deg,rgba(255,255,255,0) 320deg,transparent 360deg); animation:odin-lx-spin 6s linear infinite; }
+      .launcher::before { content:""; position:absolute; z-index:-1; left:50%; top:50%; width:180%; aspect-ratio:1; transform:translate(-50%,-50%) rotate(0deg); background:conic-gradient(from 0deg,transparent 0deg,rgba(233,28,36,0) 40deg,#e91c24 90deg,#ff6b5e 115deg,rgba(233,28,36,0) 160deg,transparent 180deg,rgba(255,255,255,.0) 220deg,rgba(255,255,255,.55) 270deg,rgba(255,255,255,0) 320deg,transparent 360deg);; will-change:auto; }
       .launcher.context-open { display: none !important; visibility: hidden; pointer-events: none; }
       .launcher:hover { transform:translateY(-1px); box-shadow:0 2px 4px rgba(0,0,0,.5),0 10px 24px rgba(0,0,0,.4),0 0 0 1px rgba(233,28,36,.35),0 0 26px rgba(233,28,36,.38); }
-      .launcher:hover::before { animation-duration:2.4s; }
+      /* Animations run only while hovered: continuous paint animations on every Jarvis page waste CPU. */
+      .launcher:hover::before, .launcher:focus-visible::before { animation:odin-lx-spin 2.4s linear infinite; }
       .launcher:active { transform:translateY(0) scale(.98); }
       .launcher:focus-visible { outline:2px solid #e91c24; outline-offset:2px; }
       .launcher.dragging { cursor:grabbing; box-shadow:0 12px 30px rgba(0,0,0,.55),0 0 28px rgba(233,28,36,.45); }
       .launcher img { display:none; }
       .lx-face { position:relative; display:flex; align-items:center; gap:9px; width:100%; height:100%; padding:0 11px 0 0; overflow:hidden; border-radius:7px; background:radial-gradient(90% 140% at 0% 0%,rgba(233,28,36,.28) 0%,transparent 55%),radial-gradient(70% 120% at 100% 120%,rgba(120,10,16,.45) 0%,transparent 60%),linear-gradient(180deg,#242424 0%,#141414 55%,#0b0b0b 100%); box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 0 -1px 0 rgba(0,0,0,.6); }
       .lx-face::before { content:""; position:absolute; inset:0; pointer-events:none; background:linear-gradient(180deg,rgba(255,255,255,.10) 0%,rgba(255,255,255,0) 48%),repeating-linear-gradient(115deg,rgba(255,255,255,.018) 0 2px,transparent 2px 5px); }
-      .lx-face::after { content:""; position:absolute; top:-30%; bottom:-30%; left:0; width:34%; pointer-events:none; background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.06) 35%,rgba(255,255,255,.32) 50%,rgba(255,255,255,.06) 65%,transparent 100%); transform:translateX(-180%) skewX(-18deg); animation:odin-lx-sheen 6s cubic-bezier(.65,0,.35,1) infinite; }
-      .launcher:hover .lx-face::after { animation-duration:1.8s; }
+      .lx-face::after { content:""; position:absolute; top:-30%; bottom:-30%; left:0; width:34%; pointer-events:none; background:linear-gradient(100deg,transparent 0%,rgba(255,255,255,.06) 35%,rgba(255,255,255,.32) 50%,rgba(255,255,255,.06) 65%,transparent 100%); transform:translateX(-180%) skewX(-18deg);; }
+      .launcher:hover .lx-face::after { animation:odin-lx-sheen 1.8s cubic-bezier(.65,0,.35,1) infinite; }
       .lx-mark { position:relative; flex:0 0 auto; align-self:stretch; width:5px; background:linear-gradient(180deg,#ff5a4f 0%,#e91c24 45%,#9e0f16 100%); box-shadow:0 0 10px rgba(233,28,36,.75),1px 0 0 rgba(0,0,0,.4); }
       .lx-text { position:relative; display:flex; align-items:baseline; gap:5px; white-space:nowrap; letter-spacing:.13em; text-transform:uppercase; }
       .lx-text b { font-weight:700; background:linear-gradient(180deg,#ffffff 0%,#d9d9d9 100%); -webkit-background-clip:text; background-clip:text; color:transparent; }
-      .lx-text i { font-style:normal; font-weight:800; background:linear-gradient(90deg,#e91c24 0%,#ff6b5e 35%,#ffd1cc 50%,#ff6b5e 65%,#e91c24 100%); background-size:250% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; filter:drop-shadow(0 0 5px rgba(233,28,36,.55)); animation:odin-lx-shimmer 4s ease-in-out infinite; }
+      .lx-text i { font-style:normal; font-weight:800; background:linear-gradient(90deg,#e91c24 0%,#ff6b5e 35%,#ffd1cc 50%,#ff6b5e 65%,#e91c24 100%); background-size:250% 100%; -webkit-background-clip:text; background-clip:text; color:transparent; }
       .lx-live { position:relative; margin-left:auto; width:6px; height:6px; border-radius:50%; background:#e91c24; box-shadow:0 0 6px rgba(233,28,36,.9); }
-      .lx-live::after { content:""; position:absolute; inset:0; border-radius:inherit; background:inherit; animation:odin-lx-ping 2.4s cubic-bezier(0,0,.2,1) infinite; }
+      .lx-live::after { content:""; position:absolute; inset:0; border-radius:inherit; background:inherit; }
+      .launcher:hover .lx-live::after { animation:odin-lx-ping 2.4s cubic-bezier(0,0,.2,1) infinite; }
       @keyframes odin-lx-spin { to { transform:translate(-50%,-50%) rotate(360deg); } }
       @keyframes odin-lx-sheen { 0%,60% { transform:translateX(-180%) skewX(-18deg); } 100% { transform:translateX(420%) skewX(-18deg); } }
       @keyframes odin-lx-shimmer { 0%,100% { background-position:100% 0; } 50% { background-position:0% 0; } }
@@ -219,11 +221,21 @@
     }
   }
 
+  function notifyPanelVisible(visible) {
+    try {
+      iframe.contentWindow?.postMessage({ type: "ODIN_GO_PANEL_VISIBLE", visible }, new URL(normalizeBaseUrl()).origin);
+    } catch {
+      // The app may not be loaded yet; it asks again when it is ready.
+    }
+  }
+
   function setWorkspaceOpen(open) {
     backdrop.classList.toggle("open", open);
     launcher.classList.toggle("context-open", open);
     launcher.style.setProperty("display", open ? "none" : "", "important");
     launcher.setAttribute("aria-expanded", String(open));
+    // The iframe stays loaded while the panel is closed; let it pause clocks and polling.
+    notifyPanelVisible(open);
     if (open) appMenu.style.display = "none";
     else window.requestAnimationFrame(() => positionLauncher());
   }
@@ -261,16 +273,27 @@
     })[0] || null;
   }
 
-  function overlaps(left, top, width, height, brandAnchor) {
+  // Measured once per positioning run. The old version re-scanned and re-styled the whole
+  // Jarvis DOM for every candidate position (up to ~80 times), which froze the page.
+  function collectOccupiedRects(brandAnchor) {
+    const candidates = document.querySelectorAll('button,a,input,select,textarea,[role="button"],[tabindex],img,svg');
+    const rects = [];
+    for (const element of candidates) {
+      if (element === host || host.contains(element)) continue;
+      if (brandAnchor && (element === brandAnchor || brandAnchor.contains(element) || element.contains(brandAnchor))) continue;
+      // Cheap geometry first; only elements inside the top strip need the style check.
+      const rect = element.getBoundingClientRect();
+      if (!(rect.top < 75 && rect.bottom > 0 && rect.width > 0 && rect.height > 0 && rect.width < 360 && rect.height < 90)) continue;
+      if (!isVisible(element)) continue;
+      rects.push(rect);
+    }
+    return rects;
+  }
+
+  function overlapsRects(rects, left, top, width, height) {
     const right = left + width;
     const bottom = top + height;
-    const occupied = [...document.querySelectorAll('button,a,input,select,textarea,[role="button"],[tabindex],img,svg')]
-      .filter((element) => element !== host && !host.contains(element))
-      .filter((element) => !brandAnchor || (element !== brandAnchor && !brandAnchor.contains(element) && !element.contains(brandAnchor)))
-      .filter(isVisible)
-      .map((element) => element.getBoundingClientRect())
-      .filter((rect) => rect.top < 75 && rect.bottom > 0 && rect.width < 360 && rect.height < 90);
-    return occupied.some((rect) => left < rect.right + 6 && right > rect.left - 6 && top < rect.bottom + 4 && bottom > rect.top - 4);
+    return rects.some((rect) => left < rect.right + 6 && right > rect.left - 6 && top < rect.bottom + 4 && bottom > rect.top - 4);
   }
 
   function normalizeLauncherPosition(value) {
@@ -375,7 +398,8 @@
     const candidates = [preferredLeft];
     for (let left = Math.max(90, preferredLeft); left <= maximumLeft; left += 8) candidates.push(left);
 
-    const freeLeft = candidates.find((left) => !overlaps(left, preferredTop, launcherWidth, launcherHeight, brandAnchor));
+    const occupiedRects = collectOccupiedRects(brandAnchor);
+    const freeLeft = candidates.find((left) => !overlapsRects(occupiedRects, left, preferredTop, launcherWidth, launcherHeight));
     if (freeLeft == null) {
       launcher.style.display = 'none';
       return;
@@ -586,9 +610,17 @@
 
   function performOneTimeProfileProbe() {
     if (profileProbeAttempted || jarvisSessionIdentity || identityToken) return;
+    // Never act on Jarvis while the user is working in it (typing, hidden tab).
+    const active = document.activeElement;
+    if (document.visibilityState !== "visible" || (active instanceof HTMLElement && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)))) return;
     const profileButton = findJarvisProfileButton();
     if (!profileButton) return;
     profileProbeAttempted = true;
+    // The menu is already open (opened by the user): only read it, never toggle it.
+    if (profileButton.getAttribute("aria-expanded") === "true") {
+      window.setTimeout(() => void verifyJarvisIdentity({ showPrompt: false, preferLive: true }), 100);
+      return;
+    }
     profileButtonUsedForProbe = profileButton;
     profileButton.click();
     window.setTimeout(() => void verifyJarvisIdentity({ showPrompt: false, preferLive: true }), 550);
@@ -682,7 +714,8 @@
     });
     // Close the menu again when ODIN GO opened it only for the first read.
     if (profileButtonUsedForProbe) {
-      profileButtonUsedForProbe.click();
+      // Close the menu only when it is still open; a click on a closed menu would reopen it.
+      if (profileButtonUsedForProbe.isConnected && profileButtonUsedForProbe.getAttribute("aria-expanded") !== "false") profileButtonUsedForProbe.click();
       profileButtonUsedForProbe = null;
     }
     renderVerifiedEmployee();
@@ -803,6 +836,15 @@
     }
   }
 
+  // Single place for the window size: panel class, button label and persisted state stay in sync.
+  function setWindowExpanded(expanded) {
+    panel.classList.toggle("expanded", expanded);
+    const label = expanded ? "Fenster verkleinern" : "Fenster vergroessern";
+    expandButton.title = label;
+    expandButton.setAttribute("aria-label", label);
+    void chrome.storage.local.set({ odinGoWindowExpanded: expanded });
+  }
+
   window.addEventListener("message", (event) => {
     if (!isTrustedPlannerMessage(event) || !event.data || typeof event.data !== "object") return;
     if (event.data.type === "ODIN_GO_EXTENSION_PING") {
@@ -813,6 +855,9 @@
       iframeAppReady = true;
       window.clearTimeout(iframeLoadTimeout);
       offlineFallback.classList.remove("open");
+      // The app restarts with a collapsed button; tell it the real window state.
+      event.source?.postMessage({ type: "ODIN_GO_EXPAND_STATE", expanded: panel.classList.contains("expanded") }, event.origin);
+      event.source?.postMessage({ type: "ODIN_GO_PANEL_VISIBLE", visible: backdrop.classList.contains("open") }, event.origin);
       return;
     }
     if (event.data.type === "ODIN_GO_CLOSE") {
@@ -820,7 +865,7 @@
       return;
     }
     if (event.data.type === "ODIN_GO_TOGGLE_EXPAND") {
-      panel.classList.toggle("expanded", event.data.expanded === true);
+      setWindowExpanded(event.data.expanded === true);
       return;
     }
     if (event.data.type === "ODIN_GO_ACTIVE_PATH") {
@@ -914,12 +959,7 @@
   offlineFallbackClose.addEventListener("click", () => setWorkspaceOpen(false));
   backdrop.addEventListener("click", (event) => { if (event.target === backdrop) setWorkspaceOpen(false); });
   optionsButton.addEventListener("click", () => chrome.runtime.sendMessage({ type: "OPEN_OPTIONS" }));
-  expandButton.addEventListener("click", () => {
-    const expanded = panel.classList.toggle("expanded");
-    const label = expanded ? "Fenster verkleinern" : "Fenster vergroessern";
-    expandButton.title = label;
-    expandButton.setAttribute("aria-label", label);
-  });
+  expandButton.addEventListener("click", () => setWindowExpanded(!panel.classList.contains("expanded")));
 
   for (const eventName of ['pointerdown', 'mousedown', 'mouseup', 'click', 'dblclick', 'keydown', 'keyup', 'keypress', 'beforeinput', 'input']) {
     root.querySelector('.panel').addEventListener(eventName, (event) => event.stopPropagation());
@@ -944,38 +984,68 @@
   // immediately and keep checking briefly until Jarvis exposes the SSO profile.
   loadSettings().then(() => verifyJarvisIdentity({ showPrompt: false }));
   void restoreAdminAccess();
+  chrome.storage.local.get("odinGoWindowExpanded").then((saved) => {
+    if (saved?.odinGoWindowExpanded === true) setWindowExpanded(true);
+  }).catch(() => {});
   void restoreSavedJarvisIdentity();
   window.setTimeout(performOneTimeProfileProbe, 900);
+  // Jarvis is a DOM-heavy single-page app. Everything below runs on its main
+  // thread, so the identity scans must stay rare and must never run inside a
+  // click handler: they walk thousands of nodes and force layout.
+  const IDENTITY_SCAN_MIN_INTERVAL_MS = 5_000;
   let identityVerificationTimer = null;
+  let lastIdentityScanAt = 0;
   function scheduleIdentityVerification(delay = 700) {
     if (identityToken || identityVerificationTimer) return;
+    const sinceLastScan = Date.now() - lastIdentityScanAt;
+    const wait = Math.max(delay, IDENTITY_SCAN_MIN_INTERVAL_MS - sinceLastScan);
     identityVerificationTimer = window.setTimeout(() => {
       identityVerificationTimer = null;
-      void verifyJarvisIdentity({ showPrompt: false });
-    }, delay);
+      if (identityToken) return;
+      lastIdentityScanAt = Date.now();
+      // Run when the page is idle so a click in Jarvis is never queued behind the scan.
+      const run = () => void verifyJarvisIdentity({ showPrompt: false });
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(run, { timeout: 2_000 });
+      else run();
+    }, wait);
   }
-  const identityObserver = new MutationObserver(() => scheduleIdentityVerification());
-  identityObserver.observe(document.body, { childList: true, subtree: true });
-  document.addEventListener("click", (event) => {
-    const profileButton = findJarvisProfileButton();
-    const target = event.target;
-    if (profileButton && target instanceof Node && (target === profileButton || profileButton.contains(target))) {
-      preferLiveProfileIdentity = true;
-      window.setTimeout(() => {
-        if (!preferLiveProfileIdentity) return;
-        preferLiveProfileIdentity = false;
-        void verifyJarvisIdentity({ showPrompt: false, preferLive: true });
-      }, 550);
+  // Jarvis mutates its DOM constantly; once verified the observer is pointless.
+  const identityObserver = new MutationObserver(() => {
+    if (identityToken) {
+      identityObserver.disconnect();
       return;
     }
-    scheduleIdentityVerification(150);
+    scheduleIdentityVerification();
+  });
+  identityObserver.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", (event) => {
+    if (identityToken) return;
+    // The profile button sits in the top-right corner: ignore every other click
+    // without touching the DOM, and defer the lookup out of the click handler.
+    if (event.clientY > 90 || event.clientX < window.innerWidth * 0.72) return;
+    const target = event.target;
+    window.setTimeout(() => {
+      const profileButton = findJarvisProfileButton();
+      if (profileButton && target instanceof Node && (target === profileButton || profileButton.contains(target))) {
+        preferLiveProfileIdentity = true;
+        window.setTimeout(() => {
+          if (!preferLiveProfileIdentity) return;
+          preferLiveProfileIdentity = false;
+          void verifyJarvisIdentity({ showPrompt: false, preferLive: true });
+        }, 550);
+        return;
+      }
+      scheduleIdentityVerification(150);
+    }, 0);
   }, { passive: true });
   window.setInterval(() => {
-    if (identityToken) return;
+    if (identityToken || document.visibilityState !== "visible") return;
     void verifyJarvisIdentity({ showPrompt: false });
     performOneTimeProfileProbe();
   }, 10_000);
-  window.setInterval(() => void loadJarvisNotifications(), 15_000);
+  window.setInterval(() => {
+    if (document.visibilityState === "visible") void loadJarvisNotifications();
+  }, 15_000);
   window.addEventListener("focus", () => {
     if (identityToken) void loadJarvisNotifications();
     else scheduleIdentityVerification(0);
@@ -984,7 +1054,14 @@
     if (document.visibilityState === "visible") void loadJarvisNotifications();
   });
   positionLauncher();
-  window.addEventListener('resize', positionLauncher, { passive: true });
+  let resizeFrame = 0;
+  window.addEventListener('resize', () => {
+    if (resizeFrame) return;
+    resizeFrame = window.requestAnimationFrame(() => {
+      resizeFrame = 0;
+      positionLauncher();
+    });
+  }, { passive: true });
   window.setTimeout(positionLauncher, 2000);
   window.setTimeout(positionLauncher, 7000);
   window.setTimeout(positionLauncher, 15000);

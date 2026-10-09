@@ -92,6 +92,20 @@ export const config = {
     // password selected by an administrator is not overwritten on restart.
     SHIFTPLANNER_RESET_ADMIN_PASSWORD: String(process.env.SHIFTPLANNER_RESET_ADMIN_PASSWORD || "false").toLowerCase() === "true",
 
+    // Web SSO via authentik (OpenID Connect). Disabled while the three required values are empty.
+    SSO: {
+        // e.g. https://authentik.example.com/application/o/odin-go/
+        ISSUER_URL: process.env.AUTHENTIK_ISSUER_URL || "",
+        CLIENT_ID: process.env.AUTHENTIK_CLIENT_ID || "",
+        CLIENT_SECRET: process.env.AUTHENTIK_CLIENT_SECRET || "",
+        // External URL of the web UI, e.g. https://jarvis-emea.equinix.com (derived from the request when empty).
+        PUBLIC_URL: process.env.AUTHENTIK_PUBLIC_URL || "",
+        // authentik group whose members get web administrator access.
+        ADMIN_GROUP: process.env.AUTHENTIK_ADMIN_GROUP || "",
+        SCOPES: process.env.AUTHENTIK_SCOPES || "openid profile email",
+        PROVIDER_NAME: process.env.AUTHENTIK_PROVIDER_NAME || "authentik",
+    },
+
     // CORS
     CORS_ORIGINS,
 };

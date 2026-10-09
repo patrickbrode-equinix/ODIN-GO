@@ -38,9 +38,21 @@ export type StaffingRuleLike = {
   max_count?: number | null;
 };
 
+/** Saturday / Sunday / holiday limits (early/late) as returned by GET /shift-config/staffing-rules. */
+export type StaffingDayLimitLike = {
+  day_context?: string | null;
+  shift_type?: string | null;
+  min_count?: number | null;
+  max_count?: number | null;
+};
+
 export type UnderstaffConfig = {
   definitions?: StaffingDefinitionLike[] | null;
   staffingRules?: StaffingRuleLike[] | null;
+  /** When given, the global per-day limits replace the per-shift max_staff values. */
+  staffingDayLimits?: StaffingDayLimitLike[] | null;
+  /** YYYY-MM-DD -> holiday name; a holiday uses the holiday limits. */
+  holidays?: Record<string, string> | null;
 };
 
 function pad2(n: number) {
@@ -92,6 +104,7 @@ export function computeMaxStaffing(
   dow: number,
   definitions: StaffingDefinitionLike[],
   staffingRules?: StaffingRuleLike[] | null,
+  globalLimits?: { dayLimits: StaffingDayLimitLike[]; isHoliday: boolean } | null,
 ): number {
   const applicable = definitions.filter(
     (definition) =>
@@ -101,6 +114,20 @@ export function computeMaxStaffing(
       String(definition.shift_type || "").toLowerCase() === shiftType &&
       isApplicableOnWeekday(definition, dow),
   );
+
+  if (globalLimits) {
+    // Global mode: the limits of the day type are the only source (early = E1+E2 ...).
+    if (applicable.length === 0) return 0;
+    const rules = Array.isArray(staffingRules) ? staffingRules : [];
+    const context = globalLimits.isHoliday ? "holiday" : dow === 6 ? "saturday" : dow === 0 ? "sunday" : "weekday";
+    const source = shiftType !== "night" && context !== "weekday"
+      ? globalLimits.dayLimits.find((entry) => entry?.day_context === context && String(entry?.shift_type || "").toLowerCase() === shiftType)
+      : rules.find((entry) => String(entry?.shift_type || "").toLowerCase() === shiftType);
+    const min = toNumber(source?.min_count);
+    const cap = toNumber(source?.max_count);
+    // No maximum (unlimited) -> the minimum is the target.
+    return cap > 0 ? Math.max(cap, min) : min;
+  }
 
   let max = 0;
   if (shiftType === "night") {
@@ -150,6 +177,7 @@ export function computeUnderstaffWarnings(
   const definitions = Array.isArray(config?.definitions) ? config!.definitions! : [];
   const useConfig = definitions.length > 0;
   const staffingRules = config?.staffingRules ?? null;
+  const dayLimits = Array.isArray(config?.staffingDayLimits) ? config!.staffingDayLimits! : null;
 
   const push = (
     dateKey: string,
@@ -211,9 +239,10 @@ export function computeUnderstaffWarnings(
     const dateKey = ymd(year, monthIndex1, day);
 
     if (useConfig) {
-      push(dateKey, day, "night", night, computeMaxStaffing("night", dow, definitions, staffingRules));
-      push(dateKey, day, "late", late, computeMaxStaffing("late", dow, definitions, staffingRules));
-      push(dateKey, day, "early", early, computeMaxStaffing("early", dow, definitions, staffingRules));
+      const globalLimits = dayLimits ? { dayLimits, isHoliday: Boolean(config?.holidays?.[dateKey]) } : null;
+      push(dateKey, day, "night", night, computeMaxStaffing("night", dow, definitions, staffingRules, globalLimits));
+      push(dateKey, day, "late", late, computeMaxStaffing("late", dow, definitions, staffingRules, globalLimits));
+      push(dateKey, day, "early", early, computeMaxStaffing("early", dow, definitions, staffingRules, globalLimits));
       continue;
     }
 

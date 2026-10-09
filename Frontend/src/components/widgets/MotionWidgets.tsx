@@ -104,7 +104,15 @@ export function MiniClockFace({ className = "h-8 w-8", timeZone }: { className?:
     if (reduceMotion) {
       timer = window.setInterval(update, 1000);
     } else {
-      const loop = () => { update(); frame = window.requestAnimationFrame(loop); };
+      // ~20 updates per second look just as smooth on a 32px dial as 60, at a third of the work.
+      let lastUpdate = 0;
+      const loop = (timestamp: number) => {
+        if (timestamp - lastUpdate >= 50) {
+          lastUpdate = timestamp;
+          update();
+        }
+        frame = window.requestAnimationFrame(loop);
+      };
       frame = window.requestAnimationFrame(loop);
     }
     return () => {

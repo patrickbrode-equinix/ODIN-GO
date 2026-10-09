@@ -94,3 +94,25 @@ describe("formatHoursDelta", () => {
     expect(formatHoursDelta(0.04)).toBe("±0 h");
   });
 });
+
+describe("double-pay days (24.12. / 31.12.)", () => {
+  it("pays hours from 12:00 twice and deducts the break only from 6h presence", async () => {
+    const { getDoublePayDayHours } = await import("./shiftplan.hours");
+    expect(getDoublePayDayHours("06:30-15:30")).toBe(11.5);
+    expect(getDoublePayDayHours("13:00-22:00")).toBe(17);
+    expect(getDoublePayDayHours("06:30-10:30")).toBe(4);
+    expect(getDoublePayDayHours("21:15-06:45")).toBe(11.25);
+  });
+
+  it("applies the rule on 24.12. in the monthly total", () => {
+    const [result] = computeShiftChangeHoursDelta({
+      year: 2026,
+      monthIndex1: 12,
+      daysInMonth: 31,
+      holidays: {},
+      schedule: { Anna: {} },
+      changes: [{ employeeName: "Anna", day: 24, newCode: "E1" }],
+    });
+    expect(result.newHours).toBe(11.5);
+  });
+});

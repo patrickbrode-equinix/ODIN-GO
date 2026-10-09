@@ -11,6 +11,8 @@ export function getGermanFederalHolidays(year: number): Date[] {
   holidays.push(new Date(year, 9, 3));   // Tag der Deutschen Einheit (Oct 3)
   holidays.push(new Date(year, 11, 25)); // 1. Weihnachtstag (Dec 25)
   holidays.push(new Date(year, 11, 26)); // 2. Weihnachtstag (Dec 26)
+  // Company holidays. Pushed last: getGermanHolidayMap names the movable
+  // holidays by array index 5-8, so these must stay behind them.
 
   // Easter-based (Movable)
   // Gauss algorithm for Easter Sunday
@@ -51,6 +53,9 @@ export function getGermanFederalHolidays(year: number): Date[] {
   const whitMonday = new Date(easterSunday);
   whitMonday.setDate(easterSunday.getDate() + 50);
   holidays.push(whitMonday);
+
+  holidays.push(new Date(year, 11, 24)); // Heiligabend (Dec 24)
+  holidays.push(new Date(year, 11, 31)); // Silvester (Dec 31)
 
   return holidays;
 }
@@ -146,6 +151,8 @@ export function getGermanHolidayMap(year: number, language: "de" | "en" = "de"):
     "10-03": language === "de" ? "Tag der Deutschen Einheit" : "German Unity Day",
     "12-25": language === "de" ? "1. Weihnachtstag" : "Christmas Day",
     "12-26": language === "de" ? "2. Weihnachtstag" : "Boxing Day",
+    "12-24": language === "de" ? "Heiligabend" : "Christmas Eve",
+    "12-31": language === "de" ? "Silvester" : "New Year's Eve",
   };
 
   // Helper to find name if fixed, else generic

@@ -37,6 +37,7 @@ import { FlagIcon } from "../FlagIcon";
 import { useTheme } from "../ThemeProvider";
 import { PageGuard } from "../../router/PageGuard";
 import HeaderWorldClock from "../HeaderWorldClock";
+import { isPanelVisible } from "../../hooks/usePanelVisible";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { AnimatedWeatherIcon, weatherBackdropClass } from "../widgets/AnimatedWeatherIcon";
 import { AnimatedNumber, Sparkline } from "../widgets/MotionWidgets";
@@ -275,9 +276,17 @@ export default function OdinGoWorkspace() {
   useEffect(() => {
     void refreshHeader();
     void loadMarketHistory();
-    const staffingTimer = window.setInterval(() => void loadStaffing(), 60_000);
-    const externalTimer = window.setInterval(() => void loadMarketAndWeather(), 5 * 60_000);
+    // Polling pauses while the extension panel is closed and catches up when it opens.
+    const staffingTimer = window.setInterval(() => { if (isPanelVisible()) void loadStaffing(); }, 60_000);
+    const externalTimer = window.setInterval(() => { if (isPanelVisible()) void loadMarketAndWeather(); }, 5 * 60_000);
+    const refreshOnShow = (event: MessageEvent) => {
+      if (event.source !== window.parent || event.data?.type !== "ODIN_GO_PANEL_VISIBLE" || event.data.visible === false) return;
+      void loadStaffing();
+      void loadMarketAndWeather();
+    };
+    window.addEventListener("message", refreshOnShow);
     return () => {
+      window.removeEventListener("message", refreshOnShow);
       window.clearInterval(staffingTimer);
       window.clearInterval(externalTimer);
     };
@@ -326,6 +335,18 @@ export default function OdinGoWorkspace() {
   useEffect(() => {
     sendBridgeMessage("ODIN_GO_ACTIVE_PATH", { path: `${location.pathname}${location.search}` });
   }, [location.pathname, location.search, sendBridgeMessage]);
+
+  useEffect(() => {
+    // The extension owns the window size and reports it after a (re)load; without
+    // this the button shows "enlarge" while the window is already enlarged.
+    if (window.parent === window) return undefined;
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window.parent || event.data?.type !== "ODIN_GO_EXPAND_STATE") return;
+      setExpanded(event.data.expanded === true);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   useEffect(() => {
     // Tell the extension that the React application (not just the iframe

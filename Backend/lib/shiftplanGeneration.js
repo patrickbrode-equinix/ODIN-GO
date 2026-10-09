@@ -706,3 +706,89 @@ export function buildDailyShiftSlots({
     planned_slots: slotCounts.get(definition.code) || 0,
   }));
 }
+
+/**
+ * Weekend-spanning blocks (E1SA, E1WE, L1WE ...) are only started on Monday, so their
+ * headcount has to be decided on that Monday. This raises the planned slots of the
+ * blocks that cover the coming Saturday / Sunday up to the global minimum of that
+ * day (early and late separately) and takes the same number of slots away from the
+ * blocks that only run during the week, so the weekday total stays the same.
+ *
+ * limits: { early: { min, max }, late: { min, max } } for the Saturday / Sunday of
+ * that week (max null = unlimited), or null when that day is outside the plan.
+ */
+export function applyWeekendBlockSlots({ slots = [], saturday = null, sunday = null } = {}) {
+  const planned = new Map(slots.map((slot) => [slot.code, Math.max(Number(slot.planned_slots) || 0, 0)]));
+
+  // Offsets from Monday: Saturday = 5, Sunday = 6.
+  const coversOffset = (definition, offset) => {
+    if (getShiftSeriesDays(definition) <= offset) return false;
+    const days = new Set(normalizeApplicableDays(definition?.applicable_days));
+    for (let step = 0; step <= offset; step++) {
+      if (!days.has((1 + step) % 7)) return false;
+    }
+    return true;
+  };
+
+  for (const type of ['early', 'late']) {
+    const typeSlots = slots.filter((slot) => normalizePlanningShiftTypeKey(slot.shift_type) === type);
+    const satGroup = typeSlots.filter((slot) => coversOffset(slot, 5));
+    const sunGroup = typeSlots.filter((slot) => coversOffset(slot, 6));
+    const weekendCodes = new Set([...satGroup, ...sunGroup].map((slot) => slot.code));
+    if (weekendCodes.size === 0) continue;
+
+    const sum = (group) => group.reduce((total, slot) => total + planned.get(slot.code), 0);
+    const limitOf = (spec) => ({
+      min: Math.max(Number(spec?.[type]?.min) || 0, 0),
+      max: spec?.[type]?.max === null || spec?.[type]?.max === undefined ? Infinity : Number(spec[type].max),
+    });
+    const sat = saturday ? limitOf(saturday) : null;
+    const sun = sunday ? limitOf(sunday) : null;
+    const originalTotal = sum(typeSlots);
+    let added = 0;
+
+    // Adds one slot to the first definition of `group` that still fits both day maximums.
+    const addOne = (group) => {
+      for (const slot of group) {
+        const inSat = satGroup.includes(slot);
+        const inSun = sunGroup.includes(slot);
+        if (inSat && sat && sum(satGroup) + 1 > sat.max) continue;
+        if (inSun && sun && sum(sunGroup) + 1 > sun.max) continue;
+        planned.set(slot.code, planned.get(slot.code) + 1);
+        added += 1;
+        return true;
+      }
+      return false;
+    };
+    // Spreads evenly: always add to the definition that currently has the fewest slots.
+    const addEvenly = (group, count) => {
+      for (let index = 0; index < count; index++) {
+        const ordered = [...group].sort((left, right) => planned.get(left.code) - planned.get(right.code));
+        if (!addOne(ordered)) break;
+      }
+    };
+
+    // Sunday first (only blocks that run through Sunday), then Saturday, preferring
+    // Saturday-only blocks so Sunday is not pushed above its own maximum.
+    if (sun && sunGroup.length > 0) addEvenly(sunGroup, sun.min - sum(sunGroup));
+    if (sat && satGroup.length > 0) {
+      const saturdayOnly = satGroup.filter((slot) => !sunGroup.includes(slot));
+      const missing = sat.min - sum(satGroup);
+      addEvenly(saturdayOnly.length > 0 ? saturdayOnly : satGroup, missing);
+      addEvenly(satGroup, sat.min - sum(satGroup));
+    }
+
+    // Weekday-only blocks give way so the daily total does not grow.
+    const weekdayOnly = typeSlots.filter((slot) => !weekendCodes.has(slot.code));
+    let toRemove = Math.min(added, sum(weekdayOnly), Math.max(sum(typeSlots) - originalTotal, 0));
+    while (toRemove > 0) {
+      const ordered = [...weekdayOnly].sort((left, right) => planned.get(right.code) - planned.get(left.code));
+      const target = ordered.find((slot) => planned.get(slot.code) > 0);
+      if (!target) break;
+      planned.set(target.code, planned.get(target.code) - 1);
+      toRemove -= 1;
+    }
+  }
+
+  return slots.map((slot) => ({ ...slot, planned_slots: planned.get(slot.code) ?? slot.planned_slots }));
+}

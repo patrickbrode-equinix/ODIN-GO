@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ChevronDown, RefreshCw } from "lucide-react";
 import { MiniClockFace, RollingText } from "./widgets/MotionWidgets";
+import { isPanelVisible } from "../hooks/usePanelVisible";
 
 const WorldClockPanel = lazy(() => import("./WorldClockPanel"));
 
@@ -23,7 +24,10 @@ export default function HeaderWorldClock({ open, onOpenChange, onBeforeOpen }: P
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1_000);
+    // No state update (and therefore no re-render) while the extension panel is closed.
+    const timer = window.setInterval(() => {
+      if (isPanelVisible()) setNow(new Date());
+    }, 1_000);
     return () => window.clearInterval(timer);
   }, []);
 

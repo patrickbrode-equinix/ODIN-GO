@@ -46,8 +46,11 @@ export function isEditableGroupId(groupId: string) {
   return !groupId.startsWith('month:') && !groupId.startsWith('legacy-year:');
 }
 
-export async function exportPlanningGroup(groupId: string) {
-  const response = await api.get(`/shiftplan-control/drafts/groups/${encodeURIComponent(groupId)}/excel`, { responseType: 'blob' });
+export type ExcelExportVariant = 'team' | 'management';
+
+/** team = shifts only; management = hours (target/actual) and wish fulfilment (admins only). */
+export async function exportPlanningGroup(groupId: string, variant: ExcelExportVariant = 'team') {
+  const response = await api.get(`/shiftplan-control/drafts/groups/${encodeURIComponent(groupId)}/excel`, { responseType: 'blob', params: { variant } });
   const filename = String(response.headers?.['content-disposition'] || '').match(/filename="?([^";]+)"?/)?.[1] || 'ODIN_Planung.xlsx';
   const url = URL.createObjectURL(response.data);
   const link = document.createElement('a');

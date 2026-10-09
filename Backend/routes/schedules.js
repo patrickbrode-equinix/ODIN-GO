@@ -387,6 +387,19 @@ router.get(
             AND NULLIF(TRIM(CONCAT_WS(' ', first_name, last_name)), '') IS NOT NULL`
       );
 
+      // Employees that were ever imported stay in employee_contacts. They are
+      // listed as well, so someone without a shift in this month (or whose
+      // user account is not approved yet) does not silently vanish from the plan.
+      const contactEmployeesResult = await db.query(
+        `SELECT DISTINCT employee_name
+           FROM employee_contacts
+          WHERE is_active IS NOT FALSE
+            AND NULLIF(TRIM(employee_name), '') IS NOT NULL`
+      ).catch((contactErr) => {
+        console.warn("SCHEDULE CONTACT EMPLOYEES UNAVAILABLE:", contactErr?.message || contactErr);
+        return { rows: [] };
+      });
+
       // --- AUTO-SEED LOGIC FOR 2027 ---
       if (parsed.year === 2027 && result.rows.length === 0) {
         // 1. Get employees who were active in 2026
@@ -487,6 +500,14 @@ router.get(
           schedule[employeeName] = {};
           scheduleEmployeeKeys.add(identityKey);
         }
+      }
+      for (const contact of contactEmployeesResult.rows) {
+        const employeeName = normalizeManualEmployeeName(contact.employee_name);
+        const identityKey = employeeIdentityKey(employeeName);
+        // Contacts can also be e-mail addresses (see employeeContactsSync); those are not plan rows.
+        if (!employeeName || employeeName.includes("@") || !identityKey || scheduleEmployeeKeys.has(identityKey)) continue;
+        schedule[employeeName] = {};
+        scheduleEmployeeKeys.add(identityKey);
       }
 
       res.json({

@@ -20,6 +20,22 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    target: "es2020",
+    rollupOptions: {
+      output: {
+        // Stable vendor chunks: they rarely change, so the browser keeps them cached
+        // across deployments and only re-downloads the (small) app chunks.
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/]node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/.test(id)) return "vendor-react";
+          if (id.includes("@radix-ui")) return "vendor-radix";
+          if (id.includes("framer-motion")) return "vendor-motion";
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       "/api": {

@@ -127,3 +127,31 @@ describe("computeUnderstaffWarnings", () => {
     expect(warnings.find((warning) => warning.dateKey === MONDAY_KEY && warning.kind === "night")?.target).toBe(4);
   });
 });
+
+describe("computeUnderstaffWarnings with global day limits", () => {
+  const defs: StaffingDefinitionLike[] = [
+    { code: "E1", shift_type: "early", max_staff: 99, applicable_days: [0, 1, 2, 3, 4, 5, 6], is_active: true },
+    { code: "N", shift_type: "night", max_staff: 99, applicable_days: [0, 1, 2, 3, 4, 5, 6], is_active: true },
+  ];
+  const rules = [{ shift_type: "early", min_count: 6, max_count: null }, { shift_type: "night", min_count: 4, max_count: 5 }];
+  const dayLimits = [{ day_context: "sunday", shift_type: "early", min_count: 2, max_count: 3 }];
+  // 2026-08-16 is a Sunday.
+  const SUNDAY = new Date(2026, 7, 16, 12, 0, 0);
+
+  it("uses the Sunday limit instead of the weekday value", () => {
+    const warnings = computeUnderstaffWarnings(scheduleFor(16, ["E1", "E1", "E1"]), 2026, 8, 31, SUNDAY, {
+      definitions: defs, staffingRules: rules, staffingDayLimits: dayLimits,
+    }).filter((warning) => warning.dateKey === "2026-08-16" && warning.shiftType === "early");
+    expect(warnings).toHaveLength(0); // 3 present, Sunday maximum is 3
+  });
+
+  it("uses the holiday limits on a public holiday", () => {
+    const warnings = computeUnderstaffWarnings(scheduleFor(16, ["E1"]), 2026, 8, 31, SUNDAY, {
+      definitions: defs,
+      staffingRules: rules,
+      staffingDayLimits: [{ day_context: "holiday", shift_type: "early", min_count: 3, max_count: 4 }],
+      holidays: { "2026-08-16": "Testfeiertag" },
+    }).filter((warning) => warning.dateKey === "2026-08-16" && warning.shiftType === "early");
+    expect(warnings[0]).toMatchObject({ max: 4, actual: 1, missing: 3, severity: "critical" });
+  });
+});

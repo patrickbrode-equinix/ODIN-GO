@@ -61,6 +61,12 @@ services:
       WEATHER_FALLBACK_LAT: ${WEATHER_FALLBACK_LAT:-50.1109}
       WEATHER_FALLBACK_LON: ${WEATHER_FALLBACK_LON:-8.6821}
       WEATHER_FALLBACK_NAME: ${WEATHER_FALLBACK_NAME:-Frankfurt am Main}
+      # Web SSO via authentik. Leave the three required values empty to keep password-only login.
+      AUTHENTIK_ISSUER_URL: ${AUTHENTIK_ISSUER_URL:-}
+      AUTHENTIK_CLIENT_ID: ${AUTHENTIK_CLIENT_ID:-}
+      AUTHENTIK_CLIENT_SECRET: ${AUTHENTIK_CLIENT_SECRET:-}
+      AUTHENTIK_PUBLIC_URL: ${AUTHENTIK_PUBLIC_URL:-}
+      AUTHENTIK_ADMIN_GROUP: ${AUTHENTIK_ADMIN_GROUP:-}
     volumes:
       - shiftplanner_uploads_data:/app/uploads
     networks:

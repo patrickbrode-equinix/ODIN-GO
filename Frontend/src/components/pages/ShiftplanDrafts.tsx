@@ -1,5 +1,6 @@
 ﻿import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
+  BarChart3,
   CalendarRange,
   CheckCircle2,
   Clock3,
@@ -21,7 +22,8 @@ import { isColoEmployee } from "../../utils/colo";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 import { GroupedDraftList } from "../shiftplan/GroupedDraftList";
-import { updateDraftMetadata, type PlanningDraftGroup } from "../../api/planningPeriods";
+import { updateDraftMetadata, type ExcelExportVariant, type PlanningDraftGroup } from "../../api/planningPeriods";
+import { useAuth } from "../../context/AuthContext";
 
 type DraftSummary = {
   id: number;
@@ -153,6 +155,7 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
 });
 
 export default function ShiftplanDrafts() {
+  const { user } = useAuth();
   const initialParams = new URLSearchParams(window.location.search);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [draftGroups, setDraftGroups] = useState<PlanningDraftGroup<DraftSummary>[]>([]);
@@ -326,11 +329,11 @@ export default function ShiftplanDrafts() {
     }
   };
 
-  const exportDraft = async (draft: DraftSummary) => {
+  const exportDraft = async (draft: DraftSummary, variant: ExcelExportVariant = "team") => {
     setExportingId(draft.id);
     setError("");
     try {
-      const response = await api.get(`/shiftplan-control/drafts/${draft.id}/excel`, { responseType: "blob" });
+      const response = await api.get(`/shiftplan-control/drafts/${draft.id}/excel`, { responseType: "blob", params: { variant } });
       const disposition = String(response.headers?.["content-disposition"] || "");
       const match = disposition.match(/filename="?([^";]+)"?/i);
       const filename = match?.[1] || `Dienstplan_${draft.month}_v${draft.version}.xlsx`;
@@ -383,7 +386,7 @@ export default function ShiftplanDrafts() {
             <div className="px-3 pb-3 pt-2 text-xs font-bold uppercase tracking-[0.2em] text-cyan-300/80">Verfügbare Drafts</div>
             <div className="space-y-2">
               <GroupedDraftList groups={visibleGroups} activeId={activeDraft?.id}
-                onOpen={draft => void loadDraft(draft.id)} onExportMonth={draft => void exportDraft(draft)} onError={setError}
+                onOpen={draft => void loadDraft(draft.id)} onExportMonth={(draft, variant) => void exportDraft(draft, variant)} onError={setError}
                 onMetadataSaved={refreshList} />
               {!visibleGroups.length && !loading && <p className="px-3 py-8 text-center text-sm text-muted-foreground">Für diesen Filter sind noch keine Drafts vorhanden.</p>}
             </div>
@@ -419,7 +422,8 @@ export default function ShiftplanDrafts() {
                     <div className="flex flex-wrap items-center gap-2">
                       <Button type="button" variant="outline" onClick={() => void submitVote("approve")} disabled={voting} className={currentVote === "approve" ? "border-emerald-400 bg-emerald-500/15 text-emerald-200" : "border-slate-600"}><ThumbsUp className="mr-2 h-4 w-4" />Passt für mich ({votes.approve || 0})</Button>
                       <Button type="button" variant="outline" onClick={() => void submitVote("needs_changes")} disabled={voting} className={currentVote === "needs_changes" ? "border-amber-400 bg-amber-500/15 text-amber-100" : "border-slate-600"}><ThumbsDown className="mr-2 h-4 w-4" />Änderung nötig ({votes.needs_changes || 0})</Button>
-                      <Button type="button" variant="outline" onClick={() => void exportDraft(activeDraft)} disabled={exportingId === activeDraft.id} className="border-slate-600 bg-slate-950/40"><FileSpreadsheet className="mr-2 h-4 w-4" />{exportingId === activeDraft.id ? "Excel wird erstellt..." : "Excel exportieren"}</Button>
+                      <Button type="button" variant="outline" onClick={() => void exportDraft(activeDraft, "team")} disabled={exportingId === activeDraft.id} className="border-slate-600 bg-slate-950/40"><FileSpreadsheet className="mr-2 h-4 w-4" />{exportingId === activeDraft.id ? "Excel wird erstellt..." : "Excel fürs Team"}</Button>
+                      {user.isAdmin ? <Button type="button" variant="outline" onClick={() => void exportDraft(activeDraft, "management")} disabled={exportingId === activeDraft.id} className="border-slate-600 bg-slate-950/40"><BarChart3 className="mr-2 h-4 w-4" />Excel für die Leitung</Button> : null}
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}</div>

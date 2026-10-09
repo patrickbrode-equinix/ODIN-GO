@@ -25,6 +25,7 @@ import {
 import { parseMonthLabel } from '../lib/monthParser.js';
 import { countWeekdaysInRange, getWorkdayBasedTargetHours } from '../lib/shiftHours.js';
 import {
+  applyWeekendBlockSlots,
   buildDailyShiftSlots,
   buildShiftSlots,
   buildStaffingRulesByShiftType,
@@ -59,6 +60,9 @@ import {
 } from '../lib/shiftplanGeneration.js';
 import { getHolidayShiftStaffingLimit, normalizeHolidayStaffingConfig } from '../lib/holidayPreferences.js';
 import { buildHessenHolidayMap, toIsoDate } from '../lib/hessenHolidays.js';
+import { WISH_STATUS, evaluateMonthWishes } from '../lib/wishFulfillment.js';
+import { mergeMonthlyPreferences } from '../lib/understaffingSuggestions.js';
+import { buildDayLimitMap, buildStaffingForContext, resolveStaffingDayContext } from '../lib/staffingLimits.js';
 import {
   buildEmployeeNameLookup,
   normalizeEmployeeName,
@@ -109,29 +113,36 @@ function getAuthenticatedUserId(req) {
   return Number.isInteger(userId) && userId > 0 ? userId : null;
 }
 
-async function requireOwnedDraft(req, res, next) {
+// Drafts are a shared team resource: every user with page access can read and vote on
+// all drafts. Changing or deleting one is limited to its creator and administrators.
+function isAdminRequest(req) {
+  return req.user?.is_admin === true || req.user?.is_root === true || req.isRoot === true;
+}
+
+async function loadDraftGuard(req, res, next, { requireOwner }) {
   try {
     const draftId = Number.parseInt(req.params.id ?? req.params.draftId, 10);
-    const userId = getAuthenticatedUserId(req);
     if (!Number.isInteger(draftId) || draftId <= 0) {
       return res.status(400).json({ ok: false, error: 'Ungültige Draft-ID' });
     }
-    if (!userId) {
-      return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
-    }
-
-    const result = await pool.query(
-      'SELECT 1 FROM shiftplan_drafts WHERE id = $1 AND created_by_user_id = $2',
-      [draftId, userId],
-    );
+    const result = await pool.query('SELECT created_by_user_id FROM shiftplan_drafts WHERE id = $1', [draftId]);
     if (!result.rowCount) {
       return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
+    }
+    if (requireOwner && !isAdminRequest(req)) {
+      const userId = getAuthenticatedUserId(req);
+      if (!userId || Number(result.rows[0].created_by_user_id) !== userId) {
+        return res.status(403).json({ ok: false, error: 'Nur der Ersteller oder ein Administrator darf diesen Draft ändern' });
+      }
     }
     return next();
   } catch (error) {
     return next(error);
   }
 }
+
+const requireReadableDraft = (req, res, next) => loadDraftGuard(req, res, next, { requireOwner: false });
+const requireOwnedDraft = (req, res, next) => loadDraftGuard(req, res, next, { requireOwner: true });
 
 // easterSunday / addDays / toIsoDate / buildHessenHolidayMap live in lib/hessenHolidays.js.
 
@@ -295,6 +306,8 @@ async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftD
 
 const CREDITED_ABSENCE_TYPES = new Set(['VACATION', 'SICK', 'TRAINING']);
 const CREDITED_ABSENCE_HOURS = 8;
+// Per-shift staffing limits no longer apply; the global limits decide (see 'Besetzung').
+const GLOBAL_STAFFING_UNLIMITED = 99;
 
 function normalizeSkillText(value) {
   return String(value || '')
@@ -779,7 +792,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     .filter(Boolean)
     .map((definition) => applyActiveShiftModes([definition], activeShiftModes)[0])
     .map(applyFixedShiftSeriesPattern)
-    .filter(isShiftDefinitionDraftPlannable);
+    .filter(isShiftDefinitionDraftPlannable)
+    // Early/late/night staffing is controlled only by the global limits (admin
+    // tab "Besetzung"). The per-shift min/max columns no longer take part.
+    .map((definition) => (
+      ['early', 'late', 'night'].includes(normalizePlanningShiftTypeKey(definition.shift_type) || '')
+        ? { ...definition, min_staff: 0, max_staff: GLOBAL_STAFFING_UNLIMITED }
+        : definition
+    ));
 
   const rotRes = await pool.query('SELECT * FROM shift_rotation_rules WHERE id=1');
   const rotation = rotRes.rows[0] || {
@@ -795,13 +815,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     short_night_free_days_after: 2,
     night_planning_mode: NIGHT_PLANNING_MODES.MIXED,
   };
+  // 0 (or empty) means "no limit", like max_nights_per_month. Treating 0 as a real
+  // limit blocks every weekend shift and every 7-day block (nights, E1WE/L1WE ...),
+  // because those blocks always contain a weekend.
+  const rotationWeekendLimitDisabled = !(Number(rotation.max_weekends_per_month) > 0);
+  if (rotationWeekendLimitDisabled) rotation.max_weekends_per_month = 9999;
   const baseNightDefinition = shiftDefs.find((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'night');
   // N and NK are two models of the same operational night coverage. They must
   // never be staffed independently on one day.
-  const sharedNightStaffCap = Math.max(
-    Number.parseInt(String(shiftDefs.find((definition) => String(definition.code || '').trim().toUpperCase() === 'N')?.max_staff ?? baseNightDefinition?.max_staff ?? 0), 10) || 0,
-    0
-  );
+  // The cap is the global night maximum (set once the staffing rules are loaded).
+  let sharedNightStaffCap = 0;
   // Length of a short night block (NK series_days, 1..7, default 3).
   const shortNightSeriesDays = Math.max(1, Math.min(7, Number.parseInt(String(configuredShortNightDefinition?.series_days ?? 3), 10) || 3));
   const shortNightDefinition = configuredShortNightDefinition
@@ -835,7 +858,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const specialPoolRes = await pool.query(
-    `SELECT shift_code, employee_name, monthly_max_assignments, working_weekdays, free_days_after_block
+    `SELECT shift_code, employee_name, monthly_max_assignments, working_weekdays, free_days_after_block, duration_hours
      FROM shift_special_pools
      WHERE is_active = TRUE
      ORDER BY shift_code, sort_order, employee_name`
@@ -852,6 +875,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         ? row.working_weekdays.map(Number).filter((weekday) => Number.isInteger(weekday) && weekday >= 0 && weekday <= 6)
         : [1, 2, 3, 4, 5],
       freeDaysAfterBlock: Math.max(Number.parseInt(String(row.free_days_after_block ?? dbsPlanningConfig.freeDaysAfterBlock), 10) || 0, 0),
+      // Own paid hours of this employee for the shift (null = hours of the definition).
+      durationHours: row.duration_hours === null || row.duration_hours === undefined ? null : Number(row.duration_hours),
     });
   }
   const restrictedPoolShiftCodes = new Set([...specialPoolsByShift.keys()]);
@@ -1000,8 +1025,30 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const staffRes = await pool.query('SELECT * FROM staffing_rules');
-  const staffingRules = buildStaffingRulesByShiftType(staffRes.rows);
-  const staffingMaximums = buildStaffingMaximumsByShiftType(staffRes.rows);
+  const weekdayStaffingRules = buildStaffingRulesByShiftType(staffRes.rows);
+  const weekdayStaffingMaximums = buildStaffingMaximumsByShiftType(staffRes.rows);
+  let dayLimitRows = [];
+  try {
+    dayLimitRows = (await pool.query('SELECT day_context, shift_type, min_count, max_count FROM staffing_day_limits')).rows;
+  } catch (limitErr) {
+    console.warn('staffing_day_limits unavailable, using defaults:', limitErr.message);
+  }
+  const staffingDayLimitMap = buildDayLimitMap(dayLimitRows);
+  // Early/late staffing depends on the day (weekday / Saturday / Sunday / holiday);
+  // night uses one global value. The day loop switches these per date.
+  let staffingRules = weekdayStaffingRules;
+  let staffingMaximums = weekdayStaffingMaximums;
+  const selectStaffingForDay = (dow, holidayName) => {
+    const staffing = buildStaffingForContext({
+      context: resolveStaffingDayContext({ dayOfWeek: dow, holidayName }),
+      weekdayRules: weekdayStaffingRules,
+      weekdayMaximums: weekdayStaffingMaximums,
+      dayLimitMap: staffingDayLimitMap,
+    });
+    staffingRules = staffing.rules;
+    staffingMaximums = staffing.maximums;
+  };
+  sharedNightStaffCap = Math.max(Number.parseInt(String(weekdayStaffingMaximums.night ?? 0), 10) || 0, 0);
   const getShiftTypeMaximum = (shiftType) => {
     const key = normalizePlanningShiftTypeKey(shiftType);
     return Object.prototype.hasOwnProperty.call(staffingMaximums, key) ? staffingMaximums[key] : Infinity;
@@ -1010,6 +1057,35 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const shifts = [];
   const explanations = {};
   const conflicts = [];
+
+  // Night planning fails silently when its configuration cannot produce a single
+  // shift (no active night definition, zero staffing, limits below one block).
+  // Report the cause instead of returning a plan without nights.
+  {
+    const nightDefinitions = shiftDefs.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'night');
+    const nightConfigurationIssue = (message, type) => conflicts.push({ day: 1, date: `${month}-01`, shift: 'N', severity: 'critical', type, message });
+    if (nightDefinitions.length === 0) {
+      nightConfigurationIssue('Keine aktive Nachtschicht-Definition (N) vorhanden: Es werden keine Nachtschichten geplant. Bitte in den Schicht-Einstellungen N aktivieren.', 'night_definition_missing');
+    } else {
+      const plannedNightSlots = buildShiftSlots(nightDefinitions, staffingRules, null, staffingMaximums)
+        .reduce((sum, definition) => sum + (definition.planned_slots || 0), 0);
+      if (plannedNightSlots === 0) {
+        nightConfigurationIssue('Die Mindestbesetzung der Nachtschicht ist 0 (Schicht-Definition bzw. Besetzungsregel Nacht): Es werden keine Nachtschichten geplant.', 'night_staffing_zero');
+      }
+      const sevenDayNightsPossible = normalizeNightPlanningMode(rotation.night_planning_mode) !== NIGHT_PLANNING_MODES.SHORT_ONLY;
+      const monthlyNightLimit = Number(rotation.max_nights_per_month) || 0;
+      if (sevenDayNightsPossible && monthlyNightLimit > 0 && monthlyNightLimit < Math.min(...nightDefinitions.map((definition) => getShiftSeriesDays(definition)))) {
+        nightConfigurationIssue(`Das Nachtlimit pro Monat (${monthlyNightLimit}) ist kleiner als ein Nachtblock (${Math.min(...nightDefinitions.map((definition) => getShiftSeriesDays(definition)))} Nächte): 7-Tage-Nachtblöcke können nie eingeplant werden.`, 'night_limit_below_block');
+      }
+      if (rotation.late_before_night_required) {
+        conflicts.push({
+          day: 1, date: `${month}-01`, shift: 'N', severity: 'warning', type: 'night_requires_late',
+          message: 'Regel "Vor Nachtschicht ist Spätschicht vorgeschrieben" ist aktiv: Nachtblöcke starten nur direkt nach einer Spätschicht und fehlen daher häufig.',
+        });
+      }
+    }
+  }
+
   const planReport = {
     totalEmployees: employees.length,
     excludedEmployees: shiftExcludedSet.size,
@@ -1327,7 +1403,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       empRecoveryReason[emp] = `Erholung nach ${assignedShiftDef.code} (Schichtdefinition)`;
     }
 
-    const shiftHours = getShiftHoursForDay(assignedShiftDef, day);
+    const ownPoolHours = specialPoolsByShift.get(String(shiftDef.code || '').trim().toUpperCase())?.get(emp)?.durationHours;
+    const shiftHours = Number.isFinite(ownPoolHours) && ownPoolHours > 0 ? ownPoolHours : getShiftHoursForDay(assignedShiftDef, day);
     if (shiftDef.shift_type === 'night') empStats[emp].nights++;
     if (weekend) {
       empStats[emp].weekends++;
@@ -1611,6 +1688,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const weekend = isWeekend(year, mon, day);
     const dow = dayOfWeek(year, mon, day);
     const holidayName = holidayMap[dateStr] || null;
+    selectStaffingForDay(dow, holidayName);
 
     for (const employee of activeEmployees) {
       const absence = getEmployeeAbsenceOnDate(employee, dateStr);
@@ -1629,7 +1707,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
     assignedToday = new Set();
   assignedByShiftTypeToday = { early: 0, late: 0, night: 0, special: 0 };
-    const shiftSlots = buildDailyShiftSlots({
+    const baseShiftSlots = buildDailyShiftSlots({
       shiftDefinitions: shiftDefs,
       staffingRules,
       staffingMaximums,
@@ -1651,6 +1729,28 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (leftSort !== rightSort) return leftSort - rightSort;
       return String(left.code || '').localeCompare(String(right.code || ''), 'de');
     });
+
+    // Weekend blocks start on Monday, so Monday decides how many people the coming
+    // Saturday and Sunday get (global Saturday / Sunday / holiday minimums).
+    const weekendLimitsFor = (offset) => {
+      const targetDay = day + offset;
+      if (dow !== 1 || targetDay > planningEndDay) return null;
+      const targetDate = `${month}-${String(targetDay).padStart(2, '0')}`;
+      const staffing = buildStaffingForContext({
+        context: resolveStaffingDayContext({ dayOfWeek: dayOfWeek(year, mon, targetDay), holidayName: holidayMap[targetDate] || null }),
+        weekdayRules: weekdayStaffingRules,
+        weekdayMaximums: weekdayStaffingMaximums,
+        dayLimitMap: staffingDayLimitMap,
+      });
+      const spec = {};
+      for (const type of ['early', 'late']) {
+        spec[type] = { min: staffing.rules[type] || 0, max: Number.isFinite(staffing.maximums[type]) ? staffing.maximums[type] : null };
+      }
+      return spec;
+    };
+    const shiftSlots = dow === 1
+      ? applyWeekendBlockSlots({ slots: baseShiftSlots, saturday: weekendLimitsFor(5), sunday: weekendLimitsFor(6) })
+      : baseShiftSlots;
 
     const availableEmployeeSet = new Set(availableForDay);
     const availableShiftCodes = new Set(shiftSlots.map((slot) => slot.code));
@@ -1685,7 +1785,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           && isPoolEmployeeWorkingOnWeekday(shiftDef, employee, dow)
           && !isEmployeeShiftBlockedOnDate(employee, dateStr, shiftDef.code))
         .sort((left, right) => left.localeCompare(right, 'de'));
-      const baseNeededStaff = Math.max(shiftDef.planned_slots || shiftDef.min_staff || 1, continuingEmployees.length);
+      // planned_slots comes from the global staffing limits; 0 is a valid result (no new starts of this shift today).
+      const baseNeededStaff = Math.max(Number.isFinite(Number(shiftDef.planned_slots)) ? Number(shiftDef.planned_slots) : (shiftDef.min_staff || 1), continuingEmployees.length);
       const holidayShiftTypeLimit = getHolidayShiftStaffingLimit(holidayStaffingConfig, holidayName, shiftDef.shift_type);
       const remainingHolidayCapacity = holidayShiftTypeLimit === null
         ? null
@@ -1750,7 +1851,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         planningMode: rotation.night_planning_mode,
         shiftType: shiftDef.shift_type,
         neededStaff,
-        maxStaff: shiftDef.max_staff,
+        maxStaff: sharedNightStaffCap,
         holidayCapacity: remainingHolidayCapacity,
       });
       for (let slot = continuingEmployees.length; slot < nightFill.fillTarget; slot++) {
@@ -2448,6 +2549,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
   const hasDefinitionCapacityForEmployee = (employee, day, definition) => {
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[dateStr] || null);
     if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) return false;
     if (wouldExceedEmployeeWeekendLimit(employee, [day])) return false;
     const maxStaff = Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0);
@@ -2870,6 +2972,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   for (let day = planningStartDay; day <= planningEndDay; day++) {
+    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null);
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     const dow = dayOfWeek(year, mon, day);
     const applicableDefinitions = shiftDefs.filter((definition) => normalizeWeekdaySetting(definition.applicable_days, [0, 1, 2, 3, 4, 5, 6]).includes(dow));
@@ -2989,6 +3092,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // a draft with an overstaffed definition, a refused night, or a short-night
   // run longer than three consecutive days.
   for (let day = planningStartDay; day <= planningEndDay; day++) {
+    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null);
     const assignmentsToday = shifts.filter((entry) => Number(entry.day) === day);
     for (const definition of shiftDefs) {
       const code = String(definition.code || '').trim().toUpperCase();
@@ -3271,7 +3375,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       dbsPlanningConfig,
       coloPlanningConfig,
       coloAssignments: coloRolePlan.assignments,
-      staffingRules,
+      staffingRules: weekdayStaffingRules,
+      staffingDayLimits: staffingDayLimitMap,
       specialPools: Object.fromEntries(
         [...specialPoolsByShift.entries()].map(([shiftCode, entries]) => [
           shiftCode,
@@ -3311,8 +3416,8 @@ router.get('/drafts', async (req, res) => {
                       (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'approve') AS approve_votes,
                       (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'needs_changes') AS needs_changes_votes
                  FROM shiftplan_drafts d
-                WHERE d.created_by_user_id = $1`;
-    const params = [getAuthenticatedUserId(req)];
+                WHERE TRUE`;
+    const params = [];
     if (month) {
       params.push(month);
       sql += ` AND d.month = $${params.length}`;
@@ -3345,9 +3450,8 @@ router.get('/drafts/year/:year', async (req, res) => {
               (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'needs_changes') AS needs_changes_votes
          FROM shiftplan_drafts d
         WHERE d.month LIKE $1
-          AND d.created_by_user_id = $2
         ORDER BY d.month, d.version DESC`,
-      [`${year}-%`, getAuthenticatedUserId(req)]
+      [`${year}-%`]
     );
     res.json({ ok: true, year, generated: rows, drafts: rows, errors: [] });
   } catch (err) {
@@ -3368,9 +3472,8 @@ router.get('/drafts/year/:year/full', async (req, res) => {
               (SELECT COUNT(*)::int FROM shiftplan_draft_votes v WHERE v.draft_id = d.id AND v.vote = 'needs_changes') AS needs_changes_votes
          FROM shiftplan_drafts d
         WHERE d.month LIKE $1
-          AND d.created_by_user_id = $2
         ORDER BY d.month, d.version DESC`,
-      [`${year}-%`, getAuthenticatedUserId(req)]
+      [`${year}-%`]
     );
     res.json({ ok: true, year, drafts: rows });
   } catch (err) {
@@ -3382,7 +3485,7 @@ router.get('/drafts/year/:year/full', async (req, res) => {
 /* GET SINGLE DRAFT (with full data)                */
 /* ------------------------------------------------ */
 
-router.get('/drafts/:id', requireOwnedDraft, async (req, res) => {
+router.get('/drafts/:id', requireReadableDraft, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM shiftplan_drafts WHERE id = $1', [parseInt(req.params.id)]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
@@ -3566,7 +3669,7 @@ const generatedPlans = [];
   }
 });
 
-router.get('/drafts/:id/schedule', requireOwnedDraft, async (req, res) => {
+router.get('/drafts/:id/schedule', requireReadableDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(draftId) || draftId <= 0) return res.status(400).json({ ok: false, error: 'Ungueltige Draft-ID' });
@@ -3611,7 +3714,7 @@ router.patch('/drafts/:id/status', requirePageAccess('shiftplan_control', 'write
   }
 });
 
-router.get('/drafts/:id/feedback', requireOwnedDraft, async (req, res) => {
+router.get('/drafts/:id/feedback', requireReadableDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     const { rows } = await pool.query(
@@ -3628,7 +3731,7 @@ router.get('/drafts/:id/feedback', requireOwnedDraft, async (req, res) => {
   }
 });
 
-router.get('/drafts/:id/votes', requireOwnedDraft, async (req, res) => {
+router.get('/drafts/:id/votes', requireReadableDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     if (!Number.isInteger(draftId)) return res.status(400).json({ ok: false, error: 'Ungueltiger Draft.' });
@@ -3657,7 +3760,7 @@ router.get('/drafts/:id/votes', requireOwnedDraft, async (req, res) => {
   }
 });
 
-router.put('/drafts/:id/vote', requireVerifiedIdentity, requireOwnedDraft, async (req, res) => {
+router.put('/drafts/:id/vote', requireVerifiedIdentity, requireReadableDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     const vote = String(req.body?.vote || '').trim();
@@ -3688,7 +3791,7 @@ router.put('/drafts/:id/vote', requireVerifiedIdentity, requireOwnedDraft, async
   }
 });
 
-router.post('/drafts/:id/feedback', requireVerifiedIdentity, requireOwnedDraft, async (req, res) => {
+router.post('/drafts/:id/feedback', requireVerifiedIdentity, requireReadableDraft, async (req, res) => {
   try {
     const draftId = Number.parseInt(req.params.id, 10);
     const employeeName = String(req.body?.employeeName || '').trim();
@@ -3787,7 +3890,7 @@ router.patch('/drafts/groups/:groupId/metadata', requirePageAccess('shiftplan_co
     }
     const body = req.body || {};
     const sets = [];
-    const params = [groupId, getAuthenticatedUserId(req)];
+    const params = [groupId, isAdminRequest(req) ? null : getAuthenticatedUserId(req)];
     for (const [key, max] of [['title', MAX_TITLE_LENGTH], ['description', MAX_DESCRIPTION_LENGTH]]) {
       if (!Object.prototype.hasOwnProperty.call(body, key)) continue;
       params.push(normalizeMetaText(body[key], max) ?? null);
@@ -3798,7 +3901,7 @@ router.patch('/drafts/groups/:groupId/metadata', requirePageAccess('shiftplan_co
       `UPDATE shiftplan_drafts
           SET ${sets.join(', ')}
         WHERE config_snapshot->'planningBatch'->>'id' = $1
-          AND created_by_user_id = $2
+          AND ($2::int IS NULL OR created_by_user_id = $2)
           AND status != 'activated'`,
       params
     );
@@ -3988,11 +4091,241 @@ function resolveExcelShiftColors(rawCode) {
   return null;
 }
 
-export async function buildExcelWorkbook(drafts, period = null) {
+/* ------------------------------------------------ */
+/* MANAGEMENT EXPORT: HOURS + WISH FULFILMENT       */
+/* ------------------------------------------------ */
+
+const EXCEL_HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
+const EXCEL_THIN_BORDER = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
+
+function styleExcelHeaderRow(ws, rowNumber, columnCount) {
+  for (let c = 1; c <= columnCount; c++) {
+    const cell = ws.getCell(rowNumber, c);
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+    cell.fill = EXCEL_HEADER_FILL;
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    cell.border = EXCEL_THIN_BORDER;
+  }
+  ws.getRow(rowNumber).height = 26;
+}
+
+/** Green / amber / red fill for a percent value (wish fulfilment or hours reached). */
+function percentFill(percent) {
+  if (percent === null || percent === undefined) return null;
+  const argb = percent >= 80 ? 'D1FAE5' : percent >= 50 ? 'FEF3C7' : 'FEE2E2';
+  return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+}
+
+function statusFill(status) {
+  const argb = status === WISH_STATUS.MET ? 'D1FAE5' : status === WISH_STATUS.PARTIAL ? 'FEF3C7' : 'FEE2E2';
+  return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
+}
+
+async function addManagementSheets(workbook, drafts) {
+  const allNames = new Set();
+  for (const draft of drafts) {
+    for (const shift of draft.shifts_json || []) if (shift.employee_name) allNames.add(shift.employee_name);
+    for (const name of Object.keys(draft.fairness || {})) allNames.add(name);
+  }
+  const nameLookup = buildEmployeeNameLookup([...allNames]);
+
+  // Current saved wishes. They are matched to the draft's employee names.
+  const prefRes = await pool.query(
+    `SELECT ep.*, u.first_name, u.last_name
+       FROM employee_preferences ep
+       JOIN users u ON u.id = ep.user_id`
+  ).catch(() => ({ rows: [] }));
+  const prefsByEmployee = new Map();
+  for (const row of prefRes.rows) {
+    const name = resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), nameLookup);
+    if (name) prefsByEmployee.set(name, row);
+  }
+  const blockedSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1").catch(() => ({ rows: [] }));
+  const blockedDaysEnabled = String(blockedSetting.rows[0]?.value ?? 'false') === 'true';
+
+  const summaryRows = [];
+  const detailRows = [];
+  for (const draft of drafts) {
+    const [year, mon] = draft.month.split('-').map(Number);
+    const monthLabel = `${MONTH_NAMES_DE[mon]} ${year}`;
+    const holidays = buildHessenHolidayMap(year);
+    const definitions = (draft.config_snapshot?.shiftDefinitions || []).map((definition) => ({ code: definition.code, shift_type: definition.type, is_active: true }));
+    const colleagueWishes = draft.config_snapshot?.planReport?.preferredColleagues?.wishes || [];
+
+    const shiftsByEmployee = new Map();
+    for (const shift of draft.shifts_json || []) {
+      if (!shiftsByEmployee.has(shift.employee_name)) shiftsByEmployee.set(shift.employee_name, {});
+      shiftsByEmployee.get(shift.employee_name)[shift.day] = shift.shift_code;
+    }
+    const employees = [...new Set([...shiftsByEmployee.keys(), ...Object.keys(draft.fairness || {})])]
+      .sort((left, right) => left.localeCompare(right, 'de'));
+
+    for (const employee of employees) {
+      const fairness = draft.fairness?.[employee] || {};
+      const target = Number(fairness.targetHours);
+      const actual = Number(fairness.actualHours);
+      const wishes = evaluateMonthWishes({
+        year,
+        month: mon,
+        shiftsByDay: shiftsByEmployee.get(employee) || {},
+        preferences: mergeMonthlyPreferences(prefsByEmployee.get(employee) || null, draft.month),
+        holidays,
+        blockedDaysEnabled,
+        definitions,
+        colleagueWishes: colleagueWishes.filter((wish) => wish.employee === employee),
+      });
+      summaryRows.push({
+        monthKey: draft.month,
+        monthLabel,
+        employee,
+        target: Number.isFinite(target) ? target : null,
+        actual: Number.isFinite(actual) ? actual : null,
+        wishPercent: wishes.percent,
+        wishCount: wishes.items.length,
+        wishScoreSum: wishes.items.reduce((sum, entry) => sum + entry.score, 0),
+      });
+      for (const entry of wishes.items) detailRows.push({ monthLabel, employee, ...entry });
+    }
+  }
+
+  /* ---- Sheet 1: hours and wish percent per month ---- */
+  const ws = workbook.addWorksheet('Stunden & Wünsche');
+  ws.mergeCells(1, 1, 1, 8);
+  ws.getCell(1, 1).value = 'Soll-/Ist-Stunden und Wunscherfüllung';
+  ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+  ws.getRow(1).height = 28;
+  ws.mergeCells(2, 1, 2, 8);
+  ws.getCell(2, 1).value = 'Wunscherfüllung = Durchschnitt der Erfüllung aller hinterlegten Wünsche des Monats (Details im Blatt „Wunschdetails“). Basis sind die aktuell gespeicherten Wünsche.';
+  ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
+  ws.getCell(2, 1).alignment = { wrapText: true, vertical: 'top' };
+  ws.getRow(2).height = 28;
+  const headers = ['Monat', 'Mitarbeiter', 'Soll (h)', 'Ist (h)', 'Differenz (h)', 'Soll erreicht', 'Wünsche', 'Wunscherfüllung'];
+  headers.forEach((header, index) => { ws.getCell(4, index + 1).value = header; });
+  styleExcelHeaderRow(ws, 4, headers.length);
+
+  summaryRows.forEach((entry, index) => {
+    const rowNumber = index + 5;
+    const diff = entry.target !== null && entry.actual !== null ? Number((entry.actual - entry.target).toFixed(2)) : null;
+    const reached = entry.target > 0 && entry.actual !== null ? Math.round((entry.actual / entry.target) * 100) : null;
+    const values = [entry.monthLabel, entry.employee, entry.target, entry.actual, diff, reached === null ? null : reached / 100, entry.wishCount, entry.wishPercent === null ? null : entry.wishPercent / 100];
+    values.forEach((value, i) => {
+      const cell = ws.getCell(rowNumber, i + 1);
+      cell.value = value === null ? '–' : value;
+      cell.font = { name: 'Calibri', size: 10, bold: i === 1 };
+      cell.alignment = { horizontal: i < 2 ? 'left' : 'center', vertical: 'middle' };
+      cell.border = EXCEL_THIN_BORDER;
+    });
+    ws.getCell(rowNumber, 3).numFmt = '0.0';
+    ws.getCell(rowNumber, 4).numFmt = '0.0';
+    ws.getCell(rowNumber, 5).numFmt = '+0.0;-0.0;0.0';
+    ws.getCell(rowNumber, 6).numFmt = '0%';
+    ws.getCell(rowNumber, 8).numFmt = '0%';
+    if (diff !== null) ws.getCell(rowNumber, 5).font = { name: 'Calibri', size: 10, bold: true, color: { argb: diff < 0 ? 'B91C1C' : '047857' } };
+    const reachedFill = percentFill(reached);
+    if (reachedFill) ws.getCell(rowNumber, 6).fill = reachedFill;
+    const wishFill = percentFill(entry.wishPercent);
+    if (wishFill) ws.getCell(rowNumber, 8).fill = wishFill;
+  });
+  [14, 24, 10, 10, 13, 13, 10, 16].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
+  ws.views = [{ state: 'frozen', ySplit: 4, xSplit: 2, activeCell: 'C5' }];
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + summaryRows.length, column: headers.length } };
+  ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, printTitlesRow: '4:4' };
+
+  /* ---- Sheet 2: totals per employee (several months only) ---- */
+  if (drafts.length > 1) {
+    const totals = new Map();
+    for (const entry of summaryRows) {
+      const total = totals.get(entry.employee) || { target: 0, actual: 0, scoreSum: 0, count: 0 };
+      total.target += entry.target || 0;
+      total.actual += entry.actual || 0;
+      total.scoreSum += entry.wishScoreSum;
+      total.count += entry.wishCount;
+      totals.set(entry.employee, total);
+    }
+    const ts = workbook.addWorksheet('Gesamt');
+    const totalHeaders = ['Mitarbeiter', 'Soll (h)', 'Ist (h)', 'Differenz (h)', 'Soll erreicht', 'Wünsche', 'Wunscherfüllung'];
+    ts.mergeCells(1, 1, 1, totalHeaders.length);
+    ts.getCell(1, 1).value = 'Gesamtübersicht über alle Monate';
+    ts.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+    ts.getRow(1).height = 28;
+    totalHeaders.forEach((header, index) => { ts.getCell(3, index + 1).value = header; });
+    styleExcelHeaderRow(ts, 3, totalHeaders.length);
+    [...totals.entries()].sort((left, right) => left[0].localeCompare(right[0], 'de')).forEach(([employee, total], index) => {
+      const rowNumber = index + 4;
+      const diff = Number((total.actual - total.target).toFixed(2));
+      const reached = total.target > 0 ? total.actual / total.target : null;
+      const wishRatio = total.count > 0 ? total.scoreSum / total.count : null;
+      [employee, total.target, total.actual, diff, reached, total.count, wishRatio].forEach((value, i) => {
+        const cell = ts.getCell(rowNumber, i + 1);
+        cell.value = value === null ? '–' : value;
+        cell.font = { name: 'Calibri', size: 10, bold: i === 0 };
+        cell.alignment = { horizontal: i === 0 ? 'left' : 'center', vertical: 'middle' };
+        cell.border = EXCEL_THIN_BORDER;
+      });
+      ts.getCell(rowNumber, 2).numFmt = '0.0';
+      ts.getCell(rowNumber, 3).numFmt = '0.0';
+      ts.getCell(rowNumber, 4).numFmt = '+0.0;-0.0;0.0';
+      ts.getCell(rowNumber, 5).numFmt = '0%';
+      ts.getCell(rowNumber, 7).numFmt = '0%';
+      ts.getCell(rowNumber, 4).font = { name: 'Calibri', size: 10, bold: true, color: { argb: diff < 0 ? 'B91C1C' : '047857' } };
+      const reachedFill = percentFill(reached === null ? null : reached * 100);
+      if (reachedFill) ts.getCell(rowNumber, 5).fill = reachedFill;
+      const wishFill = percentFill(wishRatio === null ? null : wishRatio * 100);
+      if (wishFill) ts.getCell(rowNumber, 7).fill = wishFill;
+    });
+    [26, 11, 11, 14, 13, 10, 16].forEach((width, index) => { ts.getColumn(index + 1).width = width; });
+    ts.views = [{ state: 'frozen', ySplit: 3, xSplit: 1, activeCell: 'B4' }];
+  }
+
+  /* ---- Sheet 3: every single wish ---- */
+  const ds = workbook.addWorksheet('Wunschdetails');
+  const detailHeaders = ['Monat', 'Mitarbeiter', 'Art', 'Wunsch', 'Ergebnis', 'Erfüllung', 'Details'];
+  ds.mergeCells(1, 1, 1, detailHeaders.length);
+  ds.getCell(1, 1).value = 'Wunschdetails je Mitarbeiter';
+  ds.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+  ds.getRow(1).height = 28;
+  detailHeaders.forEach((header, index) => { ds.getCell(3, index + 1).value = header; });
+  styleExcelHeaderRow(ds, 3, detailHeaders.length);
+  if (detailRows.length === 0) {
+    ds.mergeCells(4, 1, 4, detailHeaders.length);
+    ds.getCell(4, 1).value = 'Für diese Pläne sind keine Wünsche hinterlegt.';
+    ds.getCell(4, 1).font = { name: 'Calibri', size: 10, italic: true, color: { argb: '6B7280' } };
+  }
+  detailRows.forEach((entry, index) => {
+    const rowNumber = index + 4;
+    [entry.monthLabel, entry.employee, entry.category, entry.wish, entry.status, entry.percent / 100, entry.detail].forEach((value, i) => {
+      const cell = ds.getCell(rowNumber, i + 1);
+      cell.value = sanitizeCellText(typeof value === 'string' ? value : String(value));
+      if (typeof value === 'number') cell.value = value;
+      cell.font = { name: 'Calibri', size: 10, bold: i === 1 };
+      cell.alignment = { horizontal: i === 5 || i === 4 ? 'center' : 'left', vertical: 'top', wrapText: i === 3 || i === 6 };
+      cell.border = EXCEL_THIN_BORDER;
+    });
+    ds.getCell(rowNumber, 6).numFmt = '0%';
+    ds.getCell(rowNumber, 5).fill = statusFill(entry.status);
+    ds.getCell(rowNumber, 6).fill = statusFill(entry.status);
+  });
+  [14, 24, 20, 38, 18, 11, 70].forEach((width, index) => { ds.getColumn(index + 1).width = width; });
+  ds.views = [{ state: 'frozen', ySplit: 3, xSplit: 2, activeCell: 'C4' }];
+  if (detailRows.length > 0) ds.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3 + detailRows.length, column: detailHeaders.length } };
+  ds.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, printTitlesRow: '3:3' };
+}
+
+/**
+ * variant 'team'       : only the shifts, one worksheet per month (no hours, no internal data).
+ * variant 'management' : the same month sheets with hours, plus overview sheets with
+ *                        target/actual hours and the wish fulfilment per employee.
+ */
+export async function buildExcelWorkbook(drafts, period = null, options = {}) {
+  const isTeam = options.variant !== 'management';
+  const showHours = !isTeam;
   drafts = [...drafts].sort((left, right) => left.month.localeCompare(right.month));
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'ODIN Shiftplan';
   workbook.created = new Date();
+
+  // Overview sheets come first, so they are the first thing the readers see.
+  if (!isTeam) await addManagementSheets(workbook, drafts);
 
   for (const draft of drafts) {
     const shifts = draft.shifts_json;
@@ -4013,12 +4346,16 @@ export async function buildExcelWorkbook(drafts, period = null) {
     const empNames = Object.keys(byEmployee).sort((a, b) => a.localeCompare(b, 'de'));
 
     // Title row
-    ws.mergeCells(1, 1, 1, numDays + 2);
+    const lastColumn = showHours ? numDays + 2 : numDays + 1;
+    ws.mergeCells(1, 1, 1, lastColumn);
     const titleCell = ws.getCell(1, 1);
     const headerText = buildDraftSheetHeaderText({
       title: period?.title || draft.title,
       description: draft.description,
-      metaLine: `Version ${draft.version} | Status: ${draft.status} | Erstellt: ${new Date(draft.created_at).toLocaleDateString('de-DE')} von ${draft.created_by}`,
+      // The team sheet shows the plan only; version, status and author are internal.
+      metaLine: isTeam
+        ? `Schichtplan ${sheetName}`
+        : `Version ${draft.version} | Status: ${draft.status} | Erstellt: ${new Date(draft.created_at).toLocaleDateString('de-DE')} von ${draft.created_by}`,
       sheetName,
     });
     titleCell.value = headerText.title;
@@ -4027,7 +4364,7 @@ export async function buildExcelWorkbook(drafts, period = null) {
     ws.getRow(1).height = 28;
 
     // Subtitle row
-    ws.mergeCells(2, 1, 2, numDays + 2);
+    ws.mergeCells(2, 1, 2, lastColumn);
     const subCell = ws.getCell(2, 1);
     subCell.value = headerText.subtitle;
     subCell.font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
@@ -4047,12 +4384,14 @@ export async function buildExcelWorkbook(drafts, period = null) {
       cell.alignment = { horizontal: 'center' };
       cell.border = { top: { style: 'thin', color: { argb: '374151' } }, bottom: { style: 'thin', color: { argb: '374151' } }, left: { style: 'thin', color: { argb: '374151' } }, right: { style: 'thin', color: { argb: '374151' } } };
     }
-    // Stats header
+    // Stats header (management variant only)
     const statsCol = numDays + 2;
-    ws.getCell(3, statsCol).value = 'Σ';
-    ws.getCell(3, statsCol).font = { name: 'Calibri', size: 8, bold: true, color: { argb: 'FFFFFF' } };
-    ws.getCell(3, statsCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
-    ws.getCell(3, statsCol).alignment = { horizontal: 'center' };
+    if (showHours) {
+      ws.getCell(3, statsCol).value = 'Σ';
+      ws.getCell(3, statsCol).font = { name: 'Calibri', size: 8, bold: true, color: { argb: 'FFFFFF' } };
+      ws.getCell(3, statsCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
+      ws.getCell(3, statsCol).alignment = { horizontal: 'center' };
+    }
 
     // Header row (row 4) – day numbers
     ws.getCell(4, 1).value = 'Mitarbeiter';
@@ -4068,10 +4407,12 @@ export async function buildExcelWorkbook(drafts, period = null) {
       cell.alignment = { horizontal: 'center' };
       cell.border = { top: { style: 'thin' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
     }
-    ws.getCell(4, statsCol).value = 'Stunden';
-    ws.getCell(4, statsCol).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FFFFFF' } };
-    ws.getCell(4, statsCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
-    ws.getCell(4, statsCol).alignment = { horizontal: 'center' };
+    if (showHours) {
+      ws.getCell(4, statsCol).value = 'Stunden';
+      ws.getCell(4, statsCol).font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FFFFFF' } };
+      ws.getCell(4, statsCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
+      ws.getCell(4, statsCol).alignment = { horizontal: 'center' };
+    }
     ws.getRow(4).height = 22;
 
     const durationByCode = new Map(
@@ -4115,19 +4456,21 @@ export async function buildExcelWorkbook(drafts, period = null) {
       }
 
       // Credited monthly hours (includes configured shift durations and absences).
-      const totalCell = ws.getCell(row, statsCol);
-      const reportedHours = Number(draft.fairness?.[emp]?.actualHours);
-      totalCell.value = Number.isFinite(reportedHours) ? reportedHours : fallbackHours;
-      totalCell.alignment = { horizontal: 'center' };
-      totalCell.font = { name: 'Calibri', size: 9, bold: true };
-      totalCell.border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
+      if (showHours) {
+        const totalCell = ws.getCell(row, statsCol);
+        const reportedHours = Number(draft.fairness?.[emp]?.actualHours);
+        totalCell.value = Number.isFinite(reportedHours) ? reportedHours : fallbackHours;
+        totalCell.alignment = { horizontal: 'center' };
+        totalCell.font = { name: 'Calibri', size: 9, bold: true };
+        totalCell.border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
+      }
     });
 
     // Column widths
     ws.getColumn(1).width = 22;
     for (let d = 1; d <= numDays; d++) ws.getColumn(d + 1).width = 4.5;
-    ws.getColumn(statsCol).width = 7;
-    ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: statsCol } };
+    if (showHours) ws.getColumn(statsCol).width = 7;
+    ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: lastColumn } };
 
     // Legend row
     const legendRow = empNames.length + 6;
@@ -4145,7 +4488,7 @@ export async function buildExcelWorkbook(drafts, period = null) {
 
     // Footer
     const footerRow = empNames.length + 8;
-    ws.getCell(footerRow, 1).value = `Exportiert am ${new Date().toLocaleString('de-DE', { timeZone: config.OPERATIONAL_TIMEZONE })} — ODIN Schichtplan v${draft.version}`;
+    ws.getCell(footerRow, 1).value = `Exportiert am ${new Date().toLocaleString('de-DE', { timeZone: config.OPERATIONAL_TIMEZONE })} — ODIN Schichtplan${isTeam ? '' : ` v${draft.version}`}`;
     ws.getCell(footerRow, 1).font = { name: 'Calibri', size: 8, color: { argb: '9CA3AF' } };
 
     // Print setup
@@ -4180,10 +4523,13 @@ export async function buildExcelWorkbook(drafts, period = null) {
       summaryWs.getRow(2).height = Math.min(90, Math.max(18, 15 * descriptionText.split('\n').length));
     }
 
-    const headers = ['Monat', 'Version', 'Status', 'Schichten', 'Mitarbeiter', 'Konflikte'];
-    headers.forEach((h, i) => {
+    // The team sheet shows no internal data (version, status, conflicts).
+    const columns = isTeam
+      ? [['Monat', () => null], ['Schichten', (d) => d.shifts_json?.length || 0], ['Mitarbeiter', (d) => new Set((d.shifts_json || []).map(s => s.employee_name)).size]]
+      : [['Monat', () => null], ['Version', (d) => d.version], ['Status', (d) => d.status], ['Schichten', (d) => d.shifts_json?.length || 0], ['Mitarbeiter', (d) => new Set((d.shifts_json || []).map(s => s.employee_name)).size], ['Konflikte', (d) => d.conflicts?.length || 0]];
+    columns.forEach(([header], i) => {
       const cell = summaryWs.getCell(3, i + 1);
-      cell.value = h;
+      cell.value = header;
       cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFF' } };
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
       cell.alignment = { horizontal: 'center' };
@@ -4193,12 +4539,8 @@ export async function buildExcelWorkbook(drafts, period = null) {
       const row = idx + 4;
       const [y, m] = d.month.split('-').map(Number);
       summaryWs.getCell(row, 1).value = `${MONTH_NAMES_DE[m]} ${y}`;
-      summaryWs.getCell(row, 2).value = d.version;
-      summaryWs.getCell(row, 3).value = d.status;
-      summaryWs.getCell(row, 4).value = d.shifts_json?.length || 0;
-      summaryWs.getCell(row, 5).value = new Set((d.shifts_json || []).map(s => s.employee_name)).size;
-      summaryWs.getCell(row, 6).value = d.conflicts?.length || 0;
-      for (let c = 1; c <= 6; c++) {
+      columns.slice(1).forEach(([, valueOf], i) => { summaryWs.getCell(row, i + 2).value = valueOf(d); });
+      for (let c = 1; c <= columns.length; c++) {
         summaryWs.getCell(row, c).font = { name: 'Calibri', size: 9 };
         summaryWs.getCell(row, c).alignment = { horizontal: 'center' };
         summaryWs.getCell(row, c).border = { bottom: { style: 'thin', color: { argb: 'D1D5DB' } } };
@@ -4207,20 +4549,36 @@ export async function buildExcelWorkbook(drafts, period = null) {
     });
 
     summaryWs.getColumn(1).width = 20;
-    for (let c = 2; c <= 6; c++) summaryWs.getColumn(c).width = 14;
+    for (let c = 2; c <= columns.length; c++) summaryWs.getColumn(c).width = 14;
   }
 
   return workbook;
 }
 
-router.get('/drafts/:id/excel', requireOwnedDraft, async (req, res) => {
+// ?variant=team (default: shifts only) or ?variant=management (hours + wish fulfilment).
+// The management variant contains personal wish data and hours: admins only.
+function exportVariant(req) {
+  return req.query?.variant === 'management' ? 'management' : 'team';
+}
+function variantFileSuffix(variant) {
+  return variant === 'management' ? 'Leitung' : 'Team';
+}
+function managementExportGuard(req, res, next) {
+  if (req.query?.variant === 'management' && !isAdminRequest(req)) {
+    return res.status(403).json({ ok: false, error: 'Die Leitungs-Auswertung ist nur für Administratoren verfügbar' });
+  }
+  return next();
+}
+
+router.get('/drafts/:id/excel', managementExportGuard, requireReadableDraft, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM shiftplan_drafts WHERE id = $1', [parseInt(req.params.id)]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
     const draft = rows[0];
 
-    const workbook = await buildExcelWorkbook([draft]);
-    const filename = `ODIN_Schichtplan_${draft.month}_v${draft.version}.xlsx`;
+    const variant = exportVariant(req);
+    const workbook = await buildExcelWorkbook([draft], null, { variant });
+    const filename = `ODIN_Schichtplan_${draft.month}_v${draft.version}_${variantFileSuffix(variant)}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -4234,22 +4592,23 @@ router.get('/drafts/:id/excel', requireOwnedDraft, async (req, res) => {
 });
 
 // Export the exact monthly versions belonging to one generation run.
-router.get('/drafts/groups/:groupId/excel', async (req, res) => {
+router.get('/drafts/groups/:groupId/excel', managementExportGuard, async (req, res) => {
   try {
-    const ownerId = getAuthenticatedUserId(req);
     const summaries = await pool.query(
       `SELECT id, month, version, note, created_at, config_snapshot->'planningBatch' AS planning_batch
-       FROM shiftplan_drafts WHERE created_by_user_id = $1`, [ownerId]);
+       FROM shiftplan_drafts`);
     const group = groupPlanningDrafts(summaries.rows).find(entry => entry.id === req.params.groupId);
     if (!group || group.type === 'month') return res.status(404).json({ ok: false, error: 'Planungsgruppe nicht gefunden' });
     const { rows } = await pool.query(
-      'SELECT * FROM shiftplan_drafts WHERE id = ANY($1::int[]) AND created_by_user_id = $2 ORDER BY month',
-      [group.drafts.map(draft => draft.id), ownerId]);
+      'SELECT * FROM shiftplan_drafts WHERE id = ANY($1::int[]) ORDER BY month',
+      [group.drafts.map(draft => draft.id)]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Keine Monats-Drafts vorhanden' });
     const groupTitle = rows.find(row => row.title)?.title || null;
     const groupDescription = rows.find(row => row.description)?.description || null;
-    const workbook = await buildExcelWorkbook(rows, { ...group, title: groupTitle, description: groupDescription });
-    const filename = group.type === 'quarter' ? `ODIN_Quartalsplanung_Q${group.quarter}_${group.year}.xlsx` : `ODIN_Jahresplanung_${group.year}.xlsx`;
+    const variant = exportVariant(req);
+    const workbook = await buildExcelWorkbook(rows, { ...group, title: groupTitle, description: groupDescription }, { variant });
+    const suffix = variantFileSuffix(variant);
+    const filename = group.type === 'quarter' ? `ODIN_Quartalsplanung_Q${group.quarter}_${group.year}_${suffix}.xlsx` : `ODIN_Jahresplanung_${group.year}_${suffix}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     await workbook.xlsx.write(res);
@@ -4260,7 +4619,7 @@ router.get('/drafts/groups/:groupId/excel', async (req, res) => {
 });
 
 /* Year Excel Export – all 12 months in one workbook */
-router.get('/drafts/year-excel/:year', async (req, res) => {
+router.get('/drafts/year-excel/:year', managementExportGuard, async (req, res) => {
   try {
     const year = parseInt(req.params.year);
     if (!year) return res.status(400).json({ ok: false, error: 'Jahr erforderlich' });
@@ -4270,15 +4629,15 @@ router.get('/drafts/year-excel/:year', async (req, res) => {
       `SELECT DISTINCT ON (month) *
          FROM shiftplan_drafts
         WHERE month LIKE $1
-          AND created_by_user_id = $2
         ORDER BY month, version DESC`,
-      [`${year}-%`, getAuthenticatedUserId(req)]
+      [`${year}-%`]
     );
 
     if (!rows.length) return res.status(404).json({ ok: false, error: `Keine Drafts für ${year} gefunden` });
 
-    const workbook = await buildExcelWorkbook(rows);
-    const filename = `ODIN_Jahresschichtplan_${year}.xlsx`;
+    const variant = exportVariant(req);
+    const workbook = await buildExcelWorkbook(rows, null, { variant });
+    const filename = `ODIN_Jahresschichtplan_${year}_${variantFileSuffix(variant)}.xlsx`;
     // (draft titles/descriptions are rendered per month sheet via the row data)
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
