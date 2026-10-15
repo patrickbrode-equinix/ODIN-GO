@@ -337,7 +337,7 @@ export function getPreferenceShiftCode(code) {
   if (normalized === 'E1SA' || normalized === 'E1WE') return 'E1';
   if (normalized === 'E2SA' || normalized === 'E2WE') return 'E2';
   if (normalized === 'L1WE') return 'L1';
-  if (normalized === 'NK') return 'N';
+  if (normalized === 'NK' || normalized === 'NS') return 'N';
   return normalized;
 }
 
@@ -709,15 +709,16 @@ export function buildDailyShiftSlots({
 
 /**
  * Weekend-spanning blocks (E1SA, E1WE, L1WE ...) are only started on Monday, so their
- * headcount has to be decided on that Monday. This raises the planned slots of the
- * blocks that cover the coming Saturday / Sunday up to the global minimum of that
- * day (early and late separately) and takes the same number of slots away from the
- * blocks that only run during the week, so the weekday total stays the same.
+ * headcount has to be decided on that Monday. The global Saturday / Sunday limits are hard:
+ * the number of people on the coming Saturday and Sunday ends up inside [min, max] of that
+ * day, for early and late separately. The difference to the plain weekday plan is balanced
+ * with the blocks that only run during the week, so the weekday total stays the same
+ * (as far as the weekday maximum allows).
  *
- * limits: { early: { min, max }, late: { min, max } } for the Saturday / Sunday of
- * that week (max null = unlimited), or null when that day is outside the plan.
+ * saturday / sunday: { early: { min, max }, late: { min, max } } (max null = unlimited), or null
+ * when that day is outside the plan. weekdayMaximums: { early, late } cap of the Monday context.
  */
-export function applyWeekendBlockSlots({ slots = [], saturday = null, sunday = null } = {}) {
+export function applyWeekendBlockSlots({ slots = [], saturday = null, sunday = null, weekdayMaximums = {} } = {}) {
   const planned = new Map(slots.map((slot) => [slot.code, Math.max(Number(slot.planned_slots) || 0, 0)]));
 
   // Offsets from Monday: Saturday = 5, Sunday = 6.
@@ -729,70 +730,71 @@ export function applyWeekendBlockSlots({ slots = [], saturday = null, sunday = n
     }
     return true;
   };
+  const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
+  const FREE = { min: 0, max: Infinity };
 
   for (const type of ['early', 'late']) {
     const typeSlots = slots.filter((slot) => normalizePlanningShiftTypeKey(slot.shift_type) === type);
     const satGroup = typeSlots.filter((slot) => coversOffset(slot, 5));
     const sunGroup = typeSlots.filter((slot) => coversOffset(slot, 6));
-    const weekendCodes = new Set([...satGroup, ...sunGroup].map((slot) => slot.code));
-    if (weekendCodes.size === 0) continue;
+    if (satGroup.length === 0 && sunGroup.length === 0) continue;
 
+    const limitOf = (spec) => {
+      if (!spec?.[type]) return FREE;
+      const max = spec[type].max === null || spec[type].max === undefined ? Infinity : Number(spec[type].max);
+      return { min: Math.max(Number(spec[type].min) || 0, 0), max };
+    };
+    const satSpec = saturday ? limitOf(saturday) : FREE;
+    const sunSpec = sunday ? limitOf(sunday) : FREE;
     const sum = (group) => group.reduce((total, slot) => total + planned.get(slot.code), 0);
-    const limitOf = (spec) => ({
-      min: Math.max(Number(spec?.[type]?.min) || 0, 0),
-      max: spec?.[type]?.max === null || spec?.[type]?.max === undefined ? Infinity : Number(spec[type].max),
-    });
-    const sat = saturday ? limitOf(saturday) : null;
-    const sun = sunday ? limitOf(sunday) : null;
     const originalTotal = sum(typeSlots);
-    let added = 0;
 
-    // Adds one slot to the first definition of `group` that still fits both day maximums.
-    const addOne = (group) => {
-      for (const slot of group) {
-        const inSat = satGroup.includes(slot);
-        const inSun = sunGroup.includes(slot);
-        if (inSat && sat && sum(satGroup) + 1 > sat.max) continue;
-        if (inSun && sun && sum(sunGroup) + 1 > sun.max) continue;
-        planned.set(slot.code, planned.get(slot.code) + 1);
-        added += 1;
-        return true;
+    // Blocks that run through Sunday also run through Saturday, Saturday-only blocks are the rest.
+    const satOnly = satGroup.filter((slot) => !sunGroup.includes(slot));
+    const sunOnly = sunGroup.filter((slot) => !satGroup.includes(slot));
+    const throughBoth = sunGroup.filter((slot) => satGroup.includes(slot));
+
+    // Evenly: add to the definition with the fewest slots / take from the one with the most.
+    const setSum = (group, target) => {
+      if (group.length === 0) return;
+      let guard = 200;
+      while (sum(group) < target && guard-- > 0) {
+        const next = [...group].sort((left, right) => planned.get(left.code) - planned.get(right.code))[0];
+        planned.set(next.code, planned.get(next.code) + 1);
       }
-      return false;
-    };
-    // Spreads evenly: always add to the definition that currently has the fewest slots.
-    const addEvenly = (group, count) => {
-      for (let index = 0; index < count; index++) {
-        const ordered = [...group].sort((left, right) => planned.get(left.code) - planned.get(right.code));
-        if (!addOne(ordered)) break;
+      while (sum(group) > target && guard-- > 0) {
+        const next = [...group].sort((left, right) => planned.get(right.code) - planned.get(left.code))[0];
+        if (planned.get(next.code) === 0) break;
+        planned.set(next.code, planned.get(next.code) - 1);
       }
     };
 
-    // Sunday first (only blocks that run through Sunday), then Saturday, preferring
-    // Saturday-only blocks so Sunday is not pushed above its own maximum.
-    if (sun && sunGroup.length > 0) addEvenly(sunGroup, sun.min - sum(sunGroup));
-    if (sat && satGroup.length > 0) {
-      const saturdayOnly = satGroup.filter((slot) => !sunGroup.includes(slot));
-      const missing = sat.min - sum(satGroup);
-      addEvenly(saturdayOnly.length > 0 ? saturdayOnly : satGroup, missing);
-      addEvenly(satGroup, sat.min - sum(satGroup));
+    if (satOnly.length === 0) {
+      // Every weekend block covers both days: one value has to satisfy both limits (max wins over min).
+      const low = Math.max(satSpec.min, sunSpec.min);
+      const high = Math.min(satSpec.max, sunSpec.max);
+      const value = clamp(sum([...throughBoth, ...sunOnly]), low, high);
+      setSum([...throughBoth, ...sunOnly], value);
+    } else {
+      let sunTarget = clamp(sum(sunGroup), sunSpec.min, sunSpec.max);
+      // Saturday is never emptier than Sunday: the blocks through Sunday work on Saturday as well.
+      sunTarget = Math.min(sunTarget, satSpec.max);
+      const satTarget = clamp(Math.max(sum(satGroup), sunTarget), satSpec.min, satSpec.max);
+      setSum(sunGroup, sunTarget);
+      setSum(satOnly, Math.max(satTarget - sunTarget, 0));
     }
 
-    // Weekday-only blocks give way so the daily total does not grow.
+    // Weekday-only blocks balance the difference so the daily total does not change.
+    const weekendCodes = new Set([...satGroup, ...sunGroup].map((slot) => slot.code));
     const weekdayOnly = typeSlots.filter((slot) => !weekendCodes.has(slot.code));
-    let toRemove = Math.min(added, sum(weekdayOnly), Math.max(sum(typeSlots) - originalTotal, 0));
-    while (toRemove > 0) {
-      const ordered = [...weekdayOnly].sort((left, right) => planned.get(right.code) - planned.get(left.code));
-      const target = ordered.find((slot) => planned.get(slot.code) > 0);
-      if (!target) break;
-      planned.set(target.code, planned.get(target.code) - 1);
-      toRemove -= 1;
-    }
+    const weekdayMax = weekdayMaximums?.[type] === null || weekdayMaximums?.[type] === undefined ? Infinity : Number(weekdayMaximums[type]);
+    const difference = originalTotal - sum(typeSlots);
+    if (difference > 0) setSum(weekdayOnly, Math.min(sum(weekdayOnly) + difference, Math.max(weekdayMax - sum([...weekendCodes].map((code) => ({ code }))), 0)));
+    else if (difference < 0) setSum(weekdayOnly, Math.max(sum(weekdayOnly) + difference, 0));
   }
 
   return slots.map((slot) => ({ ...slot, planned_slots: planned.get(slot.code) ?? slot.planned_slots }));
 }
-
 /* ================================================ */
 /* Variety: avoid the same block week after week     */
 /* ================================================ */

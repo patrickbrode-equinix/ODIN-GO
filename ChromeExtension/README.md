@@ -41,3 +41,40 @@ Update der VM; die Erweiterung muss nicht erneut auf allen PCs verteilt werden.
 Eine neue Erweiterungsversion ist nur noch erforderlich, wenn sich die
 Jarvis-Integration, Chrome-Berechtigungen, SSO-Erkennung oder die sichere
 Kommunikation zwischen Jarvis und VM selbst aendert.
+
+## Einstellungen zentral verteilen (empfohlen)
+
+Bisher musste jeder Mitarbeiter den App-Schlüssel selbst in den Erweiterungsoptionen eintragen. Fehlt er
+oder ist er nach einer Schlüsselrotation veraltet, antwortet das Backend mit „Invalid local application key“
+(HTTP 401): Das Profil wird erkannt, aber ODIN GO ist „nicht erreichbar“. Das betrifft nur einzelne PCs.
+
+Ab Version 0.9.14 liest die Erweiterung ihre Einstellungen in dieser Reihenfolge:
+
+1. **Unternehmens-Richtlinie** (`chrome.storage.managed`, Schema: `managed_schema.json`)
+2. Werte, die auf diesem PC in den Optionen gespeichert wurden
+3. Chrome-Sync des Profils
+
+Die IT kann `plannerUrl` und `apiKey` per Chrome-Richtlinie für alle PCs setzen (Intune/GPO,
+Richtlinie „3rdparty“ der Erweiterung), z. B.:
+
+```json
+{
+  "3rdparty": {
+    "extensions": {
+      "<Erweiterungs-ID>": {
+        "plannerUrl": "https://eqx-portal.corp.equinix.com",
+        "apiKey": "<SHIFTPLANNER_API_KEY>"
+      }
+    }
+  }
+}
+```
+
+Diese Werte haben Vorrang, die Optionsseite zeigt sie gesperrt an. Bei einer Schlüsselrotation reicht dann
+eine einzige Änderung der Richtlinie. Den Schlüssel nicht in das Repository schreiben.
+
+## Jarvis-Benutzer erkennen
+
+Der Benutzer wird zuerst aus dem sichtbaren Jarvis-Profil gelesen. Ist es nicht geöffnet oder anders aufgebaut,
+liest die Erweiterung ihn aus der Mendix-Sitzung der Seite (`mx.session`). Dafür braucht sie die
+Berechtigung `scripting`.

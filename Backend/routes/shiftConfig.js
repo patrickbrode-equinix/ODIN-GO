@@ -910,8 +910,11 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
     // Half shifts are operational planning details, not employee-selectable preferences.
     // Filter them server-side as well so stale browser bundles cannot reintroduce them.
     const employeePreferenceExcludedShiftCodes = new Set(['HE1', 'HE2', 'HL1', 'HL2']);
+    // Wishes refer to the base shift: weekend variants and NK are mapped (E1WE -> E1, L1WE -> L1, NK -> N).
+    const baseShiftCodes = { E1SA: 'E1', E1WE: 'E1', E2SA: 'E2', E2WE: 'E2', L1WE: 'L1', NK: 'N', NS: 'N' };
     const sanitizeShiftCodes = (value) => Array.isArray(value)
       ? [...new Set(value.map((code) => String(code || '').trim().toUpperCase())
+        .map((code) => baseShiftCodes[code] || code)
         .filter((code) => code && !employeePreferenceExcludedShiftCodes.has(code)))]
       : [];
     const parsedNightBlockLimit = Number.parseInt(String(max_nights_per_month ?? ''), 10);

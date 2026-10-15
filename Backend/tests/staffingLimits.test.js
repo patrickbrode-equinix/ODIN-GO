@@ -13,8 +13,12 @@ describe('resolveStaffingDayContext', () => {
     assert.equal(resolveStaffingDayContext({ dayOfWeek: 3 }), 'weekday');
     assert.equal(resolveStaffingDayContext({ dayOfWeek: 6 }), 'saturday');
     assert.equal(resolveStaffingDayContext({ dayOfWeek: 0 }), 'sunday');
-    assert.equal(resolveStaffingDayContext({ dayOfWeek: 3, holidayName: 'Neujahr' }), 'holiday');
-    assert.equal(resolveStaffingDayContext({ dayOfWeek: 0, holidayName: 'Neujahr' }), 'holiday');
+    assert.equal(resolveStaffingDayContext({ dayOfWeek: 3, holidayName: 'Neujahr' }), 'holiday_international');
+    assert.equal(resolveStaffingDayContext({ dayOfWeek: 0, holidayName: '1. Weihnachtstag' }), 'holiday_international');
+    // Holidays that only exist in Germany (and the company holidays) are national.
+    assert.equal(resolveStaffingDayContext({ dayOfWeek: 4, holidayName: 'Christi Himmelfahrt' }), 'holiday_national');
+    assert.equal(resolveStaffingDayContext({ dayOfWeek: 4, holidayName: 'Tag der Deutschen Einheit' }), 'holiday_national');
+    assert.equal(resolveStaffingDayContext({ dayOfWeek: 4, holidayName: 'Heiligabend' }), 'holiday_national');
   });
 });
 
@@ -40,7 +44,7 @@ describe('buildStaffingForContext', () => {
   });
 
   it('falls back to the defaults for missing rows', () => {
-    const { rules } = buildStaffingForContext({ context: 'holiday', weekdayRules, weekdayMaximums, dayLimitMap: buildDayLimitMap([]) });
+    const { rules } = buildStaffingForContext({ context: 'holiday_national', weekdayRules, weekdayMaximums, dayLimitMap: buildDayLimitMap([]) });
     assert.equal(rules.early, 4);
     assert.equal(rules.late, 1);
   });
@@ -85,9 +89,10 @@ describe('applyWeekendBlockSlots (Monday decides the weekend headcount)', () => 
       sunday: { early: { min: 4, max: 6 } },
     });
     assert.equal(planned(result).E1WE + planned(result).E2WE, 4);
+    // Saturday needs 4 as well, and the two blocks through Sunday already cover that.
+    assert.equal(planned(result).E1SA + planned(result).E2SA, 0);
     assert.equal(total(result), 6);
-    assert.equal(planned(result).E1, 0);
-    assert.equal(planned(result).E2, 0);
+    assert.equal(planned(result).E1 + planned(result).E2, 2);
   });
 
   it('does not touch anything when the weekend minimum is already met', () => {
@@ -106,6 +111,50 @@ describe('applyWeekendBlockSlots (Monday decides the weekend headcount)', () => 
       sunday: { early: { min: 5, max: 3 } },
     });
     assert.ok(planned(result).E1WE + planned(result).E2WE <= 3);
+  });
+
+  it('cuts the weekend blocks down to the Saturday and Sunday maximum and keeps the daily total', () => {
+    const heavy = [
+      slot('E1', 5, [1, 2, 3, 4, 5], 5), slot('E2', 5, [1, 2, 3, 4, 5], 5),
+      slot('E1SA', 6, [1, 2, 3, 4, 5, 6], 2), slot('E2SA', 6, [1, 2, 3, 4, 5, 6], 2),
+      slot('E1WE', 7, all, 3), slot('E2WE', 7, all, 3),
+    ];
+    const result = applyWeekendBlockSlots({
+      slots: heavy,
+      saturday: { early: { min: 3, max: 5 } },
+      sunday: { early: { min: 1, max: 3 } },
+    });
+    const sunday = planned(result).E1WE + planned(result).E2WE;
+    const saturday = sunday + planned(result).E1SA + planned(result).E2SA;
+    assert.ok(sunday >= 1 && sunday <= 3, `Sunday ${sunday}`);
+    assert.ok(saturday >= 3 && saturday <= 5, `Saturday ${saturday}`);
+    assert.equal(total(result), 20);
+  });
+
+  it('respects the weekday maximum when it moves slots to the weekday blocks', () => {
+    const heavy = [
+      slot('E1', 5, [1, 2, 3, 4, 5], 5), slot('E2', 5, [1, 2, 3, 4, 5], 5),
+      slot('E1WE', 7, all, 3), slot('E2WE', 7, all, 3),
+    ];
+    const result = applyWeekendBlockSlots({
+      slots: heavy,
+      saturday: { early: { min: 0, max: 2 } },
+      sunday: { early: { min: 0, max: 2 } },
+      weekdayMaximums: { early: 14 },
+    });
+    assert.equal(planned(result).E1WE + planned(result).E2WE, 2);
+    assert.ok(total(result) <= 14, `total ${total(result)}`);
+  });
+
+  it('keeps a single weekend block family inside both limits (late)', () => {
+    const late = [{ code: 'L1', shift_type: 'late', series_days: 5, applicable_days: [1, 2, 3, 4, 5], planned_slots: 2 }, { code: 'L1WE', shift_type: 'late', series_days: 7, applicable_days: all, planned_slots: 6 }];
+    const result = applyWeekendBlockSlots({
+      slots: late,
+      saturday: { late: { min: 1, max: 3 } },
+      sunday: { late: { min: 2, max: 3 } },
+    });
+    assert.equal(planned(result).L1WE, 3);
+    assert.equal(planned(result).L1, 5);
   });
 
   it('ignores days outside the plan (null limits)', () => {

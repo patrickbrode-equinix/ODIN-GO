@@ -149,7 +149,7 @@ describe("computeUnderstaffWarnings with global day limits", () => {
     const warnings = computeUnderstaffWarnings(scheduleFor(16, ["E1"]), 2026, 8, 31, SUNDAY, {
       definitions: defs,
       staffingRules: rules,
-      staffingDayLimits: [{ day_context: "holiday", shift_type: "early", min_count: 3, max_count: 4 }],
+      staffingDayLimits: [{ day_context: "holiday_national", shift_type: "early", min_count: 3, max_count: 4 }],
       holidays: { "2026-08-16": "Testfeiertag" },
     }).filter((warning) => warning.dateKey === "2026-08-16" && warning.shiftType === "early");
     expect(warnings[0]).toMatchObject({ max: 4, actual: 1, missing: 3, severity: "critical" });

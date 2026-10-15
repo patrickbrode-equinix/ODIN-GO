@@ -754,7 +754,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const isPartialPeriod = planningStartDay !== 1 || planningEndDay !== numDays;
   const dbsPlanningConfig = await loadDbsPlanningConfig();
   const coloPlanningConfig = await loadColoPlanningConfig();
-  const holidayStaffingConfig = await loadHolidayStaffingConfig();
+  // Per-holiday maximums were replaced by the global national / international holiday limits.
+  const holidayStaffingConfig = {};
   const defRes = await pool.query(`
     SELECT definition.*, COALESCE(
       jsonb_agg(
@@ -1350,7 +1351,17 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (!rule) return true;
     const code = String(definition?.code || '').trim().toUpperCase();
     if (code === dbsPlanningConfig.shiftCode) return true;
-    if (rule.otherShiftCodes.length > 0 && !rule.otherShiftCodes.some((allowed) => getPreferenceShiftCode(allowed) === getPreferenceShiftCode(code))) return false;
+    if (rule.otherShiftCodes.length > 0) {
+      // Tokens EARLY/LATE/NIGHT (shift type) or legacy shift codes.
+      const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
+      const typeToken = typeKey === 'night' ? 'NIGHT' : typeKey === 'late' ? 'LATE' : typeKey === 'early' ? 'EARLY' : '';
+      const allowedByRule = rule.otherShiftCodes.some((allowed) => {
+        const token = String(allowed || '').trim().toUpperCase();
+        if (token === 'EARLY' || token === 'LATE' || token === 'NIGHT') return token === typeToken;
+        return getPreferenceShiftCode(token) === getPreferenceShiftCode(code);
+      });
+      if (!allowedByRule) return false;
+    }
     if (rule.otherDaysPerMonth !== null && countDaysOutsideDbs(employee) + additionalDays > rule.otherDaysPerMonth) return false;
     return true;
   };
@@ -1716,6 +1727,27 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (!dbsReservedDays.has(name)) dbsReservedDays.set(name, new Set());
       dbsReservedDays.get(name).add(day);
     }
+    // A DBS week should be one connected run of the owner. Report every week that is not complete
+    // (fewer days than the owner's pattern, or days without DBS), so gaps never stay unnoticed.
+    weeks.forEach((days, index) => {
+      const owner = weekOwners[index];
+      const entry = owner ? poolEntryByName.get(owner) : null;
+      const expectedDays = days.filter((day) => entry?.workingWeekdays?.includes(dayOfWeek(year, mon, day)));
+      const plannedDays = days.filter((day) => dbsRoster.has(day));
+      const ownDays = days.filter((day) => dbsRoster.get(day) === owner);
+      if (days.length < 5 && index > 0 && index < weeks.length - 1) return;
+      if (owner && ownDays.length >= expectedDays.length && plannedDays.length === ownDays.length) return;
+      conflicts.push({
+        day: days[0],
+        date: `${month}-${String(days[0]).padStart(2, '0')}`,
+        shift: dbsPlanningConfig.shiftCode,
+        severity: 'warning',
+        type: 'dbs_week_incomplete',
+        message: owner
+          ? `${dbsPlanningConfig.shiftCode}-Woche ab ${days[0]}.: ${owner} deckt ${ownDays.length} von ${expectedDays.length} Tagen ab (Abwesenheit, Ruhezeit oder Wunschtage verhindern eine durchgehende Woche).`
+          : `${dbsPlanningConfig.shiftCode}-Woche ab ${days[0]}.: kein Pool-Mitglied verfügbar.`,
+      });
+    });
     planReport.dbsRotation = weeks.map((days, index) => ({
       week: `${month}-${String(days[0]).padStart(2, '0')}`,
       owner: weekOwners[index],
@@ -1832,7 +1864,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       return spec;
     };
     const shiftSlots = dow === 1
-      ? applyWeekendBlockSlots({ slots: baseShiftSlots, saturday: weekendLimitsFor(5), sunday: weekendLimitsFor(6) })
+      ? applyWeekendBlockSlots({
+        slots: baseShiftSlots,
+        saturday: weekendLimitsFor(5),
+        sunday: weekendLimitsFor(6),
+        weekdayMaximums: { early: staffingMaximums.early ?? null, late: staffingMaximums.late ?? null },
+      })
       : baseShiftSlots;
 
     const availableEmployeeSet = new Set(availableForDay);
@@ -2221,7 +2258,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (fairnessRules.balance_total_load) {
             const avgHours = activeEmployees.reduce((sum, currentEmployee) => sum + empHours[currentEmployee], 0) / activeEmployees.length || 0;
             const diffHours = empHours[employee] - avgHours;
-            score -= diffHours * 8;
+            // fairness_priority (default 80 = factor 1) scales how strongly hour differences are leveled.
+            score -= diffHours * 8 * (Math.max(0, Math.min(Number(planConfig.fairness_priority ?? 80), 100)) / 80);
             if (diffHours < -8) reasons.push('Fairness: Weniger Stunden als Durchschnitt');
             if (diffHours > 8) reasons.push('Fairness: Mehr Stunden als Durchschnitt');
           }
@@ -2555,6 +2593,35 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (previousType === 'late' && currentType === 'early' && rotation.late_to_early_forbidden) return true;
     if (currentType === 'late' && nextType === 'early' && rotation.late_to_early_forbidden) return true;
 
+    // Minimum rest between two shifts on consecutive days (setting "min_hours_between_shifts").
+    const minRestHours = Number(rotation.min_hours_between_shifts) || 0;
+    if (minRestHours > 0) {
+      const toHours = (value) => {
+        const [hours, minutes] = String(value || '').slice(0, 5).split(':').map(Number);
+        return Number.isFinite(hours) ? hours + (Number.isFinite(minutes) ? minutes : 0) / 60 : null;
+      };
+      const span = (definition) => {
+        const start = toHours(definition?.start_time);
+        let end = toHours(definition?.end_time);
+        if (start === null || end === null) return null;
+        end += 24 * (Number(definition?.end_day_offset) || 0);
+        if (end <= start) end += 24;
+        return { start, end };
+      };
+      const definitionOnDay = (otherDay) => shiftDefinitionByCode.get(String(empDayAssignment[employee]?.[otherDay] || '').trim().toUpperCase());
+      const own = span(shiftDef);
+      const before = definitionOnDay(day - 1);
+      const after = definitionOnDay(day + 1);
+      if (own && before && String(before.code).toUpperCase() !== dbsPlanningConfig.shiftCode) {
+        const previous = span(before);
+        if (previous && 24 + own.start - previous.end < minRestHours) return true;
+      }
+      if (own && after && String(after.code).toUpperCase() !== dbsPlanningConfig.shiftCode) {
+        const following = span(after);
+        if (following && 24 + following.start - own.end < minRestHours) return true;
+      }
+    }
+
     return false;
   };
   const violatesWeekendRecoveryAfterBlock = (employee, workedDays) => {
@@ -2734,9 +2801,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const catchupType = normalizePlanningShiftTypeKey(catchupDefinition.shift_type);
         const colleaguesOfTypeThatDay = shifts.filter((entry) => Number(entry.day) === day
           && normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type) === catchupType).length;
+        // Avoid isolated single days: a filler day that touches an existing work day extends a block,
+        // a day with no working neighbour would be a lone shift between free days.
+        const touchesWorkDay = Boolean(empDayAssignment[employee][day - 1]) || Boolean(empDayAssignment[employee][day + 1]);
         availableDays.push({
           day,
-          score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) - (recoveryEntry ? 50 : 0)
+          score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) + (touchesWorkDay ? 40 : -80) - (recoveryEntry ? 50 : 0)
             - colleaguesOfTypeThatDay * 8 * (varietyPriority / 60)
             - getBlockedDayPenalty(employee, dow) - getShiftWishPenaltyOnDate(employee, dateStr, catchupDefinition.code),
         });

@@ -9,19 +9,32 @@
 /* L1+L2; Sunday has only L1WE).                    */
 /* ================================================ */
 
-export const STAFFING_DAY_CONTEXTS = Object.freeze(['weekday', 'saturday', 'sunday', 'holiday']);
-export const STAFFING_DAY_LIMIT_CONTEXTS = Object.freeze(['saturday', 'sunday', 'holiday']);
+export const STAFFING_DAY_CONTEXTS = Object.freeze(['weekday', 'saturday', 'sunday', 'holiday_national', 'holiday_international']);
+export const STAFFING_DAY_LIMIT_CONTEXTS = Object.freeze(['saturday', 'sunday', 'holiday_national', 'holiday_international']);
+
+/**
+ * Public holidays that are holidays in other countries too (the company works internationally).
+ * Every other German public holiday (and the company holidays 24.12. / 31.12.) is "national".
+ */
+export const INTERNATIONAL_HOLIDAYS = Object.freeze([
+  'Neujahr', 'Karfreitag', 'Ostermontag', 'Tag der Arbeit', '1. Weihnachtstag', '2. Weihnachtstag',
+]);
+
+export function holidayCategory(holidayName) {
+  return INTERNATIONAL_HOLIDAYS.includes(String(holidayName || '').trim()) ? 'holiday_international' : 'holiday_national';
+}
 export const STAFFING_DAY_LIMIT_TYPES = Object.freeze(['early', 'late']);
 
 export const DEFAULT_STAFFING_DAY_LIMITS = Object.freeze({
   saturday: Object.freeze({ early: Object.freeze({ min_count: 4, max_count: 6 }), late: Object.freeze({ min_count: 1, max_count: 3 }) }),
   sunday: Object.freeze({ early: Object.freeze({ min_count: 4, max_count: 6 }), late: Object.freeze({ min_count: 1, max_count: 3 }) }),
-  holiday: Object.freeze({ early: Object.freeze({ min_count: 4, max_count: 6 }), late: Object.freeze({ min_count: 1, max_count: 3 }) }),
+  holiday_national: Object.freeze({ early: Object.freeze({ min_count: 4, max_count: 6 }), late: Object.freeze({ min_count: 1, max_count: 3 }) }),
+  holiday_international: Object.freeze({ early: Object.freeze({ min_count: 4, max_count: 6 }), late: Object.freeze({ min_count: 1, max_count: 3 }) }),
 });
 
 /** A public holiday wins over the weekday of the date. */
 export function resolveStaffingDayContext({ dayOfWeek, holidayName = null } = {}) {
-  if (holidayName) return 'holiday';
+  if (holidayName) return holidayCategory(holidayName);
   if (Number(dayOfWeek) === 6) return 'saturday';
   if (Number(dayOfWeek) === 0) return 'sunday';
   return 'weekday';

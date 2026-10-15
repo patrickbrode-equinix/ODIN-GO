@@ -25,10 +25,21 @@ function showStatus(message, ok = true) {
   status.style.color = ok ? "#7ce6ad" : "#ff9b9b";
 }
 
-chrome.storage.sync.get(DEFAULTS).then((settings) => {
+chrome.runtime.sendMessage({ type: "GET_SETTINGS" }).then((response) => {
+  const settings = response?.ok ? response.settings : DEFAULTS;
   plannerUrl.value = settings.plannerUrl;
   apiKey.value = settings.apiKey;
-});
+  if (settings.managed) {
+    // Values come from the company policy: they cannot be changed here.
+    plannerUrl.disabled = true;
+    apiKey.disabled = true;
+    document.getElementById("save").disabled = true;
+    showStatus("Die Einstellungen werden zentral von der IT verwaltet.");
+  }
+}).catch(() => chrome.storage.sync.get(DEFAULTS).then((settings) => {
+  plannerUrl.value = settings.plannerUrl;
+  apiKey.value = settings.apiKey;
+}));
 
 document.getElementById("save").addEventListener("click", async () => {
   const next = {
@@ -40,7 +51,9 @@ document.getElementById("save").addEventListener("click", async () => {
     showStatus(validationError, false);
     return;
   }
-  await chrome.storage.sync.set(next);
+  // Saved on this PC (works without a Chrome sign-in) and in Chrome sync (other devices of the same profile).
+  await chrome.storage.local.set({ odinGoSettings: next });
+  await chrome.storage.sync.set(next).catch(() => {});
   showStatus("Gespeichert");
   window.setTimeout(() => { status.textContent = ""; }, 2500);
 });

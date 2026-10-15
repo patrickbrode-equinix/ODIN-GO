@@ -1,0 +1,15 @@
+{
+  "type": "object",
+  "properties": {
+    "plannerUrl": {
+      "title": "ODIN GO Adresse",
+      "description": "HTTPS-Basisadresse von ODIN GO, z. B. https://eqx-portal.corp.equinix.com",
+      "type": "string"
+    },
+    "apiKey": {
+      "title": "App-Schlüssel",
+      "description": "SHIFTPLANNER_API_KEY des Backends. Wird zentral verteilt, sodass kein Mitarbeiter ihn eintragen muss.",
+      "type": "string"
+    }
+  }
+}

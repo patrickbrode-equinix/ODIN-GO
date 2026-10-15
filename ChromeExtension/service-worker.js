@@ -91,7 +91,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message?.type !== "UNLOCK_ADMIN") return false;
 
-  chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
+  loadSettings().then(async (settings) => {
     try {
       logConnection("Admin-Entsperrung", { url: `${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-admin/unlock` });
       const response = await fetch(`${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-admin/unlock`, {
@@ -125,7 +125,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "GET_ODIN_GO_PREFERENCES" && message?.type !== "SAVE_ODIN_GO_PREFERENCES") return false;
 
-  chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
+  loadSettings().then(async (settings) => {
     try {
       logConnection(message.type, { url: `${normalizeBaseUrl(settings.plannerUrl)}/api/odin-go/preferences` });
       const isSave = message.type === "SAVE_ODIN_GO_PREFERENCES";
@@ -163,7 +163,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
+  loadSettings().then(async (settings) => {
     try {
       logConnection("Jarvis-Identität", { url: `${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-identity/verify` });
       const response = await fetch(`${normalizeBaseUrl(settings.plannerUrl)}/api/standalone-identity/verify`, {
@@ -194,7 +194,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type !== "GET_JARVIS_NOTIFICATIONS" && message?.type !== "DISMISS_JARVIS_NOTIFICATION") return false;
 
-  chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
+  loadSettings().then(async (settings) => {
     try {
       const isDismiss = message.type === "DISMISS_JARVIS_NOTIFICATION";
       const response = await fetch(
@@ -251,7 +251,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "GET_JARVIS_STAFFING") return false;
 
-  chrome.storage.sync.get(DEFAULTS).then(async (settings) => {
+  loadSettings().then(async (settings) => {
     try {
       const response = await fetch(`${normalizeBaseUrl(settings.plannerUrl)}/api/jarvis-notifications/staffing`, {
         headers: {
@@ -268,5 +268,84 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, message: error.message });
     }
   });
+  return true;
+});
+
+/* ------------------------------------------------ */
+/* SETTINGS: policy > this PC > Chrome sync         */
+/* ------------------------------------------------ */
+
+/**
+ * The settings used to live only in chrome.storage.sync. Without a signed-in Chrome profile that is
+ * just local storage of this one PC, so every employee had to type the key by hand and a rotated
+ * key broke the PCs one by one. Now an IT policy (chrome.storage.managed, see managed_schema.json)
+ * wins, then the values saved on this PC, then Chrome sync, then the defaults.
+ */
+async function loadSettings() {
+  const [managed, local, sync] = await Promise.all([
+    chrome.storage.managed.get(null).catch(() => ({})),
+    chrome.storage.local.get({ odinGoSettings: null }).catch(() => ({ odinGoSettings: null })),
+    chrome.storage.sync.get(DEFAULTS).catch(() => ({ ...DEFAULTS })),
+  ]);
+  const saved = local.odinGoSettings && typeof local.odinGoSettings === "object" ? local.odinGoSettings : {};
+  const pick = (key) => String(managed?.[key] || saved[key] || sync?.[key] || DEFAULTS[key] || "").trim();
+  return {
+    plannerUrl: pick("plannerUrl") || DEFAULTS.plannerUrl,
+    apiKey: pick("apiKey"),
+    managed: Boolean(managed?.apiKey || managed?.plannerUrl),
+  };
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type !== "GET_SETTINGS") return false;
+  loadSettings()
+    .then((settings) => sendResponse({ ok: true, settings }))
+    .catch((error) => sendResponse({ ok: false, message: error.message }));
+  return true;
+});
+
+/* ------------------------------------------------ */
+/* JARVIS SESSION (Mendix client)                   */
+/* ------------------------------------------------ */
+
+/**
+ * Jarvis is a Mendix app. Its client object `mx` knows the signed-in user even when the profile
+ * menu was never opened (the DOM probe then finds nothing). The code runs in the page's own
+ * JavaScript world, which is not subject to the page's content security policy.
+ */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "READ_JARVIS_SESSION") return false;
+  const tabId = sender.tab?.id;
+  const senderUrl = sender.tab?.url || sender.url || "";
+  if (!tabId || !senderUrl.startsWith("https://jarvis-emea.equinix.com/")) {
+    sendResponse({ ok: false, message: "Nur aus Jarvis möglich." });
+    return false;
+  }
+  chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: () => {
+      const result = { userName: "", email: "", displayName: "" };
+      try {
+        const session = window.mx && window.mx.session;
+        if (!session) return result;
+        const user = (session.sessionData && session.sessionData.user) || {};
+        const candidates = [
+          typeof session.getUserName === "function" ? session.getUserName() : "",
+          user.name, user.userName, user.username, user.login,
+        ].map((value) => (typeof value === "string" ? value.trim() : "")).filter(Boolean);
+        result.userName = candidates[0] || "";
+        result.email = candidates.find((value) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) || "";
+        const full = [user.firstName, user.lastName].filter(Boolean).join(" ") || user.fullName || user.displayName || "";
+        result.displayName = typeof full === "string" ? full.trim() : "";
+      } catch {
+        // Not a Mendix page state we know: report nothing.
+      }
+      return result;
+    },
+  }).then((results) => {
+    const value = results?.[0]?.result || {};
+    sendResponse({ ok: Boolean(value.userName || value.email), session: value });
+  }).catch((error) => sendResponse({ ok: false, message: error.message }));
   return true;
 });

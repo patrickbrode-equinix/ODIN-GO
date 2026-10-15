@@ -129,7 +129,8 @@ interface Preferences {
 const SHIFT_CODES = ['E1', 'E2', 'L1', 'L2', 'N'];
 // Legacy half-shift definitions are planning-only and must never be selectable
 // as an employee preference.
-const EMPLOYEE_PREFERENCE_EXCLUDED_CODES = new Set(['DBS', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1WE', 'HE1', 'HE2', 'HL1', 'HL2']);
+// NK / NS are the short night: the admin chooses the night model (7 nights or short) separately, so it is no shift wish.
+const EMPLOYEE_PREFERENCE_EXCLUDED_CODES = new Set(['DBS', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1WE', 'NK', 'NS', 'HE1', 'HE2', 'HL1', 'HL2']);
 const SHIFT_LABELS_DE: Record<string, string> = { E1: 'Frühschicht 1', E2: 'Frühschicht 2', L1: 'Spätschicht 1', L2: 'Spätschicht 2', N: 'Nachtschicht' };
 const SHIFT_LABELS_EN: Record<string, string> = { E1: 'Early shift 1', E2: 'Early shift 2', L1: 'Late shift 1', L2: 'Late shift 2', N: 'Night shift' };
 const DAY_LABELS_DE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];

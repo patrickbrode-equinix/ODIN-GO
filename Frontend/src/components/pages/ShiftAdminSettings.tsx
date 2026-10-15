@@ -317,6 +317,19 @@ interface SpecialPoolEntry {
   duration_hours?: number | null;
 }
 
+/** Wishes for the time outside DBS are stored as shift types (EARLY / LATE / NIGHT); legacy shift codes are converted. */
+function toOutsideDbsTypes(value?: string[] | null): string[] {
+  const types = new Set<string>();
+  for (const raw of value || []) {
+    const code = String(raw || "").trim().toUpperCase();
+    if (code === "EARLY" || code === "LATE" || code === "NIGHT") types.add(code);
+    else if (code.startsWith("E")) types.add("EARLY");
+    else if (code.startsWith("L")) types.add("LATE");
+    else if (code.startsWith("N")) types.add("NIGHT");
+  }
+  return ["EARLY", "LATE", "NIGHT"].filter((type) => types.has(type));
+}
+
 /** Paid hours for own DBS times: presence minus 1 h break from 6 h presence (mirrors the backend). */
 function getDbsOwnPaidHours(start?: string | null, end?: string | null): number | null {
   const toMinutes = (value?: string | null) => {
@@ -750,12 +763,14 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [staffingRules, setStaffingRules] = useState<StaffingRuleRow[]>([]);
   const [shiftDefaults, setShiftDefaults] = useState<Record<string, { start_time: string; end_time: string; duration_hours: number; min_staff: number; max_staff: number }>>({});
   const [newDbsEmployee, setNewDbsEmployee] = useState('');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [newDefinition, setNewDefinition] = useState({ code: '', name: '', shift_type: 'early', start_time: '06:30', end_time: '15:00', duration_hours: 8, min_staff: 1, max_staff: 5 });
   const [activeShiftModes, setActiveShiftModes] = useState<Record<string, number>>({});
-  // Base shifts a DBS employee can be restricted to outside DBS (weekend variants follow their base shift).
-  const outsideDbsShiftOptions = definitions
-    .filter((definition) => definition.is_active && GLOBAL_STAFFING_TYPES.has(definition.shift_type) && !["E1SA", "E1WE", "E2SA", "E2WE", "L1WE", "NK"].includes(String(definition.code).toUpperCase()))
-    .map((definition) => String(definition.code).toUpperCase());
+  // Outside DBS an employee can be limited to shift types (multiple choice): early, late, night.
+  const outsideDbsShiftOptions = ["EARLY", "LATE", "NIGHT"];
+  const outsideDbsLabels: Record<string, string> = isGerman
+    ? { EARLY: "Frühschicht", LATE: "Spätschicht", NIGHT: "Nachtschicht" }
+    : { EARLY: "Early", LATE: "Late", NIGHT: "Night" };
   const normalNightStaffCap = useMemo(
     () => Math.max(0, Number(staffingRules.find((rule) => rule.shift_type === 'night')?.max_count || 0)),
     [staffingRules]
@@ -973,7 +988,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         free_days_after_block: Math.max(0, Math.min(14, Number(entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock) || 0)),
         start_time: entry.start_time || null,
         end_time: entry.end_time || null,
-        other_shift_codes: (entry.other_shift_codes || []).filter((code) => outsideDbsShiftOptions.includes(code)),
+        other_shift_codes: toOutsideDbsTypes(entry.other_shift_codes),
         other_days_per_month: entry.other_days_per_month ?? null,
       }));
       const { data } = await api.put(`/shift-config/special-pools/${shiftCode}`, { assignments: payload });
@@ -1143,6 +1158,78 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       });
       await api.put('/app-settings', { 'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes) });
       showToast(isGerman ? 'Colo-Kompetenzplanung gespeichert.' : 'Colo competency planning saved.');
+    } catch (error: any) {
+      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
+    } finally {
+      setSaving('');
+    }
+  };
+
+  /** One central save for every section of this page. Reloads afterwards so the screen shows what is really stored. */
+  const saveEverything = async () => {
+    const incompleteDbs = dbsPool.find((entry) => Boolean(entry.start_time) !== Boolean(entry.end_time));
+    if (incompleteDbs) {
+      showToast(isGerman ? `Bei ${incompleteDbs.employee_name} fehlt Beginn oder Ende (DBS).` : `${incompleteDbs.employee_name} needs both start and end (DBS).`, 'err');
+      return;
+    }
+    setSaving('all');
+    try {
+      for (const definition of definitions) {
+        await api.put(`/shift-config/definitions/${definition.id}`, {
+          ...definition,
+          start_time: String(definition.start_time || '').slice(0, 5),
+          end_time: String(definition.end_time || '').slice(0, 5),
+          applicable_days: normalizeApplicableDays(definition.applicable_days),
+        });
+      }
+      if (rotation) await api.put('/shift-config/rotation-rules', rotation);
+      if (fairness) await api.put('/shift-config/fairness-rules', fairness);
+      if (planConfig) await api.put('/shift-config/planning-config', planConfig);
+      await api.put('/shift-config/short-night-options', shortNightOptions);
+      const shiftCode = String(dbsConfig.shiftCode || 'DBS').trim().toUpperCase() || 'DBS';
+      await api.put('/app-settings', {
+        'shiftplan.max_overtime_hours': overtimeConfig.maxOvertimeHours,
+        'shiftplan.overtime_mode': overtimeConfig.overtimeMode,
+        'shiftplan.max_daily_hours': overtimeConfig.maxDailyHours,
+        'shiftplan.max_weekly_hours': overtimeConfig.maxWeeklyHours,
+        'shiftplan.daily_mode': overtimeConfig.dailyMode,
+        'shiftplan.weekly_mode': overtimeConfig.weeklyMode,
+        'shiftplan.issue_panel_enabled': advancedSettings.issuePanelEnabled,
+        'shiftplan.issue_show_solutions': advancedSettings.issueShowSolutions,
+        'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
+        'shiftplan.blocked_days_enabled': advancedSettings.blockedDaysEnabled,
+        'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
+        'shiftplan.preferred_colleagues_enabled': advancedSettings.preferredColleaguesEnabled,
+        'shiftplan.variety_priority': advancedSettings.varietyPriority,
+        'shiftplan.dbs_enabled': dbsConfig.enabled,
+        'shiftplan.dbs_weekdays': JSON.stringify([1, 2, 3, 4, 5, 6, 0]),
+        'shiftplan.dbs_shift_code': shiftCode,
+        'shiftplan.dbs_required_staff': 1,
+        'shiftplan.dbs_free_days_after_block': dbsConfig.freeDaysAfterBlock,
+        'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
+        'shiftplan.colo_enabled': coloConfig.enabled,
+        'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
+        'shiftplan.colo_weekday_preparation_staff': Math.max(0, Math.trunc(coloConfig.weekdayPreparationStaff)),
+        'shiftplan.colo_night_staff': Math.max(0, Math.trunc(coloConfig.nightStaff)),
+        'shiftplan.colo_weekend_day_staff': Math.max(0, Math.trunc(coloConfig.weekendDayStaff)),
+        'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes),
+      });
+      await api.put(`/shift-config/special-pools/${shiftCode}`, {
+        assignments: dbsPool.map((entry, index) => ({
+          employee_name: entry.employee_name,
+          monthly_max_assignments: 31,
+          sort_order: index,
+          working_weekdays: normalizeApplicableDays(entry.working_weekdays),
+          free_days_after_block: Math.max(0, Math.min(14, Number(entry.free_days_after_block ?? dbsConfig.freeDaysAfterBlock) || 0)),
+          start_time: entry.start_time || null,
+          end_time: entry.end_time || null,
+          other_shift_codes: toOutsideDbsTypes(entry.other_shift_codes),
+          other_days_per_month: entry.other_days_per_month ?? null,
+        })),
+      });
+      await loadAll();
+      setLastSavedAt(new Date());
+      showToast(isGerman ? 'Alle Einstellungen gespeichert' : 'All settings saved');
     } catch (error: any) {
       showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
     } finally {
@@ -1610,10 +1697,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   </div>
 
                   <div className="flex flex-wrap justify-end gap-2">
-                    <button onClick={() => void saveDefinition(definition)} disabled={saving === `def-${definition.id}`} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50">
-                      <Save className="h-4 w-4" />
-                      {saving === `def-${definition.id}` ? t("shiftAdmin.defSaving") : t("shiftAdmin.defSave")}
-                    </button>
                     {shiftDefaults[String(definition.code || '').trim().toUpperCase()] ? (() => {
                       const defaults = shiftDefaults[String(definition.code || '').trim().toUpperCase()];
                       return (
@@ -1790,10 +1873,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {outsideDbsShiftOptions.map((code) => {
-                      const selected = (entry.other_shift_codes || []).includes(code);
+                      const selected = toOutsideDbsTypes(entry.other_shift_codes).includes(code);
                       return <button key={`${entry.employee_name}-other-${code}`} type="button"
-                        onClick={() => updateEntry({ other_shift_codes: selected ? (entry.other_shift_codes || []).filter((value) => value !== code) : [...(entry.other_shift_codes || []), code] })}
-                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${selected ? 'bg-sky-400/20 text-sky-100 ring-1 ring-sky-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>{code}</button>;
+                        onClick={() => updateEntry({ other_shift_codes: selected ? toOutsideDbsTypes(entry.other_shift_codes).filter((value) => value !== code) : [...toOutsideDbsTypes(entry.other_shift_codes), code] })}
+                        className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${selected ? 'bg-sky-400/20 text-sky-100 ring-1 ring-sky-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>{outsideDbsLabels[code]}</button>;
                     })}
                   </div>
                   <div className="mt-3 w-full sm:max-w-xs">
@@ -1809,12 +1892,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           })}
         </div>
 
-        <div className="mt-4 flex justify-end">
-          <button onClick={saveDbs} disabled={saving === 'dbs'} className="inline-flex items-center gap-2 rounded-2xl bg-fuchsia-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-fuchsia-300 disabled:opacity-50">
-            <Save className="h-4 w-4" />
-            {saving === 'dbs' ? '…' : (isGerman ? 'DBS speichern' : 'Save DBS')}
-          </button>
-        </div>
       </Section>
 
       {/* ── Colo competency planning ── */}
@@ -1896,12 +1973,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             </div>
           ) : null}
 
-          <div className="flex justify-end">
-            <button onClick={saveColoConfig} disabled={saving === 'colo-config'} className="inline-flex items-center gap-2 rounded-2xl bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-cyan-400 disabled:opacity-50">
-              <Save className="h-4 w-4" />
-              {saving === 'colo-config' ? (isGerman ? 'Speichert…' : 'Saving…') : (isGerman ? 'Colo-Planung speichern' : 'Save Colo planning')}
-            </button>
-          </div>
         </div>
       </Section>
 
@@ -1992,7 +2063,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   <label className="text-[10px] text-slate-400">{isGerman ? 'Länge kurzer Nachtblöcke (Tage)' : 'Length of short night blocks (days)'}<input type="number" min="1" max="7" value={shortNightOptions.series_days ?? 3} onChange={(event) => setShortNightOptions({ ...shortNightOptions, series_days: Math.max(1, Math.min(7, Number.parseInt(event.target.value, 10) || 3)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
                 </div>
                 <p className="mt-2 text-[10px] leading-4 text-violet-100/75">{isGerman ? `N und NK teilen sich dieselbe Obergrenze: maximal ${normalNightStaffCap || '—'} Personen pro Nacht. Die Grenze änderst du bei der normalen Nachtschicht N.` : `N and NK share one cap: at most ${normalNightStaffCap || '—'} people per night. Change the cap on the regular N shift.`}</p>
-                <button type="button" onClick={() => void saveShortNightOptions()} disabled={saving === 'short-night'} className="mt-3 rounded-lg border border-violet-300/30 px-3 py-1.5 text-xs font-semibold text-violet-100 transition hover:bg-violet-300/10 disabled:opacity-50">{saving === 'short-night' ? '…' : (isGerman ? 'NK speichern' : 'Save NK')}</button>
               </div>
             </div>
 
@@ -2106,83 +2176,11 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               </div>
             </div>
 
-            <div className="flex justify-end">
-              <button onClick={saveRotation} disabled={saving === 'rotation'} className="inline-flex items-center gap-2 rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50">
-                <Save className="h-4 w-4" />
-                {saving === 'rotation' ? t("shiftAdmin.rotSaving") : t("shiftAdmin.rotSave")}
-              </button>
-            </div>
           </div>
         ) : null}
       </Section>
 
-      <Section title={isGerman ? 'Feiertags-Maximalbesetzung' : 'Holiday max staffing'} icon={CalendarDays}>
-        <div className="space-y-4">
-          <div className="rounded-2xl border border-emerald-400/15 bg-emerald-500/5 px-4 py-3 text-sm text-slate-200">
-            {isGerman
-              ? 'Lege pro Feiertag die maximale Gesamtbesetzung fuer Frueh- und Spaetschicht fest. Die Begrenzung gilt nur an Feiertagen und nur fuer die Schichttypen Frueh und Spaet. 0 bedeutet: normale Schichtdefinition ohne Feiertagsbegrenzung verwenden.'
-              : 'Define the maximum total staffing for early and late shifts per public holiday. The cap applies only on holidays and only to early and late shift types. 0 means: use the regular shift definition without a holiday-specific cap.'}
-          </div>
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {HOLIDAY_STAFFING_OPTIONS.map((holiday) => {
-              const limits = holidayStaffingConfig[holiday.value] || { early: 0, late: 0 };
-              return (
-                <div key={holiday.value} className="rounded-2xl border border-white/10 bg-slate-900/55 p-4">
-                  <div className="mb-3 text-sm font-semibold text-slate-100">
-                    {isGerman ? holiday.labelDe : holiday.labelEn}
-                  </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div>
-                      <label className="text-xs text-slate-400">{isGerman ? 'Max. Frueh' : 'Max early'}</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="20"
-                        value={limits.early}
-                        onChange={(event) => setHolidayStaffingConfig((prev) => ({
-                          ...prev,
-                          [holiday.value]: {
-                            ...(prev[holiday.value] || { early: 0, late: 0 }),
-                            early: Math.max(Number.parseInt(event.target.value, 10) || 0, 0),
-                          },
-                        }))}
-                        className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs text-slate-400">{isGerman ? 'Max. Spaet' : 'Max late'}</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="20"
-                        value={limits.late}
-                        onChange={(event) => setHolidayStaffingConfig((prev) => ({
-                          ...prev,
-                          [holiday.value]: {
-                            ...(prev[holiday.value] || { early: 0, late: 0 }),
-                            late: Math.max(Number.parseInt(event.target.value, 10) || 0, 0),
-                          },
-                        }))}
-                        className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                      />
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="flex justify-end">
-            <button onClick={saveHolidayStaffing} disabled={saving === 'holiday-staffing'} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-400 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-emerald-300 disabled:opacity-50">
-              <Save className="h-4 w-4" />
-              {saving === 'holiday-staffing'
-                ? (isGerman ? 'Speichert…' : 'Saving…')
-                : (isGerman ? 'Feiertagsbesetzung speichern' : 'Save holiday staffing')}
-            </button>
-          </div>
-        </div>
-      </Section>
+      {/* Holiday staffing is set globally (national / international) in the admin tab "Besetzung". */}
 
       {/* ── Fairness ── */}
       <Section title={t("shiftAdmin.sectionFairness")} icon={Scale} helpKey="shiftAdmin.helpSectionFairness" t={t}>
@@ -2218,12 +2216,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               </div>
             </div>
 
-            <div className="flex justify-end">
-              <button onClick={saveFairness} disabled={saving === 'fairness'} className="inline-flex items-center gap-2 rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50">
-                <Save className="h-4 w-4" />
-                {saving === 'fairness' ? t("shiftAdmin.fairSaving") : t("shiftAdmin.fairSave")}
-              </button>
-            </div>
           </div>
         ) : null}
       </Section>
@@ -2285,12 +2277,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               {t("shiftAdmin.planAdminOverride")}: <span className="font-semibold text-slate-100">{planConfig.admin_override_priority}%</span>
             </div>
 
-            <div className="flex justify-end">
-              <button onClick={savePlanConfig} disabled={saving === 'planconfig'} className="inline-flex items-center gap-2 rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50">
-                <Save className="h-4 w-4" />
-                {saving === 'planconfig' ? t("shiftAdmin.planSaving") : t("shiftAdmin.planSave")}
-              </button>
-            </div>
           </div>
         ) : null}
       </Section>
@@ -2398,12 +2384,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       ) : null}
 
       {/* Save button for advanced settings */}
-      <div className="flex justify-end">
-        <button onClick={saveAdvancedSettings} disabled={saving === 'advanced'} className="inline-flex items-center gap-2 rounded-2xl bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50">
-          <Save className="h-4 w-4" />
-          {saving === 'advanced' ? t("shiftAdmin.advancedSaving") : t("shiftAdmin.advancedSave")}
-        </button>
-      </div>
 
       {/* ── Employee exclusions ── */}
       <Section title={t("shiftAdmin.sectionExclusions")} icon={UserX} helpKey="shiftAdmin.helpSectionExclusions" t={t}>
@@ -2498,6 +2478,20 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           </div>
         )}
       </Section>
+
+      {/* ── One central save for the whole page ── */}
+      <div className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/90 px-4 py-3 shadow-lg backdrop-blur">
+        <div className={`flex items-center gap-2 text-sm ${lastSavedAt ? 'text-emerald-300' : 'text-slate-400'}`}>
+          {lastSavedAt ? <CheckCircle2 className="h-4 w-4" /> : null}
+          {lastSavedAt
+            ? (isGerman ? `Zuletzt gespeichert: ${lastSavedAt.toLocaleTimeString('de-DE')}` : `Last saved: ${lastSavedAt.toLocaleTimeString('en-US')}`)
+            : (isGerman ? 'Änderungen werden erst mit „Alle Einstellungen speichern“ übernommen (Ausnahme: Regeln und Hinweise werden sofort gespeichert).' : 'Changes apply only after “Save all settings” (exceptions: rules and notes save immediately).')}
+        </div>
+        <button onClick={() => void saveEverything()} disabled={saving === 'all' || loading} className="inline-flex items-center gap-2 rounded-2xl bg-emerald-400 px-5 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-300 disabled:opacity-50">
+          <Save className="h-4 w-4" />
+          {saving === 'all' ? (isGerman ? 'Speichert…' : 'Saving…') : (isGerman ? 'Alle Einstellungen speichern' : 'Save all settings')}
+        </button>
+      </div>
     </div>
   );
 

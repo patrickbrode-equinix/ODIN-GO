@@ -13,7 +13,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useLanguage } from "../../context/LanguageContext";
 
 type ShiftType = "early" | "late" | "night";
-type DayContext = "weekday" | "saturday" | "sunday" | "holiday";
+type DayContext = "weekday" | "saturday" | "sunday" | "holiday_national" | "holiday_international";
 
 interface Limit {
   min_count: number;
@@ -23,10 +23,10 @@ interface Limit {
 type LimitMap = Record<DayContext, Partial<Record<ShiftType, Limit>>>;
 
 const EMPTY_LIMIT: Limit = { min_count: 0, max_count: null };
-const DAY_CONTEXTS: DayContext[] = ["weekday", "saturday", "sunday", "holiday"];
+const DAY_CONTEXTS: DayContext[] = ["weekday", "saturday", "sunday", "holiday_national", "holiday_international"];
 
 function emptyLimits(): LimitMap {
-  return { weekday: {}, saturday: {}, sunday: {}, holiday: {} };
+  return { weekday: {}, saturday: {}, sunday: {}, holiday_national: {}, holiday_international: {} };
 }
 
 /** Shifts that make up the sum, per day context (weekend variants only exist on weekends). */
@@ -34,7 +34,8 @@ const SHIFT_CODES: Record<DayContext, Record<"early" | "late", string>> = {
   weekday: { early: "E1 + E2", late: "L1 + L2" },
   saturday: { early: "E1SA + E2SA + E1WE + E2WE", late: "L1WE" },
   sunday: { early: "E1WE + E2WE", late: "L1WE (nur L1)" },
-  holiday: { early: "alle Frühschichten des Tages", late: "alle Spätschichten des Tages" },
+  holiday_national: { early: "alle Frühschichten des Tages", late: "alle Spätschichten des Tages" },
+  holiday_international: { early: "alle Frühschichten des Tages", late: "alle Spätschichten des Tages" },
 };
 
 export default function StaffingLimitsTab() {
@@ -52,7 +53,8 @@ export default function StaffingLimitsTab() {
     weekday: isGerman ? "Werktag (Mo–Fr)" : "Weekday (Mon–Fri)",
     saturday: isGerman ? "Samstag" : "Saturday",
     sunday: isGerman ? "Sonntag" : "Sunday",
-    holiday: isGerman ? "Feiertag" : "Public holiday",
+    holiday_national: isGerman ? "Nationale Feiertage (nur Deutschland)" : "National holidays (Germany only)",
+    holiday_international: isGerman ? "Internationale Feiertage (auch im Ausland)" : "International holidays (also abroad)",
   }), [isGerman]);
 
   const load = useCallback(async () => {
@@ -114,7 +116,7 @@ export default function StaffingLimitsTab() {
     setMessage(null);
     try {
       const rules = (["early", "late", "night"] as ShiftType[]).map((type) => ({ shift_type: type, ...getLimit("weekday", type) }));
-      const dayLimits = (["saturday", "sunday", "holiday"] as DayContext[]).flatMap((context) => (
+      const dayLimits = (["saturday", "sunday", "holiday_national", "holiday_international"] as DayContext[]).flatMap((context) => (
         (["early", "late"] as ShiftType[]).map((type) => ({ day_context: context, shift_type: type, ...getLimit(context, type) }))
       ));
       await api.put("/shift-config/staffing-rules", { rules, day_limits: dayLimits });
@@ -215,6 +217,22 @@ export default function StaffingLimitsTab() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="mt-3 space-y-1 rounded-xl border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+        <div>
+          <strong className="text-foreground">{isGerman ? "Internationale Feiertage" : "International holidays"}:</strong>{" "}
+          {isGerman
+            ? "Neujahr, Karfreitag, Ostermontag, Tag der Arbeit, 1. und 2. Weihnachtstag."
+            : "New Year's Day, Good Friday, Easter Monday, Labour Day, Christmas Day and Boxing Day."}
+        </div>
+        <div>
+          <strong className="text-foreground">{isGerman ? "Nationale Feiertage" : "National holidays"}:</strong>{" "}
+          {isGerman
+            ? "alle übrigen Feiertage in Deutschland (Christi Himmelfahrt, Pfingstmontag, Fronleichnam, Tag der Deutschen Einheit) sowie Heiligabend und Silvester."
+            : "all other holidays in Germany (Ascension Day, Whit Monday, Corpus Christi, German Unity Day) plus Christmas Eve and New Year's Eve."}
+        </div>
+        <div>{isGerman ? "Die Werte je einzelnem Feiertag gibt es nicht mehr: Es gilt die Kategorie, in die der Feiertag fällt." : "There are no values per single holiday any more: the category of the holiday applies."}</div>
       </div>
 
       <div className="mt-4 rounded-xl border border-border p-4">

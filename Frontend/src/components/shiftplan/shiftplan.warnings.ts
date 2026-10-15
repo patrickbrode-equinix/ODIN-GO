@@ -22,6 +22,13 @@ export type UnderstaffWarning = {
   severity: UnderstaffSeverity;
 };
 
+/** Holidays that are also holidays in other countries; keep in sync with Backend/lib/staffingLimits.js. Everything else is "national". */
+export const INTERNATIONAL_HOLIDAYS = [
+  "Neujahr", "Karfreitag", "Ostermontag", "Tag der Arbeit", "1. Weihnachtstag", "2. Weihnachtstag",
+  // The plan shows the holiday names in the UI language.
+  "New Year's Day", "Good Friday", "Easter Monday", "Labour Day", "Christmas Day", "Boxing Day",
+];
+
 /** Minimal shape of a shift definition as returned by GET /shift-config/definitions. */
 export type StaffingDefinitionLike = {
   code?: string | null;
@@ -104,7 +111,7 @@ export function computeMaxStaffing(
   dow: number,
   definitions: StaffingDefinitionLike[],
   staffingRules?: StaffingRuleLike[] | null,
-  globalLimits?: { dayLimits: StaffingDayLimitLike[]; isHoliday: boolean } | null,
+  globalLimits?: { dayLimits: StaffingDayLimitLike[]; holidayName: string | null } | null,
 ): number {
   const applicable = definitions.filter(
     (definition) =>
@@ -119,7 +126,9 @@ export function computeMaxStaffing(
     // Global mode: the limits of the day type are the only source (early = E1+E2 ...).
     if (applicable.length === 0) return 0;
     const rules = Array.isArray(staffingRules) ? staffingRules : [];
-    const context = globalLimits.isHoliday ? "holiday" : dow === 6 ? "saturday" : dow === 0 ? "sunday" : "weekday";
+    const context = globalLimits.holidayName
+      ? (INTERNATIONAL_HOLIDAYS.includes(globalLimits.holidayName) ? "holiday_international" : "holiday_national")
+      : dow === 6 ? "saturday" : dow === 0 ? "sunday" : "weekday";
     const source = shiftType !== "night" && context !== "weekday"
       ? globalLimits.dayLimits.find((entry) => entry?.day_context === context && String(entry?.shift_type || "").toLowerCase() === shiftType)
       : rules.find((entry) => String(entry?.shift_type || "").toLowerCase() === shiftType);
@@ -239,7 +248,7 @@ export function computeUnderstaffWarnings(
     const dateKey = ymd(year, monthIndex1, day);
 
     if (useConfig) {
-      const globalLimits = dayLimits ? { dayLimits, isHoliday: Boolean(config?.holidays?.[dateKey]) } : null;
+      const globalLimits = dayLimits ? { dayLimits, holidayName: config?.holidays?.[dateKey] || null } : null;
       push(dateKey, day, "night", night, computeMaxStaffing("night", dow, definitions, staffingRules, globalLimits));
       push(dateKey, day, "late", late, computeMaxStaffing("late", dow, definitions, staffingRules, globalLimits));
       push(dateKey, day, "early", early, computeMaxStaffing("early", dow, definitions, staffingRules, globalLimits));

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ODIN GO",
-  "version": "0.9.13",
+  "version": "0.9.14",
   "description": "Stabile Jarvis-Bruecke fuer die zentral auf der VM aktualisierte ODIN-GO-Oberflaeche.",
   "icons": {
     "16": "icons/odin-go.png",
@@ -9,7 +9,8 @@
     "48": "icons/odin-go.png",
     "128": "icons/odin-go.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting"],
+  "storage": { "managed_schema": "managed_schema.json" },
   "host_permissions": ["<all_urls>"],
   "background": {
     "service_worker": "service-worker.js"

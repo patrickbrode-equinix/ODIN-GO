@@ -376,7 +376,22 @@
     const response = await chrome.runtime.sendMessage({ type: "GET_ODIN_GO_PREFERENCES", identityToken }).catch(() => null);
     const serverPosition = response?.ok ? normalizeLauncherPosition(response.launcherPosition) : null;
     const selected = serverPosition || localPosition;
-    if (selected) applyLauncherPosition(selected);
+    if (selected) {
+      applyLauncherPosition(selected);
+      // A position saved on another screen can lie on top of a Jarvis control here. Then the
+      // automatic position is used for this session (the saved one is kept).
+      const run = () => {
+        const bounds = launcher.getBoundingClientRect();
+        const covers = collectOccupiedRects(findBrandAnchor()).some((rect) => bounds.left < rect.right && bounds.right > rect.left && bounds.top < rect.bottom && bounds.bottom > rect.top);
+        if (covers) {
+          log("Gespeicherte Button-Position verdeckt ein Jarvis-Element; automatische Position wird verwendet.");
+          launcherPosition = null;
+          positionLauncher();
+        }
+      };
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(run, { timeout: 3_000 });
+      else window.setTimeout(run, 1_500);
+    }
     if (response?.ok && !serverPosition && localPosition) void persistLauncherPosition(localPosition);
   }
 
@@ -549,7 +564,9 @@
   iframe.addEventListener("error", () => offlineFallback.classList.add("open"));
 
   async function loadSettings() {
-    settings = await chrome.storage.sync.get(DEFAULTS);
+    // Policy > values saved on this PC > Chrome sync (merged by the service worker).
+    const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" }).catch(() => null);
+    settings = response?.ok ? response.settings : await chrome.storage.sync.get(DEFAULTS);
     log("Einstellungen geladen", { plannerUrl: settings.plannerUrl, hasApiKey: Boolean(settings.apiKey) });
     renderVerifiedEmployee();
     const urlError = plannerUrlError();
@@ -557,9 +574,24 @@
     notice.textContent = urlError
       ? urlError
       : !settings.apiKey
-      ? "Bitte den lokalen App-Schlüssel in den Erweiterungsoptionen hinterlegen."
+      ? "Auf diesem PC fehlt der App-Schlüssel. Ohne ihn erreicht ODIN GO das Backend nicht."
       : "";
-    notice.classList.toggle("open", missingSettings);
+    if (missingSettings) showNotice(notice.textContent, { withSettings: !urlError });
+    else notice.classList.remove("open");
+  }
+
+  /** Shows a notice; with `withSettings` it carries a button that opens the extension settings. */
+  function showNotice(text, { withSettings = false } = {}) {
+    notice.replaceChildren(document.createTextNode(text));
+    if (withSettings) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Einstellungen öffnen";
+      button.style.cssText = "margin-left:10px;padding:3px 10px;border:1px solid #ffe3a0;border-radius:6px;background:transparent;color:#ffe3a0;cursor:pointer;font:inherit";
+      button.addEventListener("click", () => chrome.runtime.sendMessage({ type: "OPEN_OPTIONS" }));
+      notice.appendChild(button);
+    }
+    notice.classList.add("open");
   }
 
   function textWithoutChildren(element) {
@@ -665,12 +697,29 @@
     return { email: match.email, displayName: possibleNames.at(-1) || "", jarvisUserName: "" };
   }
 
+  let lastPageSessionProbeAt = 0;
+  /**
+   * Second source for the Jarvis user: the Mendix client object of the page (read by the service
+   * worker in the page's own JavaScript world). It works even when the profile menu was never opened
+   * and the DOM probe finds nothing. At most once per 30 seconds.
+   */
+  async function readJarvisSessionFromPage() {
+    if (Date.now() - lastPageSessionProbeAt < 30_000) return null;
+    lastPageSessionProbeAt = Date.now();
+    const response = await chrome.runtime.sendMessage({ type: "READ_JARVIS_SESSION" }).catch(() => null);
+    if (!response?.ok) return null;
+    const { email, userName, displayName } = response.session || {};
+    log("Jarvis-Benutzer aus der Mendix-Sitzung gelesen");
+    return { email: String(email || "").toLowerCase(), displayName: displayName || "", jarvisUserName: userName || email || "" };
+  }
+
   async function verifyJarvisIdentity({ showPrompt = true, preferLive = false } = {}) {
     if (identityVerificationPending) return false;
     // Jarvis renders the account popover asynchronously. Keep a previously
     // verified device identity when the live popover is not available yet.
-    const identity = readJarvisIdentity({ preferLive })
-      || (preferLive ? jarvisSessionIdentity : null);
+    let identity = readJarvisIdentity({ preferLive })
+      || (preferLive ? jarvisSessionIdentity : null)
+      || await readJarvisSessionFromPage();
     if (!identity) {
       log("Kein Jarvis-Profil erkannt; Backend-Aufruf wird noch nicht gestartet.");
       verifiedUser = null;
@@ -683,7 +732,7 @@
       return false;
     }
 
-    if (identity.email === lastRejectedEmail && Date.now() - lastRejectedAt < 30_000 && !showPrompt) return false;
+    if ((identity.email || identity.jarvisUserName) === lastRejectedEmail && Date.now() - lastRejectedAt < 30_000 && !showPrompt) return false;
 
     identityVerificationPending = true;
     const response = await chrome.runtime.sendMessage({ type: "VERIFY_JARVIS_IDENTITY", identity })
@@ -693,11 +742,13 @@
     if (!response?.ok) {
       verifiedUser = null;
       identityToken = "";
-      lastRejectedEmail = identity.email;
+      lastRejectedEmail = identity.email || identity.jarvisUserName || "";
       lastRejectedAt = Date.now();
-      employeeNode.textContent = identity.email;
-      notice.textContent = response?.message || "Jarvis-Benutzer konnte nicht verifiziert werden.";
-      notice.classList.add("open");
+      employeeNode.textContent = identity.email || identity.jarvisUserName || "Jarvis-Benutzer";
+      const keyProblem = /application key/i.test(String(response?.message || ""));
+      showNotice(keyProblem
+        ? "Der App-Schlüssel auf diesem PC fehlt oder ist veraltet. Bitte den aktuellen Schlüssel eintragen (oder von der IT zentral verteilen lassen)."
+        : (response?.message || "Jarvis-Benutzer konnte nicht verifiziert werden."), { withSettings: keyProblem });
       return false;
     }
 
