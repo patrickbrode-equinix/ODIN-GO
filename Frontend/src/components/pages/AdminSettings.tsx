@@ -129,52 +129,23 @@ export default function AdminSettings() {
     <EnterprisePageShell className="admin-enterprise-surface">
       <EnterpriseHeader title={t('admin.title')} subtitle={t('admin.subtitle')} />
 
-      <EnterpriseFeatureHero
-        tone="cyan"
-        eyebrow={t('admin.controlCenter')}
-        title={t('admin.allSettings')}
-        description={t('admin.tilesDescription')}
-        metrics={[
-          { label: 'Tabs', value: accessibleTabs.length },
-          { label: 'Focus', value: activeMeta.label },
-          { label: isGerman ? 'Bereich' : 'Area', value: activeMeta.label },
-        ]}
-      />
-
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div role="tablist" aria-label={isGerman ? "Einstellungsbereiche" : "Settings areas"} className="liquid-tabbar flex flex-wrap gap-2 rounded-xl border border-border p-2">
         {accessibleTabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
+            role="tab"
+            aria-selected={activeTab === tab.id}
             onClick={() => selectTab(tab.id)}
-            className={`group rounded-[28px] border p-5 text-left transition-all duration-200 ${
-              activeTab === tab.id
-                ? "theme-admin-tile-active"
-                : "theme-admin-tile hover:border-sky-300/30 hover:shadow-[0_18px_40px_rgba(14,165,233,0.10)]"
-            }`}
+            title={tab.description}
+            className={`liquid-tab inline-flex items-center gap-2 px-4 py-2 text-sm font-medium ${activeTab === tab.id ? "is-active" : ""}`}
           >
-            <div className={`mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-linear-to-br ${tab.accent} ${activeTab === tab.id ? "text-sky-700 dark:text-sky-200" : "text-slate-600 dark:text-slate-300 group-hover:text-sky-700 dark:group-hover:text-sky-200"}`}>
-              <tab.icon className="h-5 w-5" />
-            </div>
-            <div className="text-base font-semibold">
-              {tab.label}
-            </div>
-            <div className="mt-2 text-sm text-slate-600 dark:text-slate-400 group-hover:text-slate-700 dark:group-hover:text-slate-300">{tab.description}</div>
+            <tab.icon className="h-4 w-4" />
+            {tab.label}
           </button>
         ))}
       </div>
-
-      <div className="theme-glass-panel mb-6 rounded-[28px] p-5">
-        <div className="flex items-start gap-4">
-          <div className={`flex h-12 w-12 items-center justify-center rounded-2xl bg-linear-to-br ${activeMeta.accent} text-sky-700 dark:text-sky-200`}>
-            <activeMeta.icon className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="text-lg font-semibold text-foreground">{activeMeta.label}</div>
-            <div className="mt-1 text-sm text-muted-foreground">{activeMeta.description}</div>
-          </div>
-        </div>
-      </div>
+      <p className="text-sm text-muted-foreground">{activeMeta.description}</p>
 
       {activeTab === "shiftplan" && <ShiftPlanningSettingsPanel embedded />}
       {activeTab === "staffing" && <StaffingLimitsTab />}

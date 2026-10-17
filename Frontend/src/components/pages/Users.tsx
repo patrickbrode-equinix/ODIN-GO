@@ -26,6 +26,7 @@ import { formatAbsoluteDateTime, formatRelativeTime } from "../../utils/loginSta
 
 import { AddUserModal } from "../users/AddUserModal";
 import { UserVacationDialog } from "../users/UserVacationDialog";
+import { UserPreferenceEditor } from "../users/UserPreferenceEditor";
 import { fetchAllVacations } from "../../api/vacations";
 import type { Absence } from "../../api/absences";
 
@@ -341,6 +342,16 @@ export default function Users() {
     }
   }
 
+  async function reloadPreferences(userId: number) {
+    try {
+      const res = await api.get(`/admin/users/${userId}/preferences`);
+      setPreferenceDetails((prev) => ({ ...prev, [userId]: { ...(res.data?.preferences || { notes: null }), colleaguesGeneratorEnabled: res.data?.preferredColleaguesEnabled === true } }));
+      setUsers((current) => current.map((entry) => (entry.id === userId ? { ...entry, hasShiftPreferences: true } : entry)));
+    } catch (err) {
+      console.error("RELOAD USER PREFERENCES ERROR:", err);
+    }
+  }
+
   async function saveUserNotes(userId: number) {
     const notes = preferenceDetails[userId]?.notes || "";
     setSavingNotesForUser(userId);
@@ -412,7 +423,7 @@ export default function Users() {
     setUserMessage("Markdown-Export wurde erstellt.");
   }
 
-  function renderPreferenceValue(value: unknown) {
+  function renderPreferenceValue(value: unknown): string {
     if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : "–";
     if (value == null || value === "") return "–";
     if (typeof value === "object") {
@@ -904,6 +915,17 @@ export default function Users() {
                           ) : (
                             <div className="text-xs text-muted-foreground">{language === "de" ? "Keine Wünsche eingetragen." : "No wishes entered."}</div>
                           )}
+                          {canManageUsers && !user.isRoot && Object.prototype.hasOwnProperty.call(preferenceDetails, user.id) ? (
+                            <UserPreferenceEditor
+                              userId={user.id}
+                              value={prefs}
+                              isGerman={language === "de"}
+                              colleagueOptions={users
+                                .filter((candidate) => candidate.id !== user.id && !candidate.isRoot && candidate.approved !== false)
+                                .map((candidate) => ({ id: candidate.id, name: [candidate.lastName, candidate.firstName].filter(Boolean).join(", ") || candidate.loginName || candidate.email || String(candidate.id) }))}
+                              onSaved={() => void reloadPreferences(user.id)}
+                            />
+                          ) : null}
                         </TableCell>
                       </TableRow>
                     ) : null}

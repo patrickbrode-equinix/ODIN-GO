@@ -597,6 +597,10 @@ export function buildDailyShiftSlots({
   numDays = 31,
   dayOfWeek = null,
   staffingMaximums = {},
+  // One entry per employee who can only work one shift type today: the shift codes that employee
+  // may take (hard wish, fixed type, DBS rule). Without this the extra places all go to the first
+  // (early) definitions and these employees stay unplanned although their only possible shift is free.
+  exclusiveEmployees = [],
 } = {}) {
   const baseSlots = buildShiftSlots(shiftDefinitions, staffingRules, dayOfWeek, staffingMaximums);
   const baselineTotalSlots = baseSlots.reduce((sum, definition) => sum + (definition.planned_slots || 0), 0);
@@ -676,6 +680,49 @@ export function buildDailyShiftSlots({
   for (const definition of baseSlots) {
     const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
     typeSlotCounts.set(typeKey, (typeSlotCounts.get(typeKey) || 0) + (definition.planned_slots || 0));
+  }
+
+  const canAddSlot = (definition) => {
+    const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
+    return (slotCounts.get(definition.code) || 0) < Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0)
+      && (typeSlotCounts.get(typeKey) || 0) < getStaffingMaximum(staffingMaximums, typeKey);
+  };
+  const definitionByCode = new Map(baseSlots.map((definition) => [definition.code, definition]));
+  const consumed = new Map();
+  const constrained = (Array.isArray(exclusiveEmployees) ? exclusiveEmployees : [])
+    .map((codes) => [...new Set(codes)].filter((code) => definitionByCode.has(code)))
+    .filter((codes) => codes.length > 0)
+    .sort((left, right) => left.length - right.length);
+  for (const allowed of constrained) {
+    let chosen = allowed.find((code) => (slotCounts.get(code) || 0) - (consumed.get(code) || 0) > 0);
+    if (!chosen) {
+      chosen = allowed
+        .filter((code) => canAddSlot(definitionByCode.get(code)))
+        .sort((left, right) => (consumed.get(left) || 0) - (consumed.get(right) || 0))[0];
+      if (chosen) {
+        const typeKey = normalizePlanningShiftTypeKey(definitionByCode.get(chosen).shift_type);
+        slotCounts.set(chosen, (slotCounts.get(chosen) || 0) + 1);
+        typeSlotCounts.set(typeKey, (typeSlotCounts.get(typeKey) || 0) + 1);
+        remainingExtraSlots = Math.max(remainingExtraSlots - 1, 0);
+      } else {
+        // The shift type is at its maximum: move a free place from another definition of the
+        // same type (L1 -> L2) so the employee who can only take this code gets one.
+        for (const code of allowed) {
+          const typeKey = normalizePlanningShiftTypeKey(definitionByCode.get(code).shift_type);
+          if ((slotCounts.get(code) || 0) >= Math.max(Number.parseInt(String(definitionByCode.get(code).max_staff ?? 0), 10) || 0, 0)) continue;
+          const donor = baseSlots.find((definition) => definition.code !== code
+            && normalizePlanningShiftTypeKey(definition.shift_type) === typeKey
+            && (slotCounts.get(definition.code) || 0) - (consumed.get(definition.code) || 0) > 0);
+          if (!donor) continue;
+          slotCounts.set(donor.code, (slotCounts.get(donor.code) || 0) - 1);
+          slotCounts.set(code, (slotCounts.get(code) || 0) + 1);
+          chosen = code;
+          break;
+        }
+        if (!chosen) continue;
+      }
+    }
+    consumed.set(chosen, (consumed.get(chosen) || 0) + 1);
   }
 
   while (remainingExtraSlots > 0) {

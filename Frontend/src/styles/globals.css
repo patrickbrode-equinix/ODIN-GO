@@ -1,4 +1,3 @@
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&display=swap");
 @import "tailwindcss";
 
 @custom-variant dark (&:is(.dark *));
@@ -1747,4 +1746,312 @@ h3,
 .admin-enterprise-surface button.bg-primary {
   background: #2563eb !important;
   color: #fff !important;
+}
+
+/* ================================================================ */
+/* ENTERPRISE FINISH                                                */
+/* Calm, flat, business-like look for the whole application.        */
+/* One accent colour, neutral surfaces, small radii, no glow,       */
+/* no decorative gradients, no ambient animation.                   */
+/* Loaded last on purpose: it overrides the earlier "command        */
+/* center" styling instead of rewriting every component.            */
+/* ================================================================ */
+:root {
+  --font-sans-brand: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display-brand: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --radius: 0.375rem;
+
+  --background: #F3F5F8;
+  --foreground: #1B2430;
+  --card: #FFFFFF;
+  --card-foreground: #1B2430;
+  --popover: #FFFFFF;
+  --popover-foreground: #1B2430;
+  --primary: #1F5FBF;
+  --primary-foreground: #FFFFFF;
+  --secondary: #EEF1F5;
+  --secondary-foreground: #1B2430;
+  --muted: #E6EAF0;
+  --muted-foreground: #566273;
+  --accent: #EAF0F8;
+  --accent-foreground: #1B2430;
+  --destructive: #C62828;
+  --border: #D5DBE3;
+  --input: #FFFFFF;
+  --input-background: #FFFFFF;
+  --ring: #1F5FBF;
+  --chart-1: #1F5FBF;
+  --chart-2: #2E7D55;
+  --chart-3: #B26A00;
+  --chart-4: #5B6B82;
+  --chart-5: #C62828;
+
+  --surface-1: #FFFFFF;
+  --surface-2: #FFFFFF;
+  --surface-3: #F7F9FB;
+  --surface-accent: #EAF0F8;
+  --surface-border: #D5DBE3;
+  --surface-border-strong: #AEBBCC;
+  --surface-divider: #E1E6ED;
+  --surface-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --surface-shadow-strong: 0 1px 3px rgba(16, 24, 40, 0.10);
+  --surface-hero: #FFFFFF;
+  --surface-hero-strong: #FFFFFF;
+}
+
+.dark {
+  --background: #0F141B;
+  --foreground: #E7EBF0;
+  --card: #171D26;
+  --card-foreground: #E7EBF0;
+  --popover: #171D26;
+  --popover-foreground: #E7EBF0;
+  --primary: #4A86E8;
+  --primary-foreground: #FFFFFF;
+  --secondary: #1E2631;
+  --secondary-foreground: #E7EBF0;
+  --muted: #1E2631;
+  --muted-foreground: #8C97A7;
+  --accent: #212A37;
+  --accent-foreground: #E7EBF0;
+  --destructive: #E5534B;
+  --border: #2C3644;
+  --input: #141A22;
+  --input-background: #141A22;
+  --ring: #4A86E8;
+  --sidebar: #131921;
+  --sidebar-border: #2C3644;
+
+  --surface-1: #171D26;
+  --surface-2: #171D26;
+  --surface-3: #1B222C;
+  --surface-accent: #212A37;
+  --surface-border: #2C3644;
+  --surface-border-strong: #3A4658;
+  --surface-divider: #2C3644;
+  --surface-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --surface-shadow-strong: 0 1px 3px rgba(0, 0, 0, 0.45);
+  --surface-text: #E7EBF0;
+  --surface-text-muted: #B9C2CE;
+  --surface-text-soft: #8C97A7;
+  --surface-hero: #171D26;
+  --surface-hero-strong: #171D26;
+}
+
+/* No ambient background, no glowing orbs or sweeping edges. */
+body::before,
+.light body::before { display: none !important; }
+.odin-ambient-orb,
+.odin-stage-frame::after,
+.odin-go-logo-shell::before,
+.odin-chip::after,
+.odin-wx-backdrop::before,
+.odin-wx-backdrop::after { display: none !important; }
+.odin-go-logo-motion,
+.odin-go-logo-shell,
+.odin-live-dot::before,
+.odin-clock-ring,
+.odin-clock-sep,
+.odin-wx-spin, .odin-wx-core, .odin-wx-halo, .odin-wx-bob, .odin-wx-twinkle,
+.odin-wx-drift, .odin-wx-drift-slow, .odin-wx-fog, .odin-wx-drop, .odin-wx-flake, .odin-wx-bolt,
+.odin-weather-panel-glow, .odin-market-pulse { animation: none !important; }
+.odin-clock-tip { filter: none !important; }
+
+/* Flat surfaces: small radii, hairline shadow, no blur, no gradients. */
+#root .rounded-3xl { border-radius: 0.5rem !important; }
+#root .rounded-2xl { border-radius: 0.375rem !important; }
+#root .rounded-xl { border-radius: 0.3125rem !important; }
+#root .rounded-lg { border-radius: 0.25rem !important; }
+#root [class*="shadow-"] { box-shadow: var(--surface-shadow) !important; }
+#root [class*="backdrop-blur"], #root .theme-glass-panel, #root .theme-popover-surface { backdrop-filter: none !important; -webkit-backdrop-filter: none !important; }
+#root [class*="bg-gradient"],
+#root [class*="bg-[linear-gradient"],
+#root [class*="bg-[radial-gradient"],
+#root .theme-admin-hero,
+#root .theme-glass-panel { background-image: none !important; }
+#root .theme-admin-hero,
+#root .theme-glass-panel { background-color: var(--card) !important; box-shadow: var(--surface-shadow) !important; border-color: var(--border) !important; }
+
+/* Quiet typography: no wide letter-spacing, no shouting labels. */
+#root [class*="tracking-["] { letter-spacing: 0.02em !important; }
+#root [class*="tracking-wider"], #root [class*="tracking-widest"] { letter-spacing: 0.03em !important; }
+#root h1, #root h2, #root h3 { font-family: var(--font-display-brand); font-weight: 600; }
+#root [class*="text-[10px]"] { font-size: 11px !important; }
+
+/* Coloured status chips: same size, flat, readable. */
+#root .odin-chip { background: var(--card) !important; box-shadow: none !important; border: 1px solid var(--border) !important; }
+#root [class*="hover:-translate-y"]:hover { transform: none !important; }
+#root [class*="hover:scale"]:hover { transform: none !important; }
+
+/* Buttons and inputs: consistent, no coloured halos. */
+#root button:focus-visible, #root input:focus-visible, #root select:focus-visible, #root textarea:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+  box-shadow: none !important;
+}
+
+/* ---------------------------------------------------------------- */
+/* Light theme: settings and plan pages were written with dark      */
+/* utility classes. Map them to calm light equivalents everywhere,  */
+/* not only inside the workspace shell.                             */
+/* ---------------------------------------------------------------- */
+.light #root [class*="bg-slate-950"],
+.light #root [class*="bg-slate-900"],
+.light #root [class*="bg-slate-800"] { background-color: #FFFFFF !important; }
+.light #root [class*="bg-red-950"], .light #root [class*="bg-red-900"] { background-color: #FDECEA !important; }
+.light #root [class*="bg-amber-950"], .light #root [class*="bg-amber-900"], .light #root [class*="bg-orange-950"] { background-color: #FFF4E0 !important; }
+.light #root [class*="bg-emerald-950"], .light #root [class*="bg-emerald-900"], .light #root [class*="bg-green-950"] { background-color: #E8F5EE !important; }
+.light #root [class*="bg-sky-950"], .light #root [class*="bg-blue-950"], .light #root [class*="bg-cyan-950"], .light #root [class*="bg-sky-900"], .light #root [class*="bg-blue-900"] { background-color: #E8F0FB !important; }
+.light #root [class*="bg-violet-950"], .light #root [class*="bg-fuchsia-950"], .light #root [class*="bg-purple-950"] { background-color: #F1ECFA !important; }
+.light #root [class*="bg-white/"], .light #root [class*="bg-red-500/"], .light #root [class*="bg-amber-500/"], .light #root [class*="bg-emerald-500/"], .light #root [class*="bg-sky-500/"], .light #root [class*="bg-cyan-500/"], .light #root [class*="bg-fuchsia-500/"], .light #root [class*="bg-violet-500/"] { background-color: #F3F5F8; }
+.light #root [class*="text-slate-100"], .light #root [class*="text-slate-200"] { color: #1B2430 !important; }
+.light #root [class*="text-slate-300"], .light #root [class*="text-slate-400"], .light #root [class*="text-slate-500"] { color: #566273 !important; }
+.light #root [class*="text-red-100"], .light #root [class*="text-red-200"], .light #root [class*="text-red-300"] { color: #9A1F1F !important; }
+.light #root [class*="text-amber-100"], .light #root [class*="text-amber-200"], .light #root [class*="text-amber-300"] { color: #8A5400 !important; }
+.light #root [class*="text-emerald-100"], .light #root [class*="text-emerald-200"], .light #root [class*="text-emerald-300"] { color: #1F6B45 !important; }
+.light #root [class*="text-sky-100"], .light #root [class*="text-sky-200"], .light #root [class*="text-sky-300"], .light #root [class*="text-cyan-100"], .light #root [class*="text-cyan-200"], .light #root [class*="text-cyan-300"], .light #root [class*="text-blue-100"], .light #root [class*="text-blue-200"], .light #root [class*="text-blue-300"] { color: #1F5FBF !important; }
+.light #root [class*="text-fuchsia-100"], .light #root [class*="text-violet-100"], .light #root [class*="text-violet-200"], .light #root [class*="text-violet-300"], .light #root [class*="text-fuchsia-200"] { color: #5B3FA0 !important; }
+.light #root [class*="border-white/"] { border-color: var(--border) !important; }
+.light #root button.bg-slate-200 { background-color: #1F5FBF !important; color: #FFFFFF !important; }
+
+/* Admin pages follow the selected theme (they used to force a dark surface). */
+.light .admin-enterprise-surface { background: transparent !important; color: var(--foreground); }
+.light .admin-enterprise-surface .theme-admin-hero,
+.light .admin-enterprise-surface .theme-admin-tile,
+.light .admin-enterprise-surface .theme-admin-tile-active,
+.light .admin-enterprise-surface .theme-glass-panel { background: #FFFFFF !important; border-color: var(--border) !important; box-shadow: var(--surface-shadow) !important; }
+.light .admin-enterprise-surface input:not([type="checkbox"]):not([type="color"]):not([type="range"]),
+.light .admin-enterprise-surface select,
+.light .admin-enterprise-surface textarea { background-color: #FFFFFF !important; border-color: var(--border) !important; color: var(--foreground) !important; }
+.light .admin-enterprise-surface input::placeholder,
+.light .admin-enterprise-surface textarea::placeholder { color: #8A94A3 !important; }
+.dark .admin-enterprise-surface { background: transparent !important; }
+
+/* Plan pages follow the selected theme as well. */
+.light .shiftplan-enterprise,
+.light .weekplan-enterprise,
+.light .daily-enterprise,
+.light .drafts-enterprise { background: transparent !important; color: var(--foreground); }
+.light .shiftplan-enterprise .theme-glass-panel,
+.light .shiftplan-enterprise .theme-glass-inset,
+.light .shiftplan-enterprise [class*="bg-[radial-gradient"],
+.light .shiftplan-enterprise [class*="bg-[linear-gradient"] { background-color: #FFFFFF !important; border-color: var(--border) !important; }
+.light .shiftplan-enterprise [class*="bg-violet"],
+.light .shiftplan-enterprise [class*="bg-purple"],
+.light .shiftplan-enterprise [class*="bg-fuchsia"],
+.light .shiftplan-enterprise [class*="bg-amber"],
+.light .shiftplan-enterprise [class*="bg-orange"],
+.light .shiftplan-enterprise [class*="bg-yellow"],
+.light .shiftplan-enterprise [class*="bg-cyan"],
+.light .shiftplan-enterprise [class*="bg-teal"],
+.light .shiftplan-enterprise [class*="bg-emerald"],
+.light .shiftplan-enterprise [class*="bg-indigo"] { background-color: #EEF1F5 !important; }
+.light .shiftplan-enterprise [class*="text-violet"],
+.light .shiftplan-enterprise [class*="text-purple"],
+.light .shiftplan-enterprise [class*="text-fuchsia"],
+.light .shiftplan-enterprise [class*="text-amber"],
+.light .shiftplan-enterprise [class*="text-orange"],
+.light .shiftplan-enterprise [class*="text-yellow"],
+.light .shiftplan-enterprise [class*="text-cyan"],
+.light .shiftplan-enterprise [class*="text-teal"],
+.light .shiftplan-enterprise [class*="text-emerald"],
+.light .shiftplan-enterprise [class*="text-indigo"] { color: #3A4658 !important; }
+.light .shiftplan-enterprise [class*="border-violet"],
+.light .shiftplan-enterprise [class*="border-purple"],
+.light .shiftplan-enterprise [class*="border-fuchsia"],
+.light .shiftplan-enterprise [class*="border-amber"],
+.light .shiftplan-enterprise [class*="border-orange"],
+.light .shiftplan-enterprise [class*="border-yellow"],
+.light .shiftplan-enterprise [class*="border-cyan"],
+.light .shiftplan-enterprise [class*="border-teal"],
+.light .shiftplan-enterprise [class*="border-emerald"],
+.light .shiftplan-enterprise [class*="border-indigo"] { border-color: var(--border) !important; }
+.light .shiftplan-enterprise table thead,
+.light .shiftplan-enterprise table th { background: #EEF1F5 !important; color: #3A4658 !important; border-color: var(--border) !important; }
+
+/* Hard-coded dark hex backgrounds in tables and panels (light theme). */
+.light #root [class*="bg-[#0"], .light #root [class*="bg-[#1"], .light #root [class*="bg-[#2"] { background-color: #F3F5F8 !important; }
+.light #root table [class*="text-white"], .light #root table [class*="text-slate-"], .light #root table [class*="text-gray-"] { color: #1B2430 !important; }
+.light #root table [class*="text-white/"], .light #root table [class*="text-slate-500"], .light #root table [class*="text-slate-400"] { color: #566273 !important; }
+.light #root [class*="border-white/"], .light #root [class*="divide-white/"] > * { border-color: var(--border) !important; }
+
+/* ---------------------------------------------------------------- */
+/* Liquid glass tabs                                                */
+/* Translucent, softly blurred buttons with a light edge. The       */
+/* active tab is tinted with the accent colour.                     */
+/* ---------------------------------------------------------------- */
+.liquid-tabbar {
+  background:
+    radial-gradient(120% 220% at 12% -60%, rgba(74, 134, 232, 0.22), transparent 55%),
+    linear-gradient(180deg, #151c27, #10161f);
+  border-color: #2c3644 !important;
+}
+.light .liquid-tabbar {
+  background:
+    radial-gradient(120% 220% at 12% -60%, rgba(31, 95, 191, 0.14), transparent 55%),
+    linear-gradient(180deg, #EEF2F8, #E4EAF2);
+  border-color: #D5DBE3 !important;
+}
+#root .liquid-tab {
+  position: relative;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 10px !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04)) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(170%) !important;
+  backdrop-filter: blur(14px) saturate(170%) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.30), inset 0 -1px 0 rgba(0, 0, 0, 0.22), 0 1px 3px rgba(0, 0, 0, 0.25) !important;
+  color: #B9C2CE !important;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+#root .liquid-tab::after {
+  content: "";
+  position: absolute;
+  inset: 1px 1px 52% 1px;
+  border-radius: 9px 9px 40% 40% / 9px 9px 14px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0));
+  pointer-events: none;
+}
+#root .liquid-tab:hover {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.07)) !important;
+  border-color: rgba(255, 255, 255, 0.26) !important;
+  color: #FFFFFF !important;
+}
+#root .liquid-tab.is-active,
+#root .liquid-tab[aria-selected="true"],
+#root .liquid-tab[aria-current="page"] {
+  background: linear-gradient(180deg, rgba(92, 150, 245, 0.50), rgba(52, 104, 200, 0.32)) !important;
+  border-color: rgba(150, 190, 255, 0.60) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 0 rgba(0, 0, 0, 0.2), 0 2px 8px rgba(40, 90, 190, 0.35) !important;
+  color: #FFFFFF !important;
+}
+.light #root .liquid-tab {
+  border-color: rgba(255, 255, 255, 0.85) !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.40)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(31, 60, 110, 0.10), 0 1px 3px rgba(31, 60, 110, 0.18) !important;
+  color: #3A4658 !important;
+}
+.light #root .liquid-tab::after { background: linear-gradient(180deg, rgba(255, 255, 255, 0.65), rgba(255, 255, 255, 0)); }
+.light #root .liquid-tab:hover {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.62)) !important;
+  border-color: #FFFFFF !important;
+  color: #1B2430 !important;
+}
+.light #root .liquid-tab.is-active,
+.light #root .liquid-tab[aria-selected="true"],
+.light #root .liquid-tab[aria-current="page"] {
+  background: linear-gradient(180deg, rgba(74, 134, 232, 0.92), rgba(31, 95, 191, 0.82)) !important;
+  border-color: rgba(31, 95, 191, 0.7) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 2px 8px rgba(31, 95, 191, 0.35) !important;
+  color: #FFFFFF !important;
+}
+#root .liquid-tab > * { position: relative; z-index: 1; }
+@media (prefers-reduced-transparency: reduce) {
+  #root .liquid-tab { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+}
+/* !important inside an earlier layer beats the light-shell rules that live in @layer components. */
+@layer base {
+.light .odin-go-workspace-shell nav.liquid-tabbar {
+  background: radial-gradient(120% 220% at 12% -60%, rgba(31, 95, 191, 0.16), transparent 55%), linear-gradient(180deg, #E9EEF6, #DCE4EF) !important;
+}
+.light .odin-go-workspace-shell nav.liquid-tabbar > div { background: transparent !important; }
 }

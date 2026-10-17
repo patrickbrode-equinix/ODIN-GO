@@ -26,6 +26,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { useAuth } from "../../context/AuthContext";
 import { useLanguage } from "../../context/LanguageContext";
 import { isColoEmployee, parseColoPool } from "../../utils/colo";
+import { buildColoMarkLookupFromRoles, coloMarkKey, isColoMarked } from "../../utils/coloMarks";
+import { ColoLegend } from "../shiftplan/ColoBadge";
+import { useWeekplanRoleStore } from "../../store/weekplanRoleStore";
 
 import {
   changeScheduleShifts,
@@ -178,6 +181,11 @@ export default function Shiftplan() {
   const { canWrite, user } = useAuth();
   const { language, t } = useLanguage();
   const wellbeingStore = useWellbeingStore(); // [NEW]
+  const weekplanRoles = useWeekplanRoleStore((s) => s.roles);
+  const fetchWeekplanRoles = useWeekplanRoleStore((s) => s.fetchRoles);
+  const setWeekplanBulkRoles = useWeekplanRoleStore((s) => s.setBulkRoles);
+  const removeWeekplanRoles = useWeekplanRoleStore((s) => s.removeRoles);
+  const coloMarks = useMemo(() => buildColoMarkLookupFromRoles(weekplanRoles), [weekplanRoles]);
   const isGerman = language === "de";
   const shiftTypeLabels = {
     early: t("shiftplan.shiftEarly"),
@@ -1040,6 +1048,8 @@ export default function Shiftplan() {
   const contextMenuCurrentLabel = Array.from(
     new Set(contextMenuSelection.map((entry) => String(schedule?.[entry.employeeName]?.[entry.day] || "—")))
   ).join(", ");
+  const contextMenuColoMarked = contextMenuSelection.length > 0
+    && contextMenuSelection.every((entry) => isColoMarked(coloMarks, entry.employeeName, toIsoDate(selectedYear, monthIndex1, entry.day)));
 
   /* ------------------------------------------------ */
   /* WELLBEING LOGIC (NEW)                            */
@@ -1210,6 +1220,13 @@ export default function Shiftplan() {
     void loadMonthAttendance(selectedYear, selectedMonthIndex + 1, totalDays);
   }, [loadMonthAttendance, selectedMonthIndex, selectedYear, viewMode]);
 
+  // Colo marks of the displayed month live in the weekplan roles (role "colo").
+  useEffect(() => {
+    if (viewMode !== "month") return;
+    const totalDays = new Date(selectedYear, selectedMonthIndex + 1, 0).getDate();
+    void fetchWeekplanRoles(toIsoDate(selectedYear, selectedMonthIndex + 1, 1), toIsoDate(selectedYear, selectedMonthIndex + 1, totalDays));
+  }, [fetchWeekplanRoles, selectedMonthIndex, selectedYear, viewMode]);
+
   /* ------------------------------------------------ */
   /* INTERACTIONS                                     */
   /* ------------------------------------------------ */
@@ -1242,6 +1259,50 @@ export default function Shiftplan() {
   };
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  /** Marks / unmarks the selected cells of the context-menu employee as Colo (weekplan role "colo"). */
+  const handleColoToggle = async () => {
+    const employeeName = contextMenu?.employeeName;
+    setContextMenu(null);
+    if (!canEdit || !employeeName) return;
+    const days = Array.from(getSelectedKeys())
+      .map((key) => {
+        const [name, rawDay] = key.split("|||");
+        return { name, day: Number(rawDay) };
+      })
+      .filter((entry) => entry.name === employeeName && Number.isInteger(entry.day))
+      .map((entry) => entry.day)
+      .sort((a, b) => a - b);
+    const daysWithShift = days.filter((day) => String(schedule?.[employeeName]?.[day] || "").trim() !== "");
+    if (!daysWithShift.length) {
+      toast.error(isGerman ? "Colo kann nur an Tagen mit einer Schicht markiert werden." : "Colo can only be marked on days with a shift.");
+      return;
+    }
+    const dateOf = (day: number) => toIsoDate(selectedYear, monthIndex1, day);
+    const roles = useWeekplanRoleStore.getState().roles;
+    const roleOf = (day: number) => roles[coloMarkKey(employeeName, dateOf(day))]?.role_key;
+    try {
+      if (daysWithShift.every((day) => roleOf(day) === "colo")) {
+        await removeWeekplanRoles(employeeName, daysWithShift.map(dateOf));
+        toast.success(isGerman ? "Colo-Markierung entfernt." : "Colo mark removed.");
+        return;
+      }
+      const targets = daysWithShift.filter((day) => roleOf(day) !== "colo");
+      const foreign = targets.filter((day) => Boolean(roleOf(day)));
+      let toSet = targets;
+      if (foreign.length > 0) {
+        const overwrite = window.confirm(isGerman
+          ? `${employeeName} hat an ${foreign.length} Tag(en) bereits eine andere Rolle (pro Tag ist nur eine Rolle möglich). Diese Rolle durch Colo ersetzen?`
+          : `${employeeName} already has another role on ${foreign.length} day(s) (only one role per day is possible). Replace it with Colo?`);
+        if (!overwrite) toSet = targets.filter((day) => !roleOf(day));
+      }
+      if (!toSet.length) return;
+      await setWeekplanBulkRoles(employeeName, toSet.map(dateOf), "colo");
+      toast.success(isGerman ? "Als Colo markiert." : "Marked as Colo.");
+    } catch {
+      toast.error(isGerman ? "Colo-Markierung konnte nicht gespeichert werden." : "Colo mark could not be saved.");
+    }
+  };
 
   const applyShiftChange = async (rawValue: string) => {
     const keys = getSelectedKeys();
@@ -1598,6 +1659,7 @@ export default function Shiftplan() {
             <ShiftplanUploadStatus />
             <div className="flex flex-wrap items-center gap-1.5" aria-label="Farblegende Schichten">
               {SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold"><strong>{item.code}</strong><span className="hidden 2xl:inline">{item.label}</span></span>)}
+              <ColoLegend isGerman={isGerman} />
             </div>
             <ShiftTimeLegend shiftTimes={shiftTimes} />
             <div className="theme-divider mx-1 h-5 w-px" />
@@ -1744,17 +1806,12 @@ export default function Shiftplan() {
                 key={idx}
                 onClick={() => handleShiftplanMonthSelect(idx)}
                 className={`
-                            px-4 py-1.5 text-[11px] rounded-md transition-all font-bold uppercase tracking-wider whitespace-nowrap border
-                            ${hasData
-                    ? active
-                      ? "bg-emerald-600 text-white shadow-sm border-emerald-300 ring-2 ring-emerald-300/35"
-                      : "text-emerald-400/90 border-emerald-500/20 bg-emerald-500/10 hover:bg-emerald-500/20"
-                    : active
-                      ? "bg-red-600 text-white shadow-sm border-red-300 ring-2 ring-red-300/35"
-                      : "text-red-400/90 border-red-500/30 bg-red-500/10 hover:bg-red-500/20"
-                  }
+                            liquid-tab inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium whitespace-nowrap
+                            ${active ? "is-active" : ""}
                           `}
+                title={hasData ? undefined : (isGerman ? "Noch kein Plan für diesen Monat" : "No plan for this month yet")}
               >
+                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${hasData ? "bg-emerald-500" : "bg-slate-400/60"}`} />
                 {label.split(" ")[0]}
               </button>
             );
@@ -1961,6 +2018,7 @@ export default function Shiftplan() {
                 constraintsMap={constraintsMap}
                 constraintViolations={constraintViolations}
                 attendanceMap={attendanceMap}
+                coloMarks={coloMarks}
               />
               {contextMenu && (
                 <ShiftContextMenu
@@ -1971,6 +2029,8 @@ export default function Shiftplan() {
                   currentLabel={contextMenuCurrentLabel}
                   onClose={closeContextMenu}
                   onSelect={(code) => void applyShiftChange(`SET_SHIFT:${code}`)}
+                  onColoToggle={canEdit ? () => void handleColoToggle() : undefined}
+                  coloMarked={contextMenuColoMarked}
                 />
               )}
             </div>

@@ -386,13 +386,8 @@ export default function OdinGoWorkspace() {
     const active = activePath === tab.path || activePath.startsWith(`${tab.path}/`);
     const Icon = tab.icon;
     const label = tab.label[language] || tab.label.de;
-    const buttonClass = tab.admin
-      ? active
-        ? "border-red-400/70 bg-red-600/25 text-red-50 shadow-[0_0_20px_rgba(239,68,68,0.18),inset_0_1px_0_rgba(255,255,255,0.08)]"
-        : "border-red-500/35 bg-red-950/35 text-red-200 hover:border-red-400/60 hover:bg-red-900/40 hover:text-red-50"
-      : active
-        ? "border-blue-400/60 bg-blue-500/20 text-white shadow-[0_0_20px_rgba(59,130,246,0.16),inset_0_1px_0_rgba(255,255,255,0.08)]"
-        : "border-slate-700 bg-slate-950/45 text-slate-300 hover:border-slate-500 hover:bg-slate-800 hover:text-white";
+    // Enterprise tabs: one neutral style for every area, the active tab is marked by an underline.
+    const buttonClass = active ? "liquid-tab is-active" : "liquid-tab";
     const help = TAB_HELP[tab.id];
 
     return (
@@ -402,11 +397,9 @@ export default function OdinGoWorkspace() {
           onClick={() => openTab(tab)}
           aria-current={active ? "page" : undefined}
           title={tab.admin ? `${label} · ${language === "de" ? "Geschützter Adminbereich" : "Protected admin area"}` : label}
-          className={`group flex h-9 items-center gap-2 whitespace-nowrap rounded-lg border px-2.5 text-[11px] font-semibold transition-all duration-200 ${buttonClass}`}
+          className={`group flex h-8 items-center gap-2 whitespace-nowrap px-3 text-[13px] font-medium ${buttonClass}`}
         >
-          <span className={`flex h-6 w-6 items-center justify-center rounded-md border transition ${tab.admin ? "border-red-400/25 bg-red-500/10 text-red-300 group-hover:bg-red-500/20" : active ? "border-blue-300/30 bg-blue-400/15 text-blue-200" : "border-slate-700 bg-slate-900 text-slate-400 group-hover:text-blue-200"}`}>
-            <Icon className="h-3.5 w-3.5" />
-          </span>
+          <Icon className="h-4 w-4 opacity-80" />
           <span>{label}</span>
         </button>
         {help ? (
@@ -415,7 +408,7 @@ export default function OdinGoWorkspace() {
               <button
                 type="button"
                 aria-label={language === "de" ? `Hilfe zu ${label}` : `Help for ${label}`}
-                className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-600 bg-slate-900 text-slate-400 transition hover:border-sky-400 hover:bg-sky-500/15 hover:text-sky-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/60"
+                className="flex h-5 w-5 items-center justify-center rounded text-slate-500 transition hover:text-slate-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/60"
               >
                 <HelpCircle className="h-3 w-3" />
               </button>
@@ -432,14 +425,14 @@ export default function OdinGoWorkspace() {
 
   return (
     <div className="odin-go-workspace-shell flex h-dvh min-h-0 flex-col overflow-hidden bg-slate-950 text-slate-100">
-      <header className="relative z-40 flex h-24 shrink-0 items-center gap-3 border-b border-slate-700 bg-slate-900 px-4 xl:h-28">
+      <header className="relative z-40 flex h-16 shrink-0 items-center gap-3 border-b border-slate-700 bg-slate-900 px-4">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="odin-go-logo-shell flex h-[92px] w-[142px] shrink-0 items-center justify-center overflow-visible xl:h-[108px] xl:w-[170px]" aria-hidden="true">
-            <img src="/odin-assets/odin-go-hero.png" alt="" className="odin-go-logo-motion h-[90px] w-auto max-w-none object-contain xl:h-[104px]" />
+          <div className="odin-go-logo-shell flex h-14 w-[88px] shrink-0 items-center justify-center overflow-hidden" aria-hidden="true">
+            <img src="/odin-assets/odin-go-hero.png" alt="" className="h-14 w-auto max-w-none object-contain" />
           </div>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-bold tracking-wide text-white">ODIN GO</div>
-            <div className="truncate text-[10px] text-slate-400">{language === "de" ? "Zentraler Arbeitsbereich" : "Central Workspace"}</div>
+          <div className="min-w-0 border-l border-slate-700 pl-3">
+            <div className="truncate text-sm font-semibold text-white">ODIN GO</div>
+            <div className="truncate text-xs text-slate-400">{language === "de" ? "Zentraler Arbeitsbereich" : "Central Workspace"}</div>
           </div>
         </div>
 
@@ -449,8 +442,8 @@ export default function OdinGoWorkspace() {
             { key: "late", label: language === "de" ? "Spät" : "Late", value: staffing?.late, dot: "bg-yellow-300", ring: "border-l-yellow-400" },
             { key: "night", label: language === "de" ? "Nacht" : "Night", value: staffing?.night, dot: "bg-blue-400", ring: "border-l-blue-500" },
           ] as const).map((entry) => (
-            <span key={entry.key} className={`odin-chip flex h-11 min-w-[58px] flex-col justify-center rounded-lg border border-slate-700 border-l-2 ${entry.ring} px-2.5 leading-tight`}>
-              <span className="flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+            <span key={entry.key} className="odin-chip flex h-11 min-w-[58px] flex-col justify-center rounded-md border border-slate-700 px-2.5 leading-tight">
+              <span className="flex items-center gap-1 text-[11px] font-medium text-slate-400">
                 <span className={`h-1.5 w-1.5 rounded-full ${entry.dot}`} />{entry.label}
               </span>
               <AnimatedNumber value={entry.value ?? null} format={formatCount} className="text-sm font-bold tabular-nums text-slate-100" />
@@ -613,14 +606,14 @@ export default function OdinGoWorkspace() {
         )}
       </header>
 
-      <nav className="shrink-0 border-b border-slate-700 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950" aria-label="ODIN GO Anwendungen">
-        <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-2">
+      <nav className="liquid-tabbar shrink-0 border-b border-slate-700" aria-label="ODIN GO Anwendungen">
+        <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-1.5">
           {PRIMARY_TABS.map(renderWorkspaceTab)}
         </div>
-        <div className="flex items-center gap-1.5 overflow-x-auto border-t border-slate-800 bg-slate-950/45 px-3 py-1.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto border-t border-slate-800/60 px-3 py-1.5">
           {SUPPORT_TABS.filter((tab) => !(isWebSession && tab.id === "preferences")).map(renderWorkspaceTab)}
-          <span aria-hidden="true" className="mx-1 h-7 w-px bg-red-500/30" />
-          <span className="flex shrink-0 items-center gap-1.5 px-1 text-[9px] font-bold uppercase tracking-[0.15em] text-red-400/80"><LockKeyhole className="h-3 w-3" />{language === "de" ? "Administration" : "Administration"}</span>
+          <span aria-hidden="true" className="mx-2 h-5 w-px bg-slate-700" />
+          <span className="flex shrink-0 items-center gap-1.5 px-1 text-xs font-medium text-slate-500"><LockKeyhole className="h-3 w-3" />{language === "de" ? "Administration" : "Administration"}</span>
           {ADMIN_TABS.map(renderWorkspaceTab)}
         </div>
       </nav>

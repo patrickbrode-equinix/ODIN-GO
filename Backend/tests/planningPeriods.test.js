@@ -183,7 +183,7 @@ test('team Excel shows only the shifts: no version line, no hours column, short 
   await restored.xlsx.load(await workbook.xlsx.writeBuffer());
   const month = restored.worksheets[0];
   assert.doesNotMatch(String(month.getCell(2, 1).value), /Version|secret-author/);
-  assert.equal(month.getCell(4, 32).value, null); // no "Stunden" column behind the 31 days
+  assert.equal(month.getCell(4, 33).value, null); // no "Stunden" column behind the name column and the 31 days
   assert.equal(restored.worksheets.at(-1).getCell(3, 2).value, 'Schichten');
   assert.equal(restored.worksheets.at(-1).getCell(3, 4).value, null);
 });

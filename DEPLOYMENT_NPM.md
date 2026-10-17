@@ -103,3 +103,19 @@ Timeout-Fehler pruefen.
 API-Key, Identity-Token und Admin-Token werden beim ersten iframe-Aufruf
 als Query-Parameter uebergeben und im Frontend sofort in `sessionStorage`
 uebernommen. Proxy-Access-Logs duerfen keine Query-Strings persistieren.
+
+## Release-Hinweise (Generator, Admin-Menue, Colo, Design)
+
+- Neue Migration `110_merge_wish_switches_into_strengths.sql` laeuft beim
+  Backend-Start automatisch. Sie ersetzt die Schalter fuer Wunschkollegen und
+  gesperrte Wochentage durch die Wunsch-Staerken (0 % = aus). Nach dem Deploy in
+  Admin-Einstellungen -> Schichtplan -> Ueberblick die Planungspruefung ansehen.
+- Neue Einstellung `shiftplan.colo_requirements` (Colo-Bedarf: Tage, Schicht,
+  Anzahl). Die alten drei Zaehler werden bis zum ersten Speichern weiter gelesen.
+- Beim Aktivieren eines Entwurfs werden Colo-Markierungen als Rolle `colo` in
+  `weekplan_roles` geschrieben (bestehende Rollen bleiben unveraendert).
+- Neuer Endpunkt `PUT /api/admin/users/:id/preferences` (Benutzerverwaltung) und
+  `GET /api/shift-config/planning-health`.
+- Chrome-Erweiterung: Version 0.9.15 (neues Erscheinungsbild). In Chrome neu laden
+  bzw. ueber die Richtlinie verteilen.
+- Keine neuen Abhaengigkeiten; Images wie bisher neu bauen (Portainer: Pull and redeploy).

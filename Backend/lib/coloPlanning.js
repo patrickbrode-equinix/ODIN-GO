@@ -1,20 +1,73 @@
 const NON_WORKING_SHIFT_CODES = new Set(['FS', 'ABW', 'S', 'URLAUB', 'KRANK', 'SEMINAR']);
 
-// Colo business rules:
+// Colo demand is a list of requirements the admin creates freely:
+//   { id, weekdays: [0-6], shift_type: 'early' | 'late' | 'night', staff: n, label? }
+// "On these weekdays, n pool employees of this shift type are needed for Colo."
+// Installations that still only have the three former counts get an equivalent list:
 // - Mon-Fri early: preparation and e-mail/phone traffic with the exchange.
 // - Every night: line preparation (Mon-Thu) and execution (Fri-Sun).
 // - Sat/Sun early: one person for on-site Colo work during the day.
-const TASK_DEFINITIONS = {
-  preparation: { label: 'Colo Vorbereitung (Börse: E-Mail/Telefon)', weekdays: [1, 2, 3, 4, 5], shiftType: 'early' },
-  night: { label: 'Colo Nacht', weekdays: [0, 1, 2, 3, 4, 5, 6], shiftType: 'night' },
-  weekend: { label: 'Colo Wochenende (Arbeiten vor Ort)', weekdays: [0, 6], shiftType: 'early' },
+export const COLO_SHIFT_TYPES = Object.freeze(['early', 'late', 'night']);
+
+const LEGACY_REQUIREMENTS = {
+  preparation: { id: 'preparation', label: 'Colo Vorbereitung (Börse: E-Mail/Telefon)', weekdays: [1, 2, 3, 4, 5], shift_type: 'early' },
+  night: { id: 'night', label: 'Colo Nacht', weekdays: [0, 1, 2, 3, 4, 5, 6], shift_type: 'night' },
+  weekend: { id: 'weekend', label: 'Colo Wochenende (Arbeiten vor Ort)', weekdays: [0, 6], shift_type: 'early' },
 };
 
-function taskLabel(taskKey, weekday) {
-  if (taskKey === 'night') {
+function taskLabel(requirement, weekday) {
+  if (requirement.id === 'night' && requirement.label === LEGACY_REQUIREMENTS.night.label) {
     return [1, 2, 3, 4].includes(weekday) ? 'Colo Nacht – Leitungsvorbereitung' : 'Colo Nacht – Ausführung';
   }
-  return TASK_DEFINITIONS[taskKey]?.label || 'Colo';
+  if (requirement.label) return requirement.label;
+  const typeLabel = requirement.shift_type === 'night' ? 'Nacht' : requirement.shift_type === 'late' ? 'Spät' : 'Früh';
+  return `Colo ${typeLabel}`;
+}
+
+function parseWeekdays(value) {
+  const entries = Array.isArray(value) ? value : [];
+  return [...new Set(entries.map((entry) => Number.parseInt(String(entry), 10)).filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 6))]
+    .sort((left, right) => left - right);
+}
+
+/**
+ * Normalizes the stored requirement list (array or JSON string). Entries without weekdays,
+ * with an unknown shift type or without staff are dropped. Returns null when the value is
+ * not a list at all (= nothing stored yet, the legacy counts decide).
+ */
+export function normalizeColoRequirements(value) {
+  let entries = value;
+  if (typeof value === 'string') {
+    try {
+      entries = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(entries)) return null;
+
+  const usedIds = new Set();
+  const requirements = [];
+  entries.forEach((entry, index) => {
+    const weekdays = parseWeekdays(entry?.weekdays);
+    const shiftType = String(entry?.shift_type ?? entry?.shiftType ?? '').trim().toLowerCase();
+    const staff = parseNonNegativeInteger(entry?.staff, 0);
+    if (weekdays.length === 0 || !COLO_SHIFT_TYPES.includes(shiftType) || staff <= 0) return;
+    let id = String(entry?.id ?? '').trim() || `req-${index + 1}`;
+    while (usedIds.has(id)) id = `${id}-${index + 1}`;
+    usedIds.add(id);
+    const label = String(entry?.label ?? '').trim().slice(0, 120);
+    requirements.push({ id, weekdays, shift_type: shiftType, staff: Math.min(staff, 50), ...(label ? { label } : {}) });
+  });
+  return requirements;
+}
+
+/** The three former counts as a requirement list (entries with 0 staff are left out). */
+export function legacyColoRequirements({ weekdayPreparationStaff, nightStaff, weekendDayStaff } = {}) {
+  const counts = { preparation: weekdayPreparationStaff, night: nightStaff, weekend: weekendDayStaff };
+  return Object.entries(LEGACY_REQUIREMENTS)
+    .map(([key, requirement]) => ({ ...requirement, staff: parseNonNegativeInteger(counts[key], 1) }))
+    .filter((requirement) => requirement.staff > 0);
 }
 
 function parseBoolean(value, fallback = false) {
@@ -52,13 +105,24 @@ function parseEmployeePool(value) {
 }
 
 export function normalizeColoPlanningConfig(value = {}) {
+  const stored = normalizeColoRequirements(value.requirements);
   return {
     enabled: parseBoolean(value.enabled, false),
     employeePool: parseEmployeePool(value.employeePool),
-    weekdayPreparationStaff: parseNonNegativeInteger(value.weekdayPreparationStaff, 1),
-    nightStaff: parseNonNegativeInteger(value.nightStaff, 1),
-    weekendDayStaff: parseNonNegativeInteger(value.weekendDayStaff ?? value.weekendInstallationStaff, 1),
+    requirements: stored ?? legacyColoRequirements({
+      weekdayPreparationStaff: value.weekdayPreparationStaff,
+      nightStaff: value.nightStaff,
+      weekendDayStaff: value.weekendDayStaff ?? value.weekendInstallationStaff,
+    }),
   };
+}
+
+/** Most Colo people needed on one weekday at the same time (used to check the pool size). */
+export function getMaxColoStaffPerDay(rawConfig = {}) {
+  const config = normalizeColoPlanningConfig(rawConfig);
+  return Math.max(0, ...[0, 1, 2, 3, 4, 5, 6].map((weekday) => (
+    config.requirements.filter((requirement) => requirement.weekdays.includes(weekday)).reduce((sum, requirement) => sum + requirement.staff, 0)
+  )));
 }
 
 function normalizePreferenceDays(value) {
@@ -108,15 +172,14 @@ function preferenceFor(preferencesByEmployee, employee) {
 
 export function getColoTaskRequirements(weekday, rawConfig = {}) {
   const config = normalizeColoPlanningConfig(rawConfig);
-  const requiredByTask = {
-    preparation: config.weekdayPreparationStaff,
-    night: config.nightStaff,
-    weekend: config.weekendDayStaff,
-  };
-  return Object.entries(TASK_DEFINITIONS)
-    .filter(([, definition]) => definition.weekdays.includes(weekday))
-    .map(([key, definition]) => ({ key, shiftType: definition.shiftType, required: requiredByTask[key], label: taskLabel(key, weekday) }))
-    .filter((task) => task.required > 0);
+  return config.requirements
+    .filter((requirement) => requirement.weekdays.includes(weekday))
+    .map((requirement) => ({
+      key: requirement.id,
+      shiftType: requirement.shift_type,
+      required: requirement.staff,
+      label: taskLabel(requirement, weekday),
+    }));
 }
 
 export function buildColoRolePlan({
@@ -250,7 +313,7 @@ export function buildColoRolePlan({
           required: task.required,
           actual: assignedForTask,
           missing: task.required - assignedForTask,
-          message: `${dateKey}: ${task.label} ist mit ${assignedForTask}/${task.required} Personen unterbesetzt. Kein Colo-Pool-Mitarbeiter ist in einer passenden ${task.shiftType === 'night' ? 'Nachtschicht' : 'Frühschicht'} ohne widersprechenden Wunsch eingeplant.`,
+          message: `${dateKey}: ${task.label} ist mit ${assignedForTask}/${task.required} Personen unterbesetzt. Kein Colo-Pool-Mitarbeiter ist in einer passenden ${task.shiftType === 'night' ? 'Nachtschicht' : task.shiftType === 'late' ? 'Spätschicht' : 'Frühschicht'} ohne widersprechenden Wunsch eingeplant.`,
         });
       }
     }

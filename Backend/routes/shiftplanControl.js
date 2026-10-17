@@ -73,6 +73,8 @@ import {
   resolveAbsenceEmployeeName,
   resolveEmployeeName,
 } from '../lib/employeeNameResolution.js';
+import { loadWishSettings } from '../lib/wishSettings.js';
+import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildColoRolePlan, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
@@ -84,6 +86,8 @@ import {
   softPenalty,
   strengthFactor,
 } from '../lib/preferenceStrength.js';
+
+const COLO_ROLE_AUTHOR = 'Colo-Planung';
 
 const router = express.Router();
 router.use(requireAuth);
@@ -311,6 +315,8 @@ async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftD
 
 const CREDITED_ABSENCE_TYPES = new Set(['VACATION', 'SICK', 'TRAINING']);
 const CREDITED_ABSENCE_HOURS = 8;
+const HOLIDAY_CREDIT_HOURS = 8;
+const MAX_UNCOHESIVE_FILLER_HOURS = 8.5;
 // Per-shift staffing limits no longer apply; the global limits decide (see 'Besetzung').
 const GLOBAL_STAFFING_UNLIMITED = 99;
 
@@ -427,6 +433,7 @@ async function loadColoPlanningConfig() {
     [[
       'shiftplan.colo_enabled',
       'shiftplan.colo_pool',
+      'shiftplan.colo_requirements',
       'shiftplan.colo_weekday_preparation_staff',
       'shiftplan.colo_night_staff',
       'shiftplan.colo_weekend_day_staff',
@@ -437,6 +444,7 @@ async function loadColoPlanningConfig() {
   return normalizeColoPlanningConfig({
     enabled: settings['shiftplan.colo_enabled'],
     employeePool: settings['shiftplan.colo_pool'],
+    requirements: settings['shiftplan.colo_requirements'],
     weekdayPreparationStaff: settings['shiftplan.colo_weekday_preparation_staff'],
     nightStaff: settings['shiftplan.colo_night_staff'],
     weekendDayStaff: settings['shiftplan.colo_weekend_day_staff'] ?? settings['shiftplan.colo_weekend_installation_staff'],
@@ -867,9 +875,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
 
   const planRes = await pool.query('SELECT * FROM shift_planning_config WHERE id=1');
-  const planConfig = planRes.rows[0] || {
-    respect_employee_wishes: true, hard_rules_priority: 100, soft_wishes_priority: 50,
-    fairness_priority: 80, admin_override_priority: 90, monthly_target_hours: 174,
+  // The separate "wish weight" slider was removed from the admin menu (the wish strengths decide);
+  // a stored value must not weaken the wishes any more.
+  const planConfig = {
+    ...(planRes.rows[0] || {
+      respect_employee_wishes: true, hard_rules_priority: 100, fairness_priority: 80, admin_override_priority: 90, monthly_target_hours: 174,
+    }),
+    soft_wishes_priority: 100,
   };
 
   const specialPoolRes = await pool.query(
@@ -986,11 +998,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const resolveUserPlanName = (row) => findEmployeeName(row.provisioned_employee_name, employeeNameLookup)
     || userNameCandidates(row).map((candidate) => findEmployeeName(candidate, employeeNameLookup)).find(Boolean)
     || resolveEmployeeName([row.first_name, row.last_name].filter(Boolean).join(' '), employeeNameLookup);
-  // Admin switch: saved "days I do not want to work" are only honoured while on.
-  const blockedDaysSetting = await pool.query(
-    "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1"
-  );
-  const blockedDaysEnabled = String(blockedDaysSetting.rows[0]?.value ?? 'false') === 'true';
+  // Admin-configured strength (0-100 %) per employee wish type: 100 = absolute (hard
+  // block), <100 = score penalty, 0 = ignored. This is the only setting per wish type;
+  // blocked weekdays and preferred colleagues no longer have a second on/off switch.
+  const { strengths: prefStrength, blockedDaysEnabled, colleaguesEnabled: preferredColleaguesEnabled } = await loadWishSettings((text, params) => pool.query(text, params));
   const empPrefsMap = new Map();
   for (const row of empPrefRes.rows) {
     const employeeName = resolveUserPlanName(row);
@@ -999,20 +1010,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empPrefsMap.set(employeeName, blockedDaysEnabled ? row : { ...row, blocked_days: [] });
   }
 
-  // Preferred colleagues stay stored per user, but are only used for planning
-  // while the admin switch is on. Wishes are treated symmetrically: if A wants
-  // to work with B, B also profits from sharing a shift with A.
-  const preferredColleaguesSetting = await pool.query(
-    "SELECT value FROM app_settings WHERE key = 'shiftplan.preferred_colleagues_enabled' LIMIT 1"
-  );
-  const preferredColleaguesEnabled = String(preferredColleaguesSetting.rows[0]?.value ?? 'false') === 'true';
-  // Admin-configured strength (0-100 %) per employee preference type.
-  // 100 = absolute (hard block), <100 = score penalty, 0 = ignored.
-  const prefStrengthRes = await pool.query(
-    'SELECT key, value FROM app_settings WHERE key LIKE $1',
-    [`${PREFERENCE_STRENGTH_KEY_PREFIX}%`]
-  );
-  const prefStrength = parsePreferenceStrengths(prefStrengthRes.rows);
+  // Preferred colleagues stay stored per user and are used while their strength is
+  // above 0 %. Wishes are treated symmetrically: if A wants to work with B, B also
+  // profits from sharing a shift with A.
   // Admin setting "Abwechslung" (0-100): how strongly the plan avoids repeating the same blocks.
   const varietySetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.variety_priority' LIMIT 1");
   const varietyPriority = normalizeVarietyPriority(varietySetting.rows[0]?.value);
@@ -1238,6 +1238,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const featureFlags = { skillsEnabled: false };
   let assignedToday = null;
   let assignedByShiftTypeToday = { early: 0, late: 0, night: 0, special: 0 };
+  let assignedByDefToday = {};
 
   for (const employee of activeEmployees) {
     empStats[employee] = { nights: 0, weekends: 0, workedWeekendBlocks: new Set(), shiftTypeChanges: 0, earlyCount: 0, lateCount: 0, total: 0, actualHours: 0, targetHours: employeeTargetHours[employee], specialShiftCounts: {} };
@@ -1337,30 +1338,37 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
   // DBS pool members can have their own rule for the time outside DBS: which shifts and how many
   // days per month. Without a rule they are planned like everybody else.
+  // Every DBS pool member is bound by this rule outside the own DBS week: only
+  // the shift types stored in the admin menu (default: early or late) and never
+  // a seven-day block (E1WE/E2WE/L1WE/N). Without a stored choice early and late
+  // are both allowed.
   const getDbsOutsideRule = (employee) => {
     if (!dbsPlanningConfig.enabled) return null;
-    const entry = specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.get(employee);
-    if (!entry || (entry.otherShiftCodes.length === 0 && entry.otherDaysPerMonth === null)) return null;
-    return entry;
+    return specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.get(employee) || null;
   };
   const countDaysOutsideDbs = (employee) => Object.values(empDayAssignment[employee] || {})
     .filter((code) => code && String(code).trim().toUpperCase() !== dbsPlanningConfig.shiftCode).length;
-  const describeDbsOutsideRule = (rule) => `${rule.otherShiftCodes.length ? `nur ${rule.otherShiftCodes.join(', ')}` : 'alle Schichten'}${rule.otherDaysPerMonth !== null ? `, höchstens ${rule.otherDaysPerMonth} Tage/Monat` : ''}`;
+  const describeDbsOutsideRule = (rule) => `${rule.otherShiftCodes.length ? `nur ${rule.otherShiftCodes.join(', ')}` : 'nur Früh- oder Spätschicht'}, keine 7-Tage-Blöcke${rule.otherDaysPerMonth !== null ? `, höchstens ${rule.otherDaysPerMonth} Tage/Monat` : ''}`;
   const isOutsideDbsAllowed = (employee, definition, additionalDays = 1) => {
     const rule = getDbsOutsideRule(employee);
     if (!rule) return true;
     const code = String(definition?.code || '').trim().toUpperCase();
     if (code === dbsPlanningConfig.shiftCode) return true;
+    const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
+    const typeToken = typeKey === 'night' ? 'NIGHT' : typeKey === 'late' ? 'LATE' : typeKey === 'early' ? 'EARLY' : '';
+    // Short night blocks (NK) are shorter than seven days; the long N block is not allowed outside DBS.
+    const usesShortNight = typeKey === 'night' && getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT;
+    if (!usesShortNight && getShiftSeriesDays(definition) >= 7) return false;
     if (rule.otherShiftCodes.length > 0) {
       // Tokens EARLY/LATE/NIGHT (shift type) or legacy shift codes.
-      const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
-      const typeToken = typeKey === 'night' ? 'NIGHT' : typeKey === 'late' ? 'LATE' : typeKey === 'early' ? 'EARLY' : '';
       const allowedByRule = rule.otherShiftCodes.some((allowed) => {
         const token = String(allowed || '').trim().toUpperCase();
         if (token === 'EARLY' || token === 'LATE' || token === 'NIGHT') return token === typeToken;
         return getPreferenceShiftCode(token) === getPreferenceShiftCode(code);
       });
       if (!allowedByRule) return false;
+    } else if (typeToken !== 'EARLY' && typeToken !== 'LATE') {
+      return false;
     }
     if (rule.otherDaysPerMonth !== null && countDaysOutsideDbs(employee) + additionalDays > rule.otherDaysPerMonth) return false;
     return true;
@@ -1417,6 +1425,22 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (!absence || weekend) return 0;
     return CREDITED_ABSENCE_TYPES.has(String(absence.type || '').toUpperCase()) ? CREDITED_ABSENCE_HOURS : 0;
   };
+  // A public holiday on Monday-Friday on which somebody does not work counts as 8 paid hours
+  // (the shift plan screen credits it the same way). Without this the generator would try to fill
+  // hours that the plan already credits and report shortfalls that do not exist.
+  const holidayCreditDays = Object.fromEntries(activeEmployees.map((employee) => [employee, new Set()]));
+  const creditHolidayHours = (employee, day) => {
+    if (holidayCreditDays[employee].has(day)) return;
+    holidayCreditDays[employee].add(day);
+    empHours[employee] += HOLIDAY_CREDIT_HOURS;
+    empStats[employee].actualHours = Number(empHours[employee].toFixed(2));
+  };
+  // A shift added later (catch-up passes) replaces the credit of that day.
+  const releaseHolidayCredit = (employee, day) => {
+    if (!holidayCreditDays[employee].delete(day)) return;
+    empHours[employee] = Math.max(empHours[employee] - HOLIDAY_CREDIT_HOURS, 0);
+    empStats[employee].actualHours = Number(empHours[employee].toFixed(2));
+  };
 
   const assignShiftToEmployee = ({ emp, shiftDef, day, dateStr, weekend, holidayName, explanationReasons = [], score = null, eligibleCount = null }) => {
     const usesShortNight = normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night'
@@ -1456,6 +1480,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     assignedToday.add(emp);
     empDayAssignment[emp][day] = assignedShiftCode;
     assignedByShiftTypeToday[shiftDef.shift_type] = Number(assignedByShiftTypeToday[shiftDef.shift_type] || 0) + 1;
+    assignedByDefToday[shiftDef.code] = Number(assignedByDefToday[shiftDef.code] || 0) + 1;
     empLastShiftType[emp] = shiftDef.shift_type;
     empLastWorkedShiftCode[emp] = assignedShiftCode;
     empLastWorkedShiftType[emp] = shiftDef.shift_type;
@@ -1805,10 +1830,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const holidayName = holidayMap[dateStr] || null;
     selectStaffingForDay(dow, holidayName);
 
+    const absenceCreditedToday = new Set();
     for (const employee of activeEmployees) {
       const absence = getEmployeeAbsenceOnDate(employee, dateStr);
       const creditedHours = getCreditedAbsenceHours(absence, weekend);
       if (creditedHours <= 0) continue;
+      absenceCreditedToday.add(employee);
       empHours[employee] += creditedHours;
       empStats[employee].actualHours = Number(empHours[employee].toFixed(2));
     }
@@ -1822,7 +1849,25 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
     assignedToday = new Set();
   assignedByShiftTypeToday = { early: 0, late: 0, night: 0, special: 0 };
+    assignedByDefToday = {};
+    // Employees who can only work one shift type today (hard wish, fixed type, DBS rule).
+    const exclusiveEmployees = [];
+    for (const employee of availableForDay) {
+      if (empSeriesRemaining[employee] > 0) continue;
+      const allowedByType = new Map();
+      for (const definition of shiftDefs) {
+        const type = normalizePlanningShiftTypeKey(definition.shift_type);
+        if (type !== 'early' && type !== 'late' && type !== 'night') continue;
+        if (fixedShiftTypeByEmployee.get(employee) && fixedShiftTypeByEmployee.get(employee) !== type) continue;
+        if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) continue;
+        if (!isOutsideDbsAllowed(employee, definition, 1)) continue;
+        if (!allowedByType.has(type)) allowedByType.set(type, []);
+        if (normalizeWeekdaySetting(definition.applicable_days, [0, 1, 2, 3, 4, 5, 6]).includes(dow)) allowedByType.get(type).push(definition.code);
+      }
+      if (allowedByType.size === 1) exclusiveEmployees.push([...allowedByType.values()][0]);
+    }
     const baseShiftSlots = buildDailyShiftSlots({
+      exclusiveEmployees,
       shiftDefinitions: shiftDefs,
       staffingRules,
       staffingMaximums,
@@ -1890,11 +1935,53 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       }
     }
 
+    // A running block never ends by itself, so a day with a lower maximum (public holiday, Saturday,
+    // Sunday) would keep everybody who started the week. Surplus people get this day off: first those who
+    // asked for the holiday off, then those with the fewest open hours.
+    for (const typeKey of ['early', 'late', 'night']) {
+      const typeMaximum = getShiftTypeMaximum(typeKey);
+      if (!Number.isFinite(typeMaximum)) continue;
+      const running = availableForDay.filter((employee) => empSeriesRemaining[employee] > 0
+        && availableShiftCodes.has(empSeriesCode[employee])
+        && normalizePlanningShiftTypeKey(shiftSlots.find((slot) => slot.code === empSeriesCode[employee])?.shift_type) === typeKey);
+      if (running.length <= typeMaximum) continue;
+      const keepOrder = [...running].sort((left, right) => {
+        const wantsOff = (employee) => (holidayName && (empPrefsMap.get(employee)?.preferred_holidays || []).includes(holidayName) ? 1 : 0);
+        if (wantsOff(left) !== wantsOff(right)) return wantsOff(left) - wantsOff(right);
+        const openHours = (employee) => employeeTargetHours[employee] - empHours[employee];
+        return openHours(right) - openHours(left) || left.localeCompare(right, 'de');
+      });
+      for (const employee of keepOrder.slice(typeMaximum)) {
+        empSeriesCode[employee] = null;
+        empSeriesRemaining[employee] = 0;
+        empSeriesTotalDays[employee] = 0;
+      }
+    }
+
     const continuationLockedEmployees = new Set(
       availableForDay.filter((employee) => empSeriesRemaining[employee] > 0 && availableShiftCodes.has(empSeriesCode[employee]))
     );
 
-    for (const shiftDef of shiftSlots) {
+    // Phase 1 fills the minimum of every shift type (night, late, early; fixed pools and weekend
+    // blocks first), phase 2 the additional places that bring the hours. Without the split the early
+    // shift took the people first and night/late stayed below their minimum although early was far above it.
+    const typeRank = (definition) => ({ night: 0, late: 1, early: 2 }[normalizePlanningShiftTypeKey(definition?.shift_type)] ?? 3);
+    // Running blocks are placed first of all: they cannot be refused, so they must be counted before
+    // any new person is picked, otherwise a later definition pushes the type above its maximum.
+    const codesWithRunningBlock = new Set(availableForDay
+      .filter((employee) => empSeriesRemaining[employee] > 0)
+      .map((employee) => empSeriesCode[employee]));
+    const minimumFirstOrder = [...shiftSlots].sort((left, right) => {
+      const leftRunning = codesWithRunningBlock.has(left.code) ? 0 : 1;
+      const rightRunning = codesWithRunningBlock.has(right.code) ? 0 : 1;
+      if (leftRunning !== rightRunning) return leftRunning - rightRunning;
+      const leftPool = restrictedPoolShiftCodes.has(String(left.code || '').trim().toUpperCase()) ? 0 : 1;
+      const rightPool = restrictedPoolShiftCodes.has(String(right.code || '').trim().toUpperCase()) ? 0 : 1;
+      if (leftPool !== rightPool) return leftPool - rightPool;
+      return typeRank(left) - typeRank(right) || shiftSlots.indexOf(left) - shiftSlots.indexOf(right);
+    });
+    // Phase 0 places the running blocks of every definition, phase 1 the minimum, phase 2 the rest.
+    for (const [phase, slotOrder] of [shiftSlots, minimumFirstOrder, shiftSlots].entries()) for (const shiftDef of slotOrder) {
       // A missing DBS roster entry is intentional (for example Peter's free
       // Sunday). Regular early/weekend staffing covers that day instead.
       if (isDbsDefinition(shiftDef) && !dbsRoster.has(day)) continue;
@@ -1911,7 +1998,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const remainingHolidayCapacity = holidayShiftTypeLimit === null
         ? null
         : Math.max(holidayShiftTypeLimit - Number(assignedByShiftTypeToday[shiftDef.shift_type] || 0), 0);
-      const neededStaff = remainingHolidayCapacity === null
+      let neededStaff = remainingHolidayCapacity === null
         ? baseNeededStaff
         : Math.max(continuingEmployees.length, Math.min(baseNeededStaff, remainingHolidayCapacity));
       const shiftSkillSignals = featureFlags.skillsEnabled ? getShiftSkillSignals(shiftDef) : { ratedSkills: [], legacySkills: [] };
@@ -1941,11 +2028,19 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         });
       }
 
+      if (phase === 0) continue;
+      const phaseTypeKey = normalizePlanningShiftTypeKey(shiftDef.shift_type);
+      const alreadyPlannedForDefinition = Number(assignedByDefToday[shiftDef.code] || 0);
+      if (phase === 1 && ['early', 'late', 'night'].includes(phaseTypeKey)) {
+        const minimumLeft = Math.max((Number(staffingRules[phaseTypeKey]) || 0) - Number(assignedByShiftTypeToday[phaseTypeKey] || 0), 0);
+        neededStaff = Math.min(neededStaff, alreadyPlannedForDefinition + minimumLeft);
+      }
+
       const hasConfiguredNightTransition = availableForDay.some((employee) => empForcedNextShiftCode[employee] === shiftDef.code);
       const isBoundaryBootstrap = planningStartDay === 1
         && day === 1
         && dow !== 1
-        && continuingEmployees.length < baseNeededStaff;
+        && Math.max(continuingEmployees.length, alreadyPlannedForDefinition) < baseNeededStaff;
       const hasShortNightCandidate = normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night'
         && availableForDay.some((employee) => getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT
           && !assignedToday.has(employee)
@@ -1953,7 +2048,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const hasDbsRosterStart = isDbsDefinition(shiftDef) && dbsRoster.has(day);
       if (!canStartShiftSeries({ day, dayOfWeek: dow, definition: shiftDef }) && !hasConfiguredNightTransition && !isBoundaryBootstrap && !hasShortNightCandidate && !hasDbsRosterStart) {
         const requiredStaff = Math.max(Number.parseInt(String(shiftDef.min_staff ?? 0), 10) || 0, 0);
-        if (continuingEmployees.length < requiredStaff) {
+        if (phase === 1 && continuingEmployees.length < requiredStaff) {
           conflicts.push({
             day,
             date: dateStr,
@@ -1967,14 +2062,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       }
 
       // MIXED night model: after the planned slots, short-block employees fill up to the shift maximum.
-      const nightFill = resolveNightFillTarget({
-        planningMode: rotation.night_planning_mode,
-        shiftType: shiftDef.shift_type,
-        neededStaff,
-        maxStaff: sharedNightStaffCap,
-        holidayCapacity: remainingHolidayCapacity,
-      });
-      for (let slot = continuingEmployees.length; slot < nightFill.fillTarget; slot++) {
+      const nightFill = phase === 1
+        ? { fillTarget: neededStaff, extraSlots: 0 }
+        : resolveNightFillTarget({
+          planningMode: rotation.night_planning_mode,
+          shiftType: shiftDef.shift_type,
+          neededStaff,
+          maxStaff: sharedNightStaffCap,
+          holidayCapacity: remainingHolidayCapacity,
+        });
+      for (let slot = Math.max(continuingEmployees.length, alreadyPlannedForDefinition); slot < nightFill.fillTarget; slot++) {
         const isExtraNightSlot = slot >= neededStaff;
         if (normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night'
           && sharedNightStaffCap > 0
@@ -2040,6 +2137,23 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           };
           const shiftPreferenceStrengthFactor = strengthFactor(prefStrength.preferred_shifts);
           const preferredWishIgnored = isIgnoredStrength(prefStrength.preferred_shifts);
+
+          // A weekend-covering block (E1SA, E1WE, L1WE, N ...) is only started when every planned day of
+          // it is possible. Otherwise a person who cannot work Friday or Sunday would get a "WE" block
+          // that stops after Thursday and leaves the weekend uncovered. Weekday blocks may end early.
+          if (seriesDays > 1 && getShiftSeriesDays(shiftDef) >= 6) {
+            for (let offset = 1; offset < seriesDays && day + offset <= planningEndDay; offset++) {
+              const blockDay = day + offset;
+              const blockDate = `${month}-${String(blockDay).padStart(2, '0')}`;
+              if (isEmployeeAbsentOnDate(employee, blockDate)
+                || isEmployeeBlockedByPreferenceOnDay(employee, dayOfWeek(year, mon, blockDay))
+                || isEmployeeShiftBlockedOnDate(employee, blockDate, shiftDef.code)) {
+                hardBlocked = true;
+                reasons.push(`Block ${shiftDef.code} ist nicht vollständig möglich: Tag ${blockDay} ist nicht verfügbar`);
+                break;
+              }
+            }
+          }
 
           if (isDayBlockedByEmployeePreference(prefs, dow)) {
             if (isHardStrength(prefStrength.blocked_days)) {
@@ -2146,9 +2260,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const effectiveWorkdayLimit = isRosterDbsAssignment
             ? Math.max(rotation.max_consecutive_workdays, 7, seriesDays)
             : Math.max(rotation.max_consecutive_workdays, seriesDays);
-          if (empConsecutiveWork[employee] >= effectiveWorkdayLimit) {
+          // The whole planned block counts: a short block directly after a five-day week would end
+          // on day eight in a row, although the limit is six.
+          if (empConsecutiveWork[employee] + Math.max(seriesDays, 1) > effectiveWorkdayLimit) {
             hardBlocked = true;
-            reasons.push(`Max. Arbeitstage in Folge erreicht (${empConsecutiveWork[employee]}/${effectiveWorkdayLimit})`);
+            reasons.push(`Max. Arbeitstage in Folge erreicht (${empConsecutiveWork[employee]} + Block ${Math.max(seriesDays, 1)} > ${effectiveWorkdayLimit})`);
           }
 
           // A short night block contains up to three shifts, so the monthly safety
@@ -2492,9 +2608,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         });
       }
     }
-
     for (const employee of activeEmployees) {
       if (!assignedToday.has(employee)) {
+        if (holidayName && !weekend && !absenceCreditedToday.has(employee)) creditHolidayHours(employee, day);
         if (empSeriesRemaining[employee] > 0) {
           empSeriesCode[employee] = null;
           empSeriesRemaining[employee] = 0;
@@ -2692,6 +2808,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const addEmployeeTargetCatchupShift = (employee, day, shiftDef, reasons) => {
     const normalizedCode = String(shiftDef.code || '').trim().toUpperCase();
     const weekend = isWeekend(year, mon, day);
+    releaseHolidayCredit(employee, day);
     shifts.push({ employee_name: employee, day, shift_code: normalizedCode });
     empDayAssignment[employee][day] = normalizedCode;
     empLastWorkedShiftCode[employee] = normalizedCode;
@@ -2741,6 +2858,88 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       && normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type) === typeKey).length;
     return assignedTypeElsewhere < typeMaximum;
   };
+
+  // Preferred colleagues: swap whole weekday blocks between two people who work exactly the same days,
+  // so a wisher and the wished colleague end up in the same shift type without changing the daily
+  // staffing. Every rule (wishes, rest, DBS rule, fixed type) is checked before a block is taken over.
+  const colleagueAlignments = [];
+  if (preferredColleaguesEnabled && preferredColleagueWishes.length > 0) {
+    const alignable = new Set(['E1', 'E2', 'L1', 'L2']);
+    const typeOfCode = (code) => normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(code || '').trim().toUpperCase())?.shift_type);
+    const planDate = (day) => `${month}-${String(day).padStart(2, '0')}`;
+    const swapBlocks = (first, second) => {
+      for (let day = first.start; day <= first.end; day++) {
+        empDayAssignment[first.employee][day] = second.code;
+        empDayAssignment[second.employee][day] = first.code;
+      }
+    };
+    const canTakeBlock = (employee, start, end, newCode) => {
+      const definition = shiftDefinitionByCode.get(newCode);
+      const oldCode = empDayAssignment[employee][start];
+      if (!definition) return false;
+      const fixedType = fixedShiftTypeByEmployee.get(employee);
+      if (fixedType && fixedType !== normalizePlanningShiftTypeKey(definition.shift_type)) return false;
+      if (!isOutsideDbsAllowed(employee, definition, 0)) return false;
+      const applicable = normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]);
+      for (let day = start; day <= end; day++) {
+        if (!applicable.includes(dayOfWeek(year, mon, day))) return false;
+        const wish = getShiftWishEvaluation(employee, planDate(day), newCode, definition.shift_type);
+        if (wish.hardBlocked) return false;
+        if (wish.penalty > getShiftWishEvaluation(employee, planDate(day), oldCode, shiftDefinitionByCode.get(oldCode)?.shift_type).penalty) return false;
+      }
+      // An employee keeps a stated shift wish: no swap away from a preferred shift.
+      const prefsForBlock = preferencesForDate(employee, planDate(start));
+      if (isShiftPreferredByEmployeePreference(prefsForBlock, oldCode) && !isShiftPreferredByEmployeePreference(prefsForBlock, newCode)) return false;
+      // Rest rules at both ends of the block, checked with the block already carrying the new code.
+      const original = {};
+      for (let day = start; day <= end; day++) { original[day] = empDayAssignment[employee][day]; empDayAssignment[employee][day] = newCode; }
+      const violates = wouldViolateAdjacentTransition(employee, start, definition) || wouldViolateAdjacentTransition(employee, end, definition);
+      for (let day = start; day <= end; day++) empDayAssignment[employee][day] = original[day];
+      return !violates;
+    };
+    const applied = alignPreferredColleagues({
+      assignments: empDayAssignment,
+      wishes: preferredColleagueWishes.filter((wish) => activeEmployees.includes(wish.employee) && activeEmployees.includes(wish.colleague)),
+      getType: typeOfCode,
+      isSwappable: (block) => alignable.has(block.code) && block.end - block.start <= 4,
+      canTake: canTakeBlock,
+      swap: swapBlocks,
+      firstDay: planningStartDay,
+      lastDay: planningEndDay,
+    });
+    for (const entry of applied) {
+      for (const [employee, newCode, oldCode] of [[entry.first, entry.firstCode, entry.secondCode], [entry.second, entry.secondCode, entry.firstCode]]) {
+        const newDefinition = shiftDefinitionByCode.get(newCode);
+        const oldDefinition = shiftDefinitionByCode.get(oldCode);
+        for (let day = entry.startDay; day <= entry.endDay; day++) {
+          const shift = shifts.find((item) => item.employee_name === employee && item.day === day);
+          if (shift) shift.shift_code = newCode;
+          empStats[employee].specialShiftCounts[oldCode] = Math.max(Number(empStats[employee].specialShiftCounts[oldCode] || 0) - 1, 0);
+          empStats[employee].specialShiftCounts[newCode] = Number(empStats[employee].specialShiftCounts[newCode] || 0) + 1;
+          if (oldDefinition?.shift_type !== newDefinition?.shift_type) {
+            if (oldDefinition?.shift_type === 'early') empStats[employee].earlyCount--;
+            if (oldDefinition?.shift_type === 'late') empStats[employee].lateCount--;
+            if (newDefinition?.shift_type === 'early') empStats[employee].earlyCount++;
+            if (newDefinition?.shift_type === 'late') empStats[employee].lateCount++;
+          }
+          empHours[employee] += getShiftHoursForDay(newDefinition, day) - getShiftHoursForDay(oldDefinition, day);
+          explanations[`${employee}_${day}`] = {
+            employee,
+            day,
+            code: newCode,
+            reasons: [`Wunschkollege ${entry.colleague}: ${newCode} getauscht, damit beide in derselben Schichtart arbeiten`],
+          };
+        }
+        empStats[employee].actualHours = Number(empHours[employee].toFixed(2));
+        const lastDay = Math.max(...Object.keys(empDayAssignment[employee]).filter((day) => empDayAssignment[employee][day]).map(Number));
+        if (Number.isFinite(lastDay)) {
+          empLastWorkedShiftCode[employee] = empDayAssignment[employee][lastDay];
+          empLastWorkedShiftType[employee] = shiftDefinitionByCode.get(empLastWorkedShiftCode[employee])?.shift_type || empLastWorkedShiftType[employee];
+        }
+      }
+      colleagueAlignments.push(entry);
+    }
+  }
 
   for (const employee of activeEmployees) {
     const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
@@ -2817,6 +3016,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const selectedDay = availableDays[0].day;
       const selectedDate = `${month}-${String(selectedDay).padStart(2, '0')}`;
       const shiftHours = getShiftHoursForDay(catchupDefinition, selectedDay);
+      releaseHolidayCredit(employee, selectedDay);
       shifts.push({ employee_name: employee, day: selectedDay, shift_code: catchupDefinition.code });
       empDayAssignment[employee][selectedDay] = catchupDefinition.code;
       empHours[employee] += shiftHours;
@@ -2866,6 +3066,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
               reasons: [`Sollzeitausgleich: vollständiger ${weekendBlockCode}-Block Montag bis Sonntag`],
             };
           }
+          releaseHolidayCredit(employee, sunday);
           shifts.push({ employee_name: employee, day: sunday, shift_code: weekendBlockCode });
           empDayAssignment[employee][sunday] = weekendBlockCode;
           empHours[employee] += getShiftHoursForDay(earlyWeekendDefinition, sunday);
@@ -3018,10 +3219,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const sameTypeNeighbor = getAssignedShiftType(employee, day - 1) === normalizePlanningShiftTypeKey(definition.shift_type)
             || getAssignedShiftType(employee, day + 1) === normalizePlanningShiftTypeKey(definition.shift_type);
           const weekdayBonus = isWeekend(year, mon, day) ? 0 : 20;
+          // A filler day must continue the employee's own block: same shift type as the days around it
+          // and next to a working day. Anything else looks like a random day in the plan.
+          const cohesive = keepsEmployeeShiftCohesion(employee, day, definition);
+          const touchesWorkDay = Boolean(empDayAssignment[employee][day - 1]) || Boolean(empDayAssignment[employee][day + 1]);
 
           mandatoryCandidates.push({
             day,
             definition,
+            cohesive: cohesive && touchesWorkDay,
             addedHours: shiftHours,
             preferenceMatch: isShiftPreferredByEmployeePreference(preferencesForDate(employee, dateStr), definition.code),
             preferencePenalty: getBlockedDayPenalty(employee, dow) + getShiftWishPenaltyOnDate(employee, dateStr, definition.code),
@@ -3033,14 +3239,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           });
         }
       }
-
       if (mandatoryCandidates.length === 0) break;
       mandatoryCandidates.sort((left, right) => {
         if (left.preferencePenalty !== right.preferencePenalty) return left.preferencePenalty - right.preferencePenalty;
+        if (left.cohesive !== right.cohesive) return left.cohesive ? -1 : 1;
         if (left.preferenceMatch !== right.preferenceMatch) return left.preferenceMatch ? -1 : 1;
         return left.score - right.score || left.day - right.day || String(left.definition.code).localeCompare(String(right.definition.code), 'de');
       });
       const selected = mandatoryCandidates[0];
+      // Up to one shift of missing hours is accepted instead of a day that does not fit the plan.
+      if (!selected.cohesive && missingHours <= MAX_UNCOHESIVE_FILLER_HOURS) break;
       addEmployeeTargetCatchupShift(employee, selected.day, selected.definition, [
         `Verbindlicher letzter Sollzeitausgleich auf mindestens ${employeeTargetHours[employee]} Stunden`,
         `Zusatzdienst ${selected.definition.code} wurde gewählt, weil noch ${missingHours.toFixed(1)}h fehlen`,
@@ -3182,6 +3390,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const definitionMinimum = definitions.reduce((sum, definition) => sum + Math.max(Number.parseInt(String(definition.min_staff ?? 0), 10) || 0, 0), 0);
       const required = Number.isInteger(configuredTypeMinimum) ? Math.max(configuredTypeMinimum, definitionMinimum) : definitionMinimum;
       if (required <= 0) continue;
+
+      // A day without a DBS owner is intentional when a pool exists (the owner's weekday pattern, free
+      // days, other members' rest); missing coverage is reported per week as dbs_week_incomplete.
+      if (definitions.every((definition) => restrictedPoolShiftCodes.has(String(definition.code || '').trim().toUpperCase()))
+        && dbsPoolEntries.length > 0) continue;
 
       const definitionCodes = new Set(definitions.map((definition) => String(definition.code || '').trim().toUpperCase()));
       if (shiftType === 'night' && shortNightDefinition) definitionCodes.add(String(shortNightDefinition.code || 'NK').trim().toUpperCase());
@@ -4113,7 +4326,7 @@ router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write
       return res.status(400).json({ ok: false, error: 'employeeName und day sind erforderlich' });
     }
 
-    const { rows } = await pool.query('SELECT id, status, shifts_json, fairness FROM shiftplan_drafts WHERE id = $1', [draftId]);
+    const { rows } = await pool.query('SELECT id, month, status, shifts_json, fairness, config_snapshot FROM shiftplan_drafts WHERE id = $1', [draftId]);
     if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
     if (rows[0].status === 'activated') return res.status(400).json({ ok: false, error: 'Aktivierte Drafts koennen nicht bearbeitet werden' });
 
@@ -4124,16 +4337,79 @@ router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write
     }
     nextShifts.sort((left, right) => String(left.employee_name).localeCompare(String(right.employee_name), 'de') || Number(left.day) - Number(right.day));
 
+    // A cell without a shift cannot carry a Colo mark any more.
+    const snapshot = rows[0].config_snapshot && typeof rows[0].config_snapshot === 'object' ? rows[0].config_snapshot : {};
+    let nextSnapshot = snapshot;
+    if (!shiftCode && Array.isArray(snapshot.coloAssignments)) {
+      const monthPrefix = String(rows[0].month || '');
+      const cellDate = `${monthPrefix}-${String(day).padStart(2, '0')}`;
+      const remaining = snapshot.coloAssignments.filter((entry) => !(entry.employee_name === employeeName && String(entry.date).slice(0, 10) === cellDate));
+      if (remaining.length !== snapshot.coloAssignments.length) nextSnapshot = { ...snapshot, coloAssignments: remaining };
+    }
+
     const { rows: updatedRows } = await pool.query(
       `UPDATE shiftplan_drafts
           SET shifts_json = $2::jsonb,
+              config_snapshot = $3::jsonb,
               note = COALESCE(note, 'Manuell angepasst')
         WHERE id = $1
         RETURNING *`,
-      [draftId, JSON.stringify(nextShifts)]
+      [draftId, JSON.stringify(nextShifts), JSON.stringify(nextSnapshot)]
     );
 
     res.json({ ok: true, draft: updatedRows[0] });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* ------------------------------------------------ */
+/* COLO MARK OF A DRAFT CELL                        */
+/* Body: { employeeName, day, assigned, comment? }  */
+/* Marks / unmarks one employee on one day as Colo. */
+/* ------------------------------------------------ */
+
+router.patch('/drafts/:id/colo', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
+  try {
+    const draftId = parseInt(req.params.id, 10);
+    const employeeName = String(req.body?.employeeName || '').trim();
+    const day = Number.parseInt(req.body?.day, 10);
+    const assigned = req.body?.assigned !== false;
+    const comment = String(req.body?.comment || '').trim().slice(0, 200);
+
+    if (!employeeName || !Number.isInteger(day) || day < 1 || day > 31) {
+      return res.status(400).json({ ok: false, error: 'employeeName und day sind erforderlich' });
+    }
+
+    const { rows } = await pool.query('SELECT id, month, status, shifts_json, config_snapshot FROM shiftplan_drafts WHERE id = $1', [draftId]);
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
+    const draft = rows[0];
+    if (draft.status === 'activated') return res.status(400).json({ ok: false, error: 'Aktivierte Drafts koennen nicht bearbeitet werden' });
+
+    const parsedMonth = parseDraftMonthId(draft.month);
+    if (!parsedMonth || day > daysInMonth(parsedMonth.year, parsedMonth.month)) {
+      return res.status(400).json({ ok: false, error: 'Ungültiger Tag für diesen Monat' });
+    }
+    const shiftOfDay = (Array.isArray(draft.shifts_json) ? draft.shifts_json : [])
+      .find((entry) => entry.employee_name === employeeName && Number(entry.day) === day);
+    if (assigned && !shiftOfDay) {
+      return res.status(400).json({ ok: false, error: 'Nur Mitarbeitende mit einer Schicht an diesem Tag können als Colo markiert werden' });
+    }
+
+    const date = `${draft.month}-${String(day).padStart(2, '0')}`;
+    const snapshot = draft.config_snapshot && typeof draft.config_snapshot === 'object' ? draft.config_snapshot : {};
+    const current = Array.isArray(snapshot.coloAssignments) ? snapshot.coloAssignments : [];
+    const others = current.filter((entry) => !(entry.employee_name === employeeName && String(entry.date).slice(0, 10) === date));
+    const coloAssignments = assigned
+      ? [...others, { employee_name: employeeName, date, role_key: 'colo', comment: comment || 'Colo (manuell markiert)', task_key: 'manual', shift_code: shiftOfDay.shift_code, manual: true }]
+      : others;
+    coloAssignments.sort((left, right) => String(left.date).localeCompare(String(right.date)) || String(left.employee_name).localeCompare(String(right.employee_name), 'de'));
+
+    const { rows: updated } = await pool.query(
+      `UPDATE shiftplan_drafts SET config_snapshot = $2::jsonb WHERE id = $1 RETURNING *`,
+      [draftId, JSON.stringify({ ...snapshot, coloAssignments })]
+    );
+    res.json({ ok: true, draft: updated[0], coloAssignments });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -4190,8 +4466,26 @@ router.post('/drafts/:id/activate', requirePageAccess('shiftplan_control', 'writ
       );
     }
 
-    // COLO stays available as an internal planning capability. It is no longer
-    // published as a visible week-plan role when a draft is activated.
+    // Colo marks of the draft (generated or set by hand) become the "COLO" role of the
+    // week plan, so the people are marked in the live plan. Roles of other kinds that an
+    // employee already has on that day are never overwritten.
+    const coloAssignments = Array.isArray(draft.config_snapshot?.coloAssignments) ? draft.config_snapshot.coloAssignments : [];
+    const monthPrefix = `${parsedDraftMonth.year}-${String(parsedDraftMonth.month).padStart(2, '0')}`;
+    await client.query(
+      `DELETE FROM weekplan_roles WHERE role_key = 'colo' AND updated_by = $1 AND to_char(date, 'YYYY-MM') = $2`,
+      [COLO_ROLE_AUTHOR, monthPrefix]
+    );
+    for (const assignment of coloAssignments) {
+      const date = String(assignment?.date || '').slice(0, 10);
+      const employeeName = String(assignment?.employee_name || '').trim();
+      if (!employeeName || !date.startsWith(`${monthPrefix}-`)) continue;
+      await client.query(
+        `INSERT INTO weekplan_roles (employee_name, date, role_key, comment, updated_by)
+         VALUES ($1, $2, 'colo', $3, $4)
+         ON CONFLICT (employee_name, date) DO NOTHING`,
+        [employeeName, date, String(assignment?.comment || '').trim().slice(0, 200) || null, COLO_ROLE_AUTHOR]
+      );
+    }
 
     // Update draft status
     await client.query(
@@ -4439,8 +4733,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map()) {
     const name = userNameCandidates(row).map((candidate) => findEmployeeName(candidate, nameLookup)).find(Boolean);
     if (name) prefsByEmployee.set(name, row);
   }
-  const blockedSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1").catch(() => ({ rows: [] }));
-  const blockedDaysEnabled = String(blockedSetting.rows[0]?.value ?? 'false') === 'true';
+  const { blockedDaysEnabled } = await loadWishSettings((text, params) => pool.query(text, params)).catch(() => ({ blockedDaysEnabled: true }));
 
   const summaryRows = [];
   const detailRows = [];

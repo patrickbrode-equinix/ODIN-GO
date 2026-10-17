@@ -14,6 +14,8 @@ import {
 } from "../db/initSchema.js";
 import { requirePageAccess } from "../middleware/requirePageAccess.js";
 import { syncEmployeeContacts } from "../lib/employeeContactsSync.js";
+import { loadWishSettings } from "../lib/wishSettings.js";
+import { parseAdminPreferenceInput } from "../lib/employeePreferenceInput.js";
 import { provisionUsersFromShiftplan } from "../services/shiftUserProvisioning.service.js";
 import { logActivity } from "./activity.js";
 import { buildBaseAccessPolicy } from "../auth/accessControl.js";
@@ -341,18 +343,97 @@ router.get(
         [targetUserId]
       );
 
-      const { rows: colleagueSetting } = await db.query(
-        "SELECT value FROM app_settings WHERE key = 'shiftplan.preferred_colleagues_enabled' LIMIT 1"
-      );
+      const { colleaguesEnabled } = await loadWishSettings((text, params) => db.query(text, params));
 
       res.json({
         user: users[0],
         preferences: rows[0] || null,
-        preferredColleaguesEnabled: String(colleagueSetting[0]?.value ?? 'false') === 'true',
+        preferredColleaguesEnabled: colleaguesEnabled,
       });
     } catch (err) {
       console.error("USER PREFERENCES READ ERROR:", err);
       res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+router.put(
+  "/:id/preferences",
+  requireAuth,
+  requirePageAccess("user_management", "write"),
+  async (req, res) => {
+    const targetUserId = Number(req.params.id);
+    if (!Number.isInteger(targetUserId) || targetUserId <= 0) return res.status(400).json({ message: "Invalid user id" });
+
+    const parsed = parseAdminPreferenceInput(req.body || {}, { userId: targetUserId });
+    if (parsed.error) return res.status(400).json({ message: parsed.error });
+
+    try {
+      const { rows: users } = await db.query(
+        "SELECT id, login_name, email, is_root FROM users WHERE id = $1",
+        [targetUserId]
+      );
+      if (users.length === 0) return res.status(404).json({ message: "User not found" });
+      if (users[0].is_root) return res.status(403).json({ message: "Root user cannot be modified" });
+
+      const values = parsed.values;
+      if (Array.isArray(values.preferred_colleagues) && values.preferred_colleagues.length > 0) {
+        const { rows: existing } = await db.query(
+          "SELECT id FROM users WHERE id = ANY($1::int[]) AND is_root = FALSE",
+          [values.preferred_colleagues]
+        );
+        const known = new Set(existing.map((row) => row.id));
+        values.preferred_colleagues = values.preferred_colleagues.filter((id) => known.has(id));
+      }
+
+      // Fields that were not sent keep their stored value (NULL parameter = keep).
+      const json = (value) => (value === undefined ? null : JSON.stringify(value));
+      const { rows } = await db.query(
+        `INSERT INTO employee_preferences (user_id, preferred_shifts, unwanted_shifts, preferred_holidays, max_nights_per_month, max_weekends_per_month, preferred_days, blocked_days, avoid_colleagues, workload_preference, monthly_preferences, night_model, preferred_colleagues, updated_at)
+         VALUES ($1, COALESCE($2::jsonb, '[]'::jsonb), COALESCE($3::jsonb, '[]'::jsonb), COALESCE($4::jsonb, '[]'::jsonb), $5, $6, '[]'::jsonb, COALESCE($7::jsonb, '[]'::jsonb), '[]'::jsonb, 'normal', COALESCE($8::jsonb, '{}'::jsonb), COALESCE($9, 'SEVEN_DAY'), COALESCE($10::jsonb, '[]'::jsonb), NOW())
+         ON CONFLICT (user_id) DO UPDATE SET
+           preferred_shifts = COALESCE($2::jsonb, employee_preferences.preferred_shifts),
+           unwanted_shifts = COALESCE($3::jsonb, employee_preferences.unwanted_shifts),
+           preferred_holidays = COALESCE($4::jsonb, employee_preferences.preferred_holidays),
+           max_nights_per_month = CASE WHEN $11::boolean THEN $5 ELSE employee_preferences.max_nights_per_month END,
+           max_weekends_per_month = CASE WHEN $12::boolean THEN $6 ELSE employee_preferences.max_weekends_per_month END,
+           blocked_days = COALESCE($7::jsonb, employee_preferences.blocked_days),
+           monthly_preferences = COALESCE($8::jsonb, employee_preferences.monthly_preferences),
+           night_model = COALESCE($9, employee_preferences.night_model),
+           preferred_colleagues = COALESCE($10::jsonb, employee_preferences.preferred_colleagues),
+           updated_at = NOW()
+         RETURNING user_id`,
+        [
+          targetUserId,
+          json(values.preferred_shifts),
+          json(values.unwanted_shifts),
+          json(values.preferred_holidays),
+          values.max_nights_per_month ?? null,
+          values.max_weekends_per_month ?? null,
+          json(values.blocked_days),
+          json(values.monthly_preferences),
+          values.night_model ?? null,
+          json(values.preferred_colleagues),
+          'max_nights_per_month' in values,
+          'max_weekends_per_month' in values,
+        ]
+      );
+
+      await logActivity(
+        req.user.id,
+        req.user.email,
+        "EMPLOYEE_PREFERENCES_UPDATED_BY_ADMIN",
+        "user_management",
+        "employee_preferences",
+        String(targetUserId),
+        null,
+        { targetLoginName: users[0].login_name, targetEmail: users[0].email, fields: Object.keys(values) }
+      );
+
+      return res.json({ success: true, userId: rows[0].user_id });
+    } catch (err) {
+      console.error("USER PREFERENCES UPDATE ERROR:", err);
+      return res.status(500).json({ message: "Server error" });
     }
   }
 );

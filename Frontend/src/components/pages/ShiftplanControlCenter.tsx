@@ -12,6 +12,8 @@ import { ShiftplanTable } from '../shiftplan/ShiftplanTable';
 import type { EmployeeMonthlyStats } from '../shiftplan/shiftplan.hours';
 import type { Absence } from '../../api/absences';
 import { GroupedDraftList } from '../shiftplan/GroupedDraftList';
+import { ColoLegend } from '../shiftplan/ColoBadge';
+import { buildColoMarkLookup, getColoMark } from '../../utils/coloMarks';
 import type { PlanningDraftGroup } from '../../api/planningPeriods';
 import {
   CalendarClock, Play, ChevronDown, ChevronUp,
@@ -337,6 +339,26 @@ export default function ShiftplanControlCenter() {
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message);
       throw e;
+    }
+  };
+
+  const handleDraftColoChange = async (employeeName: string, day: number, assigned: boolean) => {
+    if (!activeDraft) return;
+    try {
+      const res = await api.patch(`/shiftplan-control/drafts/${activeDraft.id}/colo`, {
+        employeeName,
+        day,
+        assigned,
+      });
+      setActiveDraft((prev) => {
+        const base: Draft = prev ? { ...prev, ...res.data.draft } : res.data.draft;
+        const coloAssignments = Array.isArray(res.data.coloAssignments)
+          ? res.data.coloAssignments
+          : base.config_snapshot?.coloAssignments;
+        return { ...base, config_snapshot: { ...(base.config_snapshot || {}), coloAssignments } };
+      });
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e.message);
     }
   };
 
@@ -833,6 +855,7 @@ export default function ShiftplanControlCenter() {
                     draft={activeDraft}
                     manualOnly={showManualEmployeesOnly}
                     onCellChange={handleDraftCellChange}
+                    onColoChange={handleDraftColoChange}
                   />
                 </>
               )}
@@ -869,7 +892,7 @@ export default function ShiftplanControlCenter() {
 /* SUB-COMPONENTS                                   */
 /* ================================================ */
 
-function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: Draft; manualOnly?: boolean; onCellChange?: (employeeName: string, day: number, shiftCode: string) => Promise<void> }) {
+function DraftShiftTable({ draft, manualOnly = false, onCellChange, onColoChange }: { draft: Draft; manualOnly?: boolean; onCellChange?: (employeeName: string, day: number, shiftCode: string) => Promise<void>; onColoChange?: (employeeName: string, day: number, assigned: boolean) => Promise<void> }) {
   const { language, t } = useLanguage();
   const locale = getLanguageLocale(language);
   const isGerman = language === 'de';
@@ -883,6 +906,7 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: D
       : [];
     return Array.from(new Set(['', ...fromConfig, 'E1', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1', 'L1WE', 'N', 'DBS', 'FS', 'ABW', 'S']));
   }, [draft.config_snapshot?.shiftDefinitions]);
+  const coloMarks = useMemo(() => buildColoMarkLookup(draft.config_snapshot?.coloAssignments), [draft.config_snapshot?.coloAssignments]);
   const manualEmployeeNameSet = useMemo(
     () => new Set((Array.isArray(draft.manual_employees) ? draft.manual_employees : []).map((entry) => String(entry.employee_name || '').trim()).filter(Boolean)),
     [draft.manual_employees]
@@ -970,6 +994,7 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: D
             {isGerman ? 'Nur manuelle Mitarbeiter' : 'Manual employees only'}
           </span>
         )}
+        <ColoLegend isGerman={isGerman} />
         <button
           type="button"
           onClick={() => setEditMode((current) => !current)}
@@ -1001,6 +1026,8 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: D
                   <td className="sticky left-0 z-10 bg-background px-3 py-2 font-semibold text-foreground">{employee}</td>
                   {Array.from({ length: numDays }, (_, index) => index + 1).map((day) => {
                     const key = `${employee}-${day}`;
+                    const cellShift = filteredSchedule[employee]?.[day] || '';
+                    const coloMark = getColoMark(coloMarks, employee, `${draft.month}-${String(day).padStart(2, '0')}`);
                     return (
                       <td key={day} className="px-1 py-1">
                         <select
@@ -1018,6 +1045,26 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: D
                         >
                           {shiftOptions.map((code) => <option key={code || 'empty'} value={code}>{code || '–'}</option>)}
                         </select>
+                        {onColoChange && (coloMark || cellShift) ? (
+                          <button
+                            type="button"
+                            disabled={savingCell === key || draft.status === 'activated'}
+                            title={coloMark
+                              ? `${isGerman ? 'Colo-Markierung entfernen' : 'Remove Colo mark'}${coloMark.comment ? ` · ${coloMark.comment}` : ''}${coloMark.manual ? ` · ${isGerman ? 'manuell' : 'manual'}` : ''}`
+                              : (isGerman ? 'Als Colo markieren' : 'Mark as Colo')}
+                            onClick={async () => {
+                              setSavingCell(key);
+                              try {
+                                await onColoChange(employee, day, !coloMark);
+                              } finally {
+                                setSavingCell(null);
+                              }
+                            }}
+                            className={`mt-0.5 block w-16 rounded border px-1 text-[9px] font-black leading-4 disabled:opacity-50 ${coloMark ? 'border-cyan-400/60 bg-cyan-500/25 text-cyan-100' : 'border-border/40 text-muted-foreground hover:border-cyan-400/50 hover:text-cyan-200'}`}
+                          >
+                            CO
+                          </button>
+                        ) : null}
                       </td>
                     );
                   })}
@@ -1038,6 +1085,7 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange }: { draft: D
           employeeHours={employeeHours}
           absences={draft.absences || []}
           employeeBadges={employeeBadges}
+          coloMarks={coloMarks}
         />
       )}
 

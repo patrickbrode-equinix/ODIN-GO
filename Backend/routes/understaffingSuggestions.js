@@ -121,10 +121,6 @@ router.get(
       const rotationRes = await pool.query('SELECT * FROM shift_rotation_rules WHERE id=1');
       const planningRes = await pool.query('SELECT respect_employee_wishes FROM shift_planning_config WHERE id=1');
       const wellbeingRes = await pool.query("SELECT * FROM wellbeing_config WHERE scope = 'global'");
-      const blockedDaysRes = await pool.query(
-        "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1",
-      );
-
       const strengthRes = await pool.query(
         "SELECT key, value FROM app_settings WHERE key LIKE 'shiftplan.pref_strength.%'",
       );
@@ -133,7 +129,8 @@ router.get(
       const shortNightSeriesDays = normalizeShortNightSeriesDays(shortNightDefinition?.series_days, 3);
 
       const respectWishes = planningRes.rows[0] ? planningRes.rows[0].respect_employee_wishes !== false : true;
-      const blockedDaysEnabled = String(blockedDaysRes.rows[0]?.value ?? 'false') === 'true';
+      // The strength of the wish is the only setting: 0 % = blocked weekdays are ignored.
+      const blockedDaysEnabled = prefStrength.blocked_days > 0;
 
       /* ---- employee preferences (name-resolved like the generator) ---- */
       const preferenceRes = await pool.query(

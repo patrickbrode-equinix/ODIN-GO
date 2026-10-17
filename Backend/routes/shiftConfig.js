@@ -9,6 +9,8 @@ import { requireAuth, requireVerifiedIdentity } from '../middleware/authMiddlewa
 import { requirePageAccess } from '../middleware/requirePageAccess.js';
 import pool from '../db.js';
 import { ensureShiftplanSchema } from '../lib/ensureShiftplanSchema.js';
+import { loadWishSettings } from '../lib/wishSettings.js';
+import { analyzePlanningHealth } from '../lib/planningHealth.js';
 import { isDateKey, vacationSummary } from '../lib/vacationDays.js';
 import { recomputeConflictsInternal } from './absences.js';
 import { normalizeFreeDaysAfter, normalizeShortNightSeriesDays, sanitizeShiftModes } from '../lib/shiftDefinitionInput.js';
@@ -99,13 +101,11 @@ function validateDayOverride(input = {}) {
   return null;
 }
 
-// Every employee may enter weekdays they do not want to work. Whether the
-// generator honours them is a single admin switch (app_settings).
-async function isBlockedDaysEnabled() {
-  const { rows } = await pool.query(
-    "SELECT value FROM app_settings WHERE key = 'shiftplan.blocked_days_enabled' LIMIT 1"
-  );
-  return String(rows[0]?.value ?? 'false') === 'true';
+// Every employee may enter weekdays they do not want to work. The generator honours
+// them while the strength of that wish type is above 0 % (admin: Wünsche).
+async function loadWishSwitches() {
+  const { blockedDaysEnabled, colleaguesEnabled } = await loadWishSettings((text, params) => pool.query(text, params));
+  return { blockedDaysEnabled, colleaguesEnabled };
 }
 
 /* ------------------------------------------------ */
@@ -859,12 +859,13 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
   try {
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
-    const [preferenceResult, blockedDaysEnabled] = await Promise.all([
+    const [preferenceResult, wishSwitches] = await Promise.all([
       pool.query('SELECT * FROM employee_preferences WHERE user_id=$1', [userId]),
-      isBlockedDaysEnabled(),
+      loadWishSwitches(),
     ]);
+    const { blockedDaysEnabled, colleaguesEnabled: preferredColleaguesEnabled } = wishSwitches;
     const preference = preferenceResult.rows[0] || null;
-    const [colleagueOptionsResult, colleagueSettingResult] = await Promise.all([
+    const [colleagueOptionsResult] = await Promise.all([
       pool.query(
         `SELECT id, first_name, last_name
            FROM users
@@ -873,13 +874,12 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
           ORDER BY last_name, first_name`,
         [userId]
       ),
-      pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.preferred_colleagues_enabled' LIMIT 1"),
     ]);
     res.json({
       ok: true,
       canSelectBlockedDays: true,
       blockedDaysEnabled,
-      preferredColleaguesEnabled: String(colleagueSettingResult.rows[0]?.value ?? 'false') === 'true',
+      preferredColleaguesEnabled,
       colleagueOptions: colleagueOptionsResult.rows.map((row) => ({
         id: row.id,
         name: [row.last_name, row.first_name].filter(Boolean).join(', '),
@@ -1196,6 +1196,56 @@ router.put('/ticket-preferences', requireVerifiedIdentity, async (req, res) => {
     );
 
     res.json({ ok: true, preferences: rows[0] });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* ------------------------------------------------ */
+/* PLANNING HEALTH: settings that contradict        */
+/* each other or the employees' wishes              */
+/* ------------------------------------------------ */
+
+router.get('/planning-health', requirePageAccess('shiftplan_control', 'view'), async (_req, res) => {
+  try {
+    const [rotation, planConfig, wishes, staffing, dayLimits, preferences, users, dbsRows, settings, definitions] = await Promise.all([
+      pool.query('SELECT * FROM shift_rotation_rules WHERE id=1'),
+      pool.query('SELECT * FROM shift_planning_config WHERE id=1'),
+      loadWishSettings((text, params) => pool.query(text, params)),
+      loadStaffingRuleRows(),
+      loadStaffingDayLimitRows(),
+      pool.query(`SELECT ep.*, u.first_name, u.last_name, u.provisioned_employee_name
+                    FROM employee_preferences ep JOIN users u ON u.id = ep.user_id WHERE u.approved = TRUE`),
+      pool.query('SELECT COUNT(*)::int AS count FROM users WHERE approved = TRUE AND is_root = FALSE'),
+      pool.query("SELECT employee_name, working_weekdays, other_shift_codes FROM shift_special_pools WHERE shift_code = 'DBS' AND is_active = TRUE"),
+      pool.query("SELECT key, value FROM app_settings WHERE key IN ('shiftplan.dbs_enabled','shiftplan.colo_enabled','shiftplan.colo_pool','shiftplan.colo_requirements','shiftplan.colo_weekday_preparation_staff','shiftplan.colo_night_staff','shiftplan.colo_weekend_day_staff')"),
+      pool.query('SELECT code, series_days, is_active FROM shift_definitions'),
+    ]);
+    const settingMap = Object.fromEntries(settings.rows.map((row) => [row.key, row.value]));
+    const issues = analyzePlanningHealth({
+      definitions: definitions.rows,
+      rotation: rotation.rows[0] || null,
+      planConfig: planConfig.rows[0] || null,
+      wishStrengths: wishes.strengths,
+      staffingRules: staffing,
+      dayLimits,
+      preferences: preferences.rows.map((row) => ({
+        ...row,
+        name: row.provisioned_employee_name || [row.first_name, row.last_name].filter(Boolean).join(' '),
+      })),
+      employeeCount: users.rows[0]?.count || 0,
+      dbsConfig: { enabled: settingMap['shiftplan.dbs_enabled'] !== 'false', shiftCode: 'DBS' },
+      dbsPool: dbsRows.rows,
+      coloConfig: {
+        enabled: settingMap['shiftplan.colo_enabled'],
+        employeePool: settingMap['shiftplan.colo_pool'],
+        requirements: settingMap['shiftplan.colo_requirements'],
+        weekdayPreparationStaff: settingMap['shiftplan.colo_weekday_preparation_staff'],
+        nightStaff: settingMap['shiftplan.colo_night_staff'],
+        weekendDayStaff: settingMap['shiftplan.colo_weekend_day_staff'],
+      },
+    });
+    res.json({ ok: true, issues });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

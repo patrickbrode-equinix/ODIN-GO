@@ -21,6 +21,8 @@ import { getShiftColorKind, getShiftColorStyle, getShiftKindStyle, SHIFT_COLOR_L
 import { isColoEmployee } from "../../utils/colo";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
+import { ColoBadge, ColoLegend } from "../shiftplan/ColoBadge";
+import { buildColoMarkLookup, getColoMark } from "../../utils/coloMarks";
 import { GroupedDraftList } from "../shiftplan/GroupedDraftList";
 import { updateDraftMetadata, type ExcelExportVariant, type PlanningDraftGroup } from "../../api/planningPeriods";
 import { useAuth } from "../../context/AuthContext";
@@ -47,6 +49,7 @@ type Draft = DraftSummary & {
   config_snapshot?: {
     dispatcherConfig?: { enabled?: boolean; priorities?: string[] };
     planningConfig?: { monthly_target_hours?: number };
+    coloAssignments?: unknown;
   };
 };
 type DraftFeedback = {
@@ -92,6 +95,7 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
     const dispatcherPool = draft.config_snapshot?.dispatcherConfig?.priorities || [];
     return { employees: employeeNames, days: monthDays, year, month, shiftsByEmployee: schedule, dispatcherPool };
   }, [draft]);
+  const coloMarks = useMemo(() => buildColoMarkLookup(draft.config_snapshot?.coloAssignments), [draft.config_snapshot?.coloAssignments]);
 
   return (
     <div className="overflow-x-auto">
@@ -137,10 +141,12 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
               {days.map((value) => {
                 const code = shiftsByEmployee.get(employee)?.get(value) || "";
                 const kind = getShiftColorKind(code);
+                const coloMark = getColoMark(coloMarks, employee, `${year}-${String(month).padStart(2, "0")}-${String(value).padStart(2, "0")}`);
                 return (
                   <td key={value} className="border-l border-white/6 p-1 text-center">
                     <div className="flex flex-col items-center">
                       {code ? <span style={getShiftColorStyle(code)} className={`shift-badge shift-badge-${kind} inline-flex ${compact ? "min-h-5 min-w-6 px-1" : "min-h-7 min-w-8 px-1.5"} items-center justify-center rounded-md border font-bold`}>{code}</span> : null}
+                      {coloMark ? <ColoBadge mark={coloMark} isGerman={isGerman} className="mt-0.5" /> : null}
                     </div>
                   </td>
                 );
@@ -426,7 +432,7 @@ export default function ShiftplanDrafts() {
                       {user.isAdmin ? <Button type="button" variant="outline" onClick={() => void exportDraft(activeDraft, "management")} disabled={exportingId === activeDraft.id} className="border-slate-600 bg-slate-950/40"><BarChart3 className="mr-2 h-4 w-4" />Excel für die Leitung</Button> : null}
                     </div>
                   </div>
-                  <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}</div>
+                  <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman /></div>
                   <ShiftTimeLegend shiftTimes={shiftTimes} className="mt-2" />
                 </section>
 

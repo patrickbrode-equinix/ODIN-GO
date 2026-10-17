@@ -21,9 +21,13 @@ interface Props {
     onClose: () => void;
     /** Called with the plain shift code (E1, E2, L1, L2, N, ABW, SEMINAR) */
     onSelect: (code: string) => void;
+    /** When set, an extra entry to mark / unmark the selected cell(s) as Colo is shown. */
+    onColoToggle?: () => void;
+    /** True when all selected cells are already marked as Colo (entry then removes the mark). */
+    coloMarked?: boolean;
 }
 
-export function ShiftContextMenu({ anchorEl, employeeName, selectedCount = 1, dateLabel, currentLabel, onClose, onSelect }: Props) {
+export function ShiftContextMenu({ anchorEl, employeeName, selectedCount = 1, dateLabel, currentLabel, onClose, onSelect, onColoToggle, coloMarked = false }: Props) {
     const ref = useRef<HTMLDivElement>(null);
     const { t, language } = useLanguage();
     const isGerman = language === "de";
@@ -119,6 +123,28 @@ export function ShiftContextMenu({ anchorEl, employeeName, selectedCount = 1, da
                 {CONTEXT_MENU_SHIFT_CODES.map((code) => (
                     <MenuItem key={code} code={code} label={itemLabel(code)} onClick={() => onSelect(code)} />
                 ))}
+                {onColoToggle ? (
+                    <>
+                        <div className="my-1 border-t border-border/50" />
+                        <button
+                            type="button"
+                            className="w-full flex items-center gap-3 text-left px-2 py-1.5 text-sm rounded-md transition-colors hover:bg-accent hover:text-accent-foreground"
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onColoToggle();
+                            }}
+                        >
+                            <span className="inline-flex items-center justify-center min-w-[64px] h-[22px] px-2 text-[11px] font-bold rounded-md border border-cyan-400/60 bg-cyan-500/25 text-cyan-100">
+                                CO
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                                {coloMarked
+                                    ? (isGerman ? "Colo-Markierung entfernen" : "Remove Colo mark")
+                                    : (isGerman ? "Als Colo markieren" : "Mark as Colo")}
+                            </span>
+                        </button>
+                    </>
+                ) : null}
             </Card>
         </div>
     );

@@ -25,6 +25,8 @@ import { useLanguage } from "../../context/LanguageContext";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { AttendanceRecord } from "../../api/attendance";
 import { getShiftColorKind, getShiftColorStyle } from "./shiftColors";
+import { ColoBadge } from "./ColoBadge";
+import { getColoMark, type ColoMarkLookup } from "../../utils/coloMarks";
 
 interface ShiftplanTableProps {
   schedule: Record<string, Record<number, string>>;
@@ -66,6 +68,9 @@ interface ShiftplanTableProps {
   constraintViolations?: ConstraintViolation[];
 
   attendanceMap?: Record<string, AttendanceRecord>;
+
+  /** Cells planned for Colo; key `${employee}|${YYYY-MM-DD}` */
+  coloMarks?: ColoMarkLookup;
 }
 
 
@@ -141,6 +146,7 @@ export function ShiftplanTable({
   constraintViolations = [],
 
   attendanceMap = {},
+  coloMarks,
 }: ShiftplanTableProps) {
   const tableRef = useRef<HTMLTableElement | null>(null);
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
@@ -590,6 +596,7 @@ export function ShiftplanTable({
                         const dailyInfo = employeeHours?.get(name)?.dayHours?.[day];
                         const dailyExceeded = dailyInfo?.exceeded ?? false;
                         const dailyBlock = dailyExceeded && dailyInfo?.mode === 'block';
+                        const coloMark = getColoMark(coloMarks, name, key);
 
                         return (
                           <td
@@ -604,6 +611,7 @@ export function ShiftplanTable({
                               ${(isEditMode || !!onCellClick) ? "cursor-pointer" : ""}
                               ${isCellSelected ? "ring-2 ring-indigo-400 bg-indigo-500/20" : ""}
                               ${isToday ? "bg-indigo-500/5" : ""}
+                              ${coloMark ? "pb-[17px]" : ""}
                               ${conflict ? "bg-red-900/40" : ""} 
                               ${dailyBlock ? "bg-red-500/15 ring-1 ring-red-500/40" : dailyExceeded ? "bg-amber-500/10" : ""}
                             `}
@@ -685,6 +693,12 @@ export function ShiftplanTable({
                                 <div className="text-[10px] bg-red-600 text-white rounded-full w-4 h-4 flex items-center justify-center shadow-md animate-bounce" title={conflict.details.msg}>
                                   ⚠
                                 </div>
+                              </div>
+                            )}
+
+                            {coloMark && (
+                              <div className="absolute bottom-px left-1/2 z-20 -translate-x-1/2">
+                                <ColoBadge mark={coloMark} isGerman={isGerman} />
                               </div>
                             )}
 

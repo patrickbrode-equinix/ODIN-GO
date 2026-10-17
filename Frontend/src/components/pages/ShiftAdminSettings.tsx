@@ -114,6 +114,13 @@ function normalizeShiftModes(definition: ShiftDefinition): ShiftMode[] {
   return [{ id: 1, label: 'Standard', start_time: definition.start_time || '00:00', end_time: definition.end_time || '00:00', duration_hours: definition.duration_hours || 0, free_days_after: 0 }];
 }
 
+/** Most Colo people needed on one weekday at the same time. */
+function getMaxColoStaffPerDay(requirements: ColoRequirement[]): number {
+  return Math.max(0, ...[0, 1, 2, 3, 4, 5, 6].map((weekday) => (
+    requirements.filter((entry) => entry.weekdays.includes(weekday)).reduce((sum, entry) => sum + entry.staff, 0)
+  )));
+}
+
 function getPlanningAuditIssues({
   definitions,
   rotation,
@@ -201,7 +208,7 @@ function getPlanningAuditIssues({
   }
 
   if (coloConfig.enabled) {
-    const requiredPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendDayStaff) + coloConfig.nightStaff;
+    const requiredPoolSize = getMaxColoStaffPerDay(coloConfig.requirements);
     if (requiredPoolSize > coloConfig.employeePool.length) {
       add('colo-pool-too-small', 'error', `Für die aktivierte Colo-Planung werden gleichzeitig bis zu ${requiredPoolSize} Mitarbeitende benötigt, im Pool sind aber nur ${coloConfig.employeePool.length}.`, `Enabled Colo planning needs up to ${requiredPoolSize} employees at the same time, but the pool only has ${coloConfig.employeePool.length}.`);
     }
@@ -358,11 +365,20 @@ interface AdvancedPlanningSettings {
   issuePanelEnabled: boolean;
   issueShowSolutions: boolean;
   issuePriorityMode: 'staffing_first' | 'balanced' | 'fairness_first';
-  blockedDaysEnabled: boolean;
   adminFlagsEnabled: boolean;
-  preferredColleaguesEnabled: boolean;
   /** 0-100: how strongly the generator avoids repeating the same blocks (60 = default). */
   varietyPriority: number;
+}
+
+type ColoShiftType = 'early' | 'late' | 'night';
+
+/** "On these weekdays n pool employees of this shift type are needed for Colo." */
+interface ColoRequirement {
+  id: string;
+  weekdays: number[];
+  shift_type: ColoShiftType;
+  staff: number;
+  label?: string;
 }
 
 interface DbsConfig {
@@ -375,9 +391,15 @@ interface DbsConfig {
 interface ColoConfig {
   enabled: boolean;
   employeePool: string[];
-  weekdayPreparationStaff: number;
-  nightStaff: number;
-  weekendDayStaff: number;
+  requirements: ColoRequirement[];
+}
+
+interface PlanningHealthIssue {
+  id: string;
+  level: 'error' | 'warning' | 'info';
+  area: string;
+  messageDe: string;
+  messageEn: string;
 }
 
 interface OvertimeConfig {
@@ -389,22 +411,13 @@ interface OvertimeConfig {
   weeklyMode: 'off' | 'warn' | 'block';
 }
 
-type HolidayStaffingLimit = {
-  early: number;
-  late: number;
-};
-
-type HolidayStaffingConfig = Record<string, HolidayStaffingLimit>;
-
 /* ── defaults & constants ── */
 
 const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   issuePanelEnabled: true,
   issueShowSolutions: true,
   issuePriorityMode: 'balanced',
-  blockedDaysEnabled: false,
   adminFlagsEnabled: false,
-  preferredColleaguesEnabled: false,
   varietyPriority: 60,
 };
 
@@ -418,10 +431,79 @@ const DEFAULT_DBS_CONFIG: DbsConfig = {
 const DEFAULT_COLO_CONFIG: ColoConfig = {
   enabled: false,
   employeePool: [],
-  weekdayPreparationStaff: 1,
-  nightStaff: 1,
-  weekendDayStaff: 1,
+  requirements: [],
 };
+
+const COLO_SHIFT_TYPE_OPTIONS: Array<{ value: ColoShiftType; labelDe: string; labelEn: string }> = [
+  { value: 'early', labelDe: 'Früh', labelEn: 'Early' },
+  { value: 'late', labelDe: 'Spät', labelEn: 'Late' },
+  { value: 'night', labelDe: 'Nacht', labelEn: 'Night' },
+];
+
+type WishStrengthKey = 'unwanted_shifts' | 'preferred_shifts' | 'holidays' | 'blocked_days' | 'max_nights' | 'max_weekends' | 'colleagues';
+type WishStrengths = Record<WishStrengthKey, number>;
+
+const WISH_STRENGTH_PREFIX = 'shiftplan.pref_strength.';
+const DEFAULT_WISH_STRENGTHS: WishStrengths = {
+  unwanted_shifts: 100,
+  preferred_shifts: 100,
+  holidays: 100,
+  blocked_days: 100,
+  max_nights: 100,
+  max_weekends: 100,
+  colleagues: 50,
+};
+const WISH_STRENGTH_KEYS = Object.keys(DEFAULT_WISH_STRENGTHS) as WishStrengthKey[];
+
+function extractWishStrengths(settings: Record<string, string>): WishStrengths {
+  const result = { ...DEFAULT_WISH_STRENGTHS };
+  for (const key of WISH_STRENGTH_KEYS) {
+    const raw = settings[`${WISH_STRENGTH_PREFIX}${key}`];
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) result[key] = Math.min(100, Math.max(0, Math.round(parsed)));
+  }
+  return result;
+}
+
+/** Former three Colo counts as a requirement list (same rules as the backend). */
+function legacyColoRequirements(settings: Record<string, string>): ColoRequirement[] {
+  const count = (value: unknown) => Math.max(0, Math.trunc(parseNumberSetting(value, 1)));
+  const entries: ColoRequirement[] = [
+    { id: 'preparation', label: 'Colo Vorbereitung (Börse: E-Mail/Telefon)', weekdays: [1, 2, 3, 4, 5], shift_type: 'early', staff: count(settings['shiftplan.colo_weekday_preparation_staff']) },
+    { id: 'night', label: 'Colo Nacht', weekdays: [0, 1, 2, 3, 4, 5, 6], shift_type: 'night', staff: count(settings['shiftplan.colo_night_staff']) },
+    { id: 'weekend', label: 'Colo Wochenende (Arbeiten vor Ort)', weekdays: [0, 6], shift_type: 'early', staff: count(settings['shiftplan.colo_weekend_day_staff'] ?? settings['shiftplan.colo_weekend_installation_staff']) },
+  ];
+  return entries.filter((entry) => entry.staff > 0);
+}
+
+function normalizeColoWeekdays(value: unknown): number[] {
+  const source = Array.isArray(value) ? value : [];
+  return [...new Set(source.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6))].sort((left, right) => left - right);
+}
+
+function parseColoRequirements(raw: unknown): ColoRequirement[] | null {
+  let entries: unknown = raw;
+  if (typeof raw === 'string') {
+    try { entries = JSON.parse(raw); } catch { return null; }
+  }
+  if (!Array.isArray(entries)) return null;
+  return entries.map((entry, index) => {
+    const item = (entry || {}) as Partial<ColoRequirement>;
+    const shiftType = (['early', 'late', 'night'].includes(String(item.shift_type)) ? item.shift_type : 'early') as ColoShiftType;
+    return {
+      id: String(item.id || `req-${index + 1}`),
+      weekdays: normalizeColoWeekdays(item.weekdays),
+      shift_type: shiftType,
+      staff: Math.max(1, Math.trunc(Number(item.staff) || 1)),
+      ...(item.label ? { label: String(item.label) } : {}),
+    };
+  });
+}
+
+function newColoRequirementId() {
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+}
 
 const DEFAULT_OVERTIME_CONFIG: OvertimeConfig = {
   maxOvertimeHours: 0,
@@ -431,21 +513,6 @@ const DEFAULT_OVERTIME_CONFIG: OvertimeConfig = {
   dailyMode: 'warn',
   weeklyMode: 'warn',
 };
-
-const HOLIDAY_STAFFING_OPTIONS = [
-  { value: 'Neujahr', labelDe: 'Neujahr', labelEn: "New Year's Day" },
-  { value: 'Karfreitag', labelDe: 'Karfreitag', labelEn: 'Good Friday' },
-  { value: 'Ostermontag', labelDe: 'Ostermontag', labelEn: 'Easter Monday' },
-  { value: 'Tag der Arbeit', labelDe: 'Tag der Arbeit', labelEn: 'Labour Day' },
-  { value: 'Christi Himmelfahrt', labelDe: 'Christi Himmelfahrt', labelEn: 'Ascension Day' },
-  { value: 'Pfingstmontag', labelDe: 'Pfingstmontag', labelEn: 'Whit Monday' },
-  { value: 'Fronleichnam', labelDe: 'Fronleichnam', labelEn: 'Corpus Christi' },
-  { value: 'Tag der Deutschen Einheit', labelDe: 'Tag der Deutschen Einheit', labelEn: 'German Unity Day' },
-  { value: 'Heiligabend', labelDe: 'Heiligabend (24.12.)', labelEn: 'Christmas Eve (24 Dec)' },
-  { value: '1. Weihnachtstag', labelDe: '1. Weihnachtstag', labelEn: 'Christmas Day' },
-  { value: '2. Weihnachtstag', labelDe: '2. Weihnachtstag', labelEn: 'Boxing Day' },
-  { value: 'Silvester', labelDe: 'Silvester (31.12.)', labelEn: "New Year's Eve (31 Dec)" },
-] as const;
 
 type FixedShiftTypeValue = '' | 'early' | 'late' | 'night';
 
@@ -491,9 +558,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     issuePanelEnabled: parseBooleanSetting(settings['shiftplan.issue_panel_enabled'], DEFAULT_ADVANCED_SETTINGS.issuePanelEnabled),
     issueShowSolutions: parseBooleanSetting(settings['shiftplan.issue_show_solutions'], DEFAULT_ADVANCED_SETTINGS.issueShowSolutions),
     issuePriorityMode: (settings['shiftplan.issue_priority_mode'] as AdvancedPlanningSettings['issuePriorityMode']) || DEFAULT_ADVANCED_SETTINGS.issuePriorityMode,
-    blockedDaysEnabled: parseBooleanSetting(settings['shiftplan.blocked_days_enabled'], DEFAULT_ADVANCED_SETTINGS.blockedDaysEnabled),
     adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
-    preferredColleaguesEnabled: parseBooleanSetting(settings['shiftplan.preferred_colleagues_enabled'], DEFAULT_ADVANCED_SETTINGS.preferredColleaguesEnabled),
     varietyPriority: Math.min(100, Math.max(0, parseNumberSetting(settings['shiftplan.variety_priority'], DEFAULT_ADVANCED_SETTINGS.varietyPriority))),
   };
 }
@@ -524,9 +589,7 @@ function extractColoConfig(settings: Record<string, string>): ColoConfig {
   return {
     enabled: parseBooleanSetting(settings['shiftplan.colo_enabled'], DEFAULT_COLO_CONFIG.enabled),
     employeePool: parseEmployeePoolSetting(settings['shiftplan.colo_pool']),
-    weekdayPreparationStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_weekday_preparation_staff'], DEFAULT_COLO_CONFIG.weekdayPreparationStaff)),
-    nightStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_night_staff'], DEFAULT_COLO_CONFIG.nightStaff)),
-    weekendDayStaff: Math.max(0, parseNumberSetting(settings['shiftplan.colo_weekend_day_staff'] ?? settings['shiftplan.colo_weekend_installation_staff'], DEFAULT_COLO_CONFIG.weekendDayStaff)),
+    requirements: parseColoRequirements(settings['shiftplan.colo_requirements']) ?? legacyColoRequirements(settings),
   };
 }
 
@@ -540,33 +603,6 @@ function extractOvertimeConfig(settings: Record<string, string>): OvertimeConfig
     dailyMode: (settings['shiftplan.daily_mode'] as OvertimeConfig['dailyMode']) || DEFAULT_OVERTIME_CONFIG.dailyMode,
     weeklyMode: (settings['shiftplan.weekly_mode'] as OvertimeConfig['weeklyMode']) || DEFAULT_OVERTIME_CONFIG.weeklyMode,
   };
-}
-
-function extractHolidayStaffingConfig(settings: Record<string, string>): HolidayStaffingConfig {
-  const config: HolidayStaffingConfig = Object.fromEntries(
-    HOLIDAY_STAFFING_OPTIONS.map((holiday) => [holiday.value, { early: 0, late: 0 }])
-  ) as HolidayStaffingConfig;
-  const raw = settings['shiftplan.holiday_staffing_limits'];
-
-  if (!raw) return config;
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return config;
-
-    for (const holiday of HOLIDAY_STAFFING_OPTIONS) {
-      const entry = parsed[holiday.value];
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-      config[holiday.value] = {
-        early: Math.max(Number.parseInt(String(entry.early ?? 0), 10) || 0, 0),
-        late: Math.max(Number.parseInt(String(entry.late ?? 0), 10) || 0, 0),
-      };
-    }
-  } catch {
-    return config;
-  }
-
-  return config;
 }
 
 function normalizeApplicableDays(value: unknown): number[] {
@@ -729,6 +765,32 @@ function SettingsGroup({ title, description }: { title: string; description: str
   );
 }
 
+/* ── helpers for the merged settings ── */
+
+function wishStrengthPayload(strengths: WishStrengths): Record<string, number> {
+  const payload: Record<string, number> = {};
+  for (const key of WISH_STRENGTH_KEYS) payload[`${WISH_STRENGTH_PREFIX}${key}`] = strengths[key];
+  return payload;
+}
+
+/** Entries without a weekday or without staff are dropped when saving. */
+function cleanColoRequirements(requirements: ColoRequirement[]): ColoRequirement[] {
+  return requirements
+    .map((entry) => ({ ...entry, weekdays: normalizeColoWeekdays(entry.weekdays), staff: Math.max(0, Math.trunc(Number(entry.staff) || 0)) }))
+    .filter((entry) => entry.weekdays.length > 0 && entry.staff > 0);
+}
+
+type SettingsGroupId = 'overview' | 'shifts' | 'rules' | 'wishes' | 'special' | 'exceptions';
+
+const SETTINGS_GROUPS: Array<{ id: SettingsGroupId; icon: React.ElementType; labelDe: string; labelEn: string; descriptionDe: string; descriptionEn: string }> = [
+  { id: 'overview', icon: ShieldAlert, labelDe: 'Überblick', labelEn: 'Overview', descriptionDe: 'Prüfung auf Widersprüche und Einstieg', descriptionEn: 'Contradiction check and getting started' },
+  { id: 'shifts', icon: Clock, labelDe: 'Schichten & Zeiten', labelEn: 'Shifts & times', descriptionDe: 'Welche Schichten es gibt und wann sie laufen', descriptionEn: 'Which shifts exist and when they run' },
+  { id: 'rules', icon: RotateCcw, labelDe: 'Regeln & Erholung', labelEn: 'Rules & recovery', descriptionDe: 'Ruhetage, Nächte, Wochenenden, Überstunden', descriptionEn: 'Days off, nights, weekends, overtime' },
+  { id: 'wishes', icon: Scale, labelDe: 'Wünsche & Fairness', labelEn: 'Wishes & fairness', descriptionDe: 'Wie stark Wünsche zählen, Sollstunden', descriptionEn: 'How much wishes count, target hours' },
+  { id: 'special', icon: Building2, labelDe: 'DBS & Colo', labelEn: 'DBS & Colo', descriptionDe: 'Sonderdienste und ihr Personal', descriptionEn: 'Special duties and their staff' },
+  { id: 'exceptions', icon: UserX, labelDe: 'Ausnahmen & Hinweise', labelEn: 'Exceptions & hints', descriptionDe: 'Einzelne Personen, Hinweise im Plan', descriptionEn: 'Single people, hints in the plan' },
+];
+
 /* ── main panel ── */
 
 export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: boolean }) {
@@ -749,7 +811,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [coloConfig, setColoConfig] = useState<ColoConfig>(DEFAULT_COLO_CONFIG);
   const [coloSearch, setColoSearch] = useState('');
   const [overtimeConfig, setOvertimeConfig] = useState<OvertimeConfig>(DEFAULT_OVERTIME_CONFIG);
-  const [holidayStaffingConfig, setHolidayStaffingConfig] = useState<HolidayStaffingConfig>(extractHolidayStaffingConfig({}));
+  const [wishStrengths, setWishStrengths] = useState<WishStrengths>(DEFAULT_WISH_STRENGTHS);
+  const [healthIssues, setHealthIssues] = useState<PlanningHealthIssue[]>([]);
+  const [activeGroup, setActiveGroup] = useState<SettingsGroupId>('overview');
   const [advancedSettings, setAdvancedSettings] = useState<AdvancedPlanningSettings>(DEFAULT_ADVANCED_SETTINGS);
   const [adminFlags, setAdminFlags] = useState<AdminEmployeeFlag[]>([]);
   const [newAdminFlagName, setNewAdminFlagName] = useState('');
@@ -786,7 +850,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [defRes, rotRes, fairRes, planRes, exclRes, basisRes, appSettingsRes, usersRes, flagRes, shortNightRes, staffingRes, defaultsRes] = await Promise.all([
+      const [defRes, rotRes, fairRes, planRes, exclRes, basisRes, appSettingsRes, usersRes, flagRes, shortNightRes, staffingRes, defaultsRes, healthRes] = await Promise.all([
         api.get('/shift-config/definitions'),
         api.get('/shift-config/rotation-rules'),
         api.get('/shift-config/fairness-rules'),
@@ -799,6 +863,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         api.get('/shift-config/short-night-options').catch(() => ({ data: { options: null } })),
         api.get('/shift-config/staffing-rules').catch(() => ({ data: { rules: [] } })),
         api.get('/shift-config/defaults').catch(() => ({ data: { definitions: {} } })),
+        api.get('/shift-config/planning-health').catch(() => ({ data: { issues: [] } })),
       ]);
 
       const userEmployees = (Array.isArray(usersRes.data) ? usersRes.data : [])
@@ -843,7 +908,8 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         employeePool: nextColoConfig.employeePool.filter((employee) => loadedEmployees.includes(employee)),
       });
       setOvertimeConfig(extractOvertimeConfig(appSettingsRes.data || {}));
-      setHolidayStaffingConfig(extractHolidayStaffingConfig(appSettingsRes.data || {}));
+      setWishStrengths(extractWishStrengths(appSettingsRes.data || {}));
+      setHealthIssues(Array.isArray(healthRes.data?.issues) ? healthRes.data.issues : []);
       setAdvancedSettings(extractAdvancedPlanningSettings(appSettingsRes.data || {}));
       setAdminFlags(flagRes.data.flags || []);
       try {
@@ -901,20 +967,6 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }
   };
 
-  const saveHolidayStaffing = async () => {
-    setSaving('holiday-staffing');
-    try {
-      await api.put('/app-settings', {
-        'shiftplan.holiday_staffing_limits': JSON.stringify(holidayStaffingConfig),
-      });
-      showToast(isGerman ? 'Feiertags-Maximalbesetzung gespeichert' : 'Holiday max staffing saved');
-    } catch (error: any) {
-      showToast(error?.response?.data?.error || t('shiftAdmin.error'), 'err');
-    } finally {
-      setSaving('');
-    }
-  };
-
   const saveFairness = async () => {
     if (!fairness) return;
     setSaving('fairness');
@@ -948,10 +1000,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.issue_panel_enabled': advancedSettings.issuePanelEnabled,
         'shiftplan.issue_show_solutions': advancedSettings.issueShowSolutions,
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
-        'shiftplan.blocked_days_enabled': advancedSettings.blockedDaysEnabled,
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
-        'shiftplan.preferred_colleagues_enabled': advancedSettings.preferredColleaguesEnabled,
         'shiftplan.variety_priority': advancedSettings.varietyPriority,
+        ...wishStrengthPayload(wishStrengths),
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
     } catch (error: any) {
@@ -1152,9 +1203,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       await api.put('/app-settings', {
         'shiftplan.colo_enabled': coloConfig.enabled,
         'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
-        'shiftplan.colo_weekday_preparation_staff': Math.max(0, Math.trunc(coloConfig.weekdayPreparationStaff)),
-        'shiftplan.colo_night_staff': Math.max(0, Math.trunc(coloConfig.nightStaff)),
-        'shiftplan.colo_weekend_day_staff': Math.max(0, Math.trunc(coloConfig.weekendDayStaff)),
+        'shiftplan.colo_requirements': JSON.stringify(cleanColoRequirements(coloConfig.requirements)),
       });
       await api.put('/app-settings', { 'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes) });
       showToast(isGerman ? 'Colo-Kompetenzplanung gespeichert.' : 'Colo competency planning saved.');
@@ -1182,8 +1231,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           applicable_days: normalizeApplicableDays(definition.applicable_days),
         });
       }
-      if (rotation) await api.put('/shift-config/rotation-rules', rotation);
-      if (fairness) await api.put('/shift-config/fairness-rules', fairness);
+      // One slider decides how much the plan changes between weeks: stability is its counterpart.
+      if (rotation) await api.put('/shift-config/rotation-rules', { ...rotation, stability_priority: 100 - advancedSettings.varietyPriority });
+      // The hour-fairness slider (planConfig.fairness_priority) is the only switch for levelling hours.
+      if (fairness) await api.put('/shift-config/fairness-rules', { ...fairness, balance_total_load: (planConfig?.fairness_priority ?? 80) > 0 });
       if (planConfig) await api.put('/shift-config/planning-config', planConfig);
       await api.put('/shift-config/short-night-options', shortNightOptions);
       const shiftCode = String(dbsConfig.shiftCode || 'DBS').trim().toUpperCase() || 'DBS';
@@ -1197,10 +1248,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.issue_panel_enabled': advancedSettings.issuePanelEnabled,
         'shiftplan.issue_show_solutions': advancedSettings.issueShowSolutions,
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
-        'shiftplan.blocked_days_enabled': advancedSettings.blockedDaysEnabled,
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
-        'shiftplan.preferred_colleagues_enabled': advancedSettings.preferredColleaguesEnabled,
         'shiftplan.variety_priority': advancedSettings.varietyPriority,
+        ...wishStrengthPayload(wishStrengths),
         'shiftplan.dbs_enabled': dbsConfig.enabled,
         'shiftplan.dbs_weekdays': JSON.stringify([1, 2, 3, 4, 5, 6, 0]),
         'shiftplan.dbs_shift_code': shiftCode,
@@ -1209,9 +1259,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
         'shiftplan.colo_enabled': coloConfig.enabled,
         'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
-        'shiftplan.colo_weekday_preparation_staff': Math.max(0, Math.trunc(coloConfig.weekdayPreparationStaff)),
-        'shiftplan.colo_night_staff': Math.max(0, Math.trunc(coloConfig.nightStaff)),
-        'shiftplan.colo_weekend_day_staff': Math.max(0, Math.trunc(coloConfig.weekendDayStaff)),
+        'shiftplan.colo_requirements': JSON.stringify(cleanColoRequirements(coloConfig.requirements)),
         'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes),
       });
       await api.put(`/shift-config/special-pools/${shiftCode}`, {
@@ -1359,6 +1407,24 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     setColoConfig((current) => ({ ...current, employeePool: current.employeePool.filter((entry) => entry !== employeeName) }));
   };
 
+  const addColoRequirement = () => {
+    setColoConfig((current) => ({
+      ...current,
+      requirements: [...current.requirements, { id: newColoRequirementId(), weekdays: [], shift_type: 'early', staff: 1 }],
+    }));
+  };
+
+  const updateColoRequirement = (id: string, patch: Partial<ColoRequirement>) => {
+    setColoConfig((current) => ({
+      ...current,
+      requirements: current.requirements.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)),
+    }));
+  };
+
+  const removeColoRequirement = (id: string) => {
+    setColoConfig((current) => ({ ...current, requirements: current.requirements.filter((entry) => entry.id !== id) }));
+  };
+
   const planningAuditIssues = useMemo(() => getPlanningAuditIssues({
     definitions,
     rotation,
@@ -1404,9 +1470,19 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const selectedColoEmployees = coloConfig.employeePool.filter((employee) => (
     !normalizedColoSearch || employee.toLocaleLowerCase('de').includes(normalizedColoSearch)
   ));
-  const minimumColoPoolSize = Math.max(coloConfig.weekdayPreparationStaff, coloConfig.weekendDayStaff) + coloConfig.nightStaff;
-  const planningAuditErrors = planningAuditIssues.filter((issue) => issue.level === 'error');
-  const planningAuditWarnings = planningAuditIssues.filter((issue) => issue.level === 'warning');
+  const minimumColoPoolSize = getMaxColoStaffPerDay(coloConfig.requirements);
+  // Local checks (what is on this screen) plus server checks (settings against employee wishes and staffing).
+  const combinedAuditIssues: PlanningAuditIssue[] = [
+    ...planningAuditIssues,
+    ...healthIssues.map((issue) => ({
+      id: `server-${issue.id}`,
+      level: (issue.level === 'error' ? 'error' : 'warning') as PlanningAuditLevel,
+      messageDe: issue.messageDe,
+      messageEn: issue.messageEn,
+    })),
+  ];
+  const planningAuditErrors = combinedAuditIssues.filter((issue) => issue.level === 'error');
+  const planningAuditWarnings = combinedAuditIssues.filter((issue) => issue.level === 'warning');
 
   /* ── render ── */
 
@@ -1418,6 +1494,82 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           {toast.msg}
         </div>
       ) : null}
+
+      <nav aria-label={isGerman ? 'Einstellungsbereiche' : 'Settings areas'} className="liquid-tabbar grid gap-2 rounded-xl border border-border p-2 sm:grid-cols-2 xl:grid-cols-6">
+        {SETTINGS_GROUPS.map((group) => {
+          const GroupIcon = group.icon;
+          const active = activeGroup === group.id;
+          const badge = group.id === 'overview' ? planningAuditErrors.length + planningAuditWarnings.length : 0;
+          return (
+            <button
+              key={group.id}
+              type="button"
+              onClick={() => setActiveGroup(group.id)}
+              aria-current={active ? 'page' : undefined}
+              className={`liquid-tab flex items-start gap-3 px-4 py-3 text-left ${active ? 'is-active' : ''}`}
+            >
+              <GroupIcon className="mt-0.5 h-5 w-5 shrink-0 opacity-90" />
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-sm font-semibold">
+                  {isGerman ? group.labelDe : group.labelEn}
+                  {badge > 0 ? <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-bold text-amber-200">{badge}</span> : null}
+                </span>
+                <span className="mt-0.5 block text-xs font-normal leading-4 opacity-80">{isGerman ? group.descriptionDe : group.descriptionEn}</span>
+              </span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {activeGroup === 'overview' ? (
+        <div className="space-y-4">
+      <div className="rounded-3xl border border-sky-400/20 bg-sky-500/5 px-5 py-4">
+        <div className="text-sm font-semibold text-foreground">{isGerman ? "Überblick und Prüfung" : "Overview and check"}</div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{isGerman ? "Die Prüfung zeigt Einstellungen, die sich widersprechen oder mit den Wünschen der Mitarbeitenden nicht zusammenpassen – bevor ein Plan erzeugt wird. Wähle oben den Bereich, den du ändern willst." : "The check shows settings that contradict each other or do not fit the wishes of the employees – before a plan is generated. Pick the area you want to change above."}</p>
+      </div>
+
+      <section className={`rounded-3xl border p-5 ${planningAuditErrors.length > 0 ? 'border-red-400/30 bg-red-500/10' : planningAuditWarnings.length > 0 ? 'border-amber-400/30 bg-amber-500/10' : 'border-emerald-400/30 bg-emerald-500/10'}`}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${planningAuditErrors.length > 0 ? 'bg-red-500/20 text-red-200' : planningAuditWarnings.length > 0 ? 'bg-amber-500/20 text-amber-100' : 'bg-emerald-500/20 text-emerald-100'}`}>
+              {planningAuditErrors.length > 0 || planningAuditWarnings.length > 0 ? <ShieldAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+            </div>
+            <div>
+              <h2 className="text-base font-semibold text-foreground">{isGerman ? 'Planungsprüfung' : 'Planning check'}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {combinedAuditIssues.length === 0
+                  ? (isGerman ? 'Die aktuell geladenen Einstellungen sind logisch miteinander vereinbar.' : 'The currently loaded settings are logically consistent.')
+                  : (isGerman ? 'Diese Einstellungen sollten vor der nächsten Generierung geprüft werden.' : 'Review these settings before the next generation.')}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 text-xs font-medium">
+            <span className="rounded-full border border-red-400/30 bg-red-500/10 px-3 py-1 text-red-200">{planningAuditErrors.length} {isGerman ? 'kritisch' : 'critical'}</span>
+            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-amber-100">{planningAuditWarnings.length} {isGerman ? 'Hinweise' : 'notes'}</span>
+          </div>
+        </div>
+        {combinedAuditIssues.length > 0 ? (
+          <div className="mt-4 grid gap-2 lg:grid-cols-2">
+            {combinedAuditIssues.map((issue) => (
+              <div key={issue.id} className={`rounded-2xl border px-4 py-3 text-sm ${issue.level === 'error' ? 'border-red-400/25 bg-red-950/20 text-red-100' : 'border-amber-400/25 bg-amber-950/15 text-amber-100'}`}>
+                {isGerman ? issue.messageDe : issue.messageEn}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+
+      <section className="rounded-3xl border border-border/60 bg-card/40 p-5">
+        <h2 className="text-base font-semibold text-foreground">{isGerman ? 'So funktioniert die Planung in vier Schritten' : 'How planning works in four steps'}</h2>
+        <ol className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-2 xl:grid-cols-4">
+          <li className="rounded-2xl border border-border/60 p-3"><span className="font-semibold text-foreground">1. {isGerman ? 'Schichten & Zeiten' : 'Shifts & times'}</span><br />{isGerman ? 'Welche Schichten es gibt, wann sie beginnen und enden. Wie viele Personen pro Schicht nötig sind, steht im Reiter „Besetzung“.' : 'Which shifts exist and when they start and end. How many people each shift needs is set in the "Staffing" tab.'}</li>
+          <li className="rounded-2xl border border-border/60 p-3"><span className="font-semibold text-foreground">2. {isGerman ? 'Regeln & Erholung' : 'Rules & recovery'}</span><br />{isGerman ? 'Wie viele Tage am Stück gearbeitet werden darf und wie viel frei sein muss, besonders nach Nächten und Wochenenden.' : 'How many days in a row may be worked and how much time off is required, especially after nights and weekends.'}</li>
+          <li className="rounded-2xl border border-border/60 p-3"><span className="font-semibold text-foreground">3. {isGerman ? 'Wünsche & Fairness' : 'Wishes & fairness'}</span><br />{isGerman ? 'Wie verbindlich Mitarbeiterwünsche sind, wie abwechslungsreich geplant wird und wie viele Stunden jemand leisten soll.' : 'How binding employee wishes are, how varied the plan is and how many hours somebody should work.'}</li>
+          <li className="rounded-2xl border border-border/60 p-3"><span className="font-semibold text-foreground">4. {isGerman ? 'DBS, Colo & Ausnahmen' : 'DBS, Colo & exceptions'}</span><br />{isGerman ? 'Sonderdienste mit festem Personal und einzelne Personen, die anders geplant werden sollen.' : 'Special duties with fixed staff and single people who must be planned differently.'}</li>
+        </ol>
+        <p className="mt-3 text-xs text-muted-foreground">{isGerman ? 'Unten rechts speichert „Alle Einstellungen speichern“ alle Bereiche auf einmal. Die Prüfung oben zeigt Widersprüche zwischen Einstellungen und Wünschen.' : '"Save all settings" at the bottom saves every area at once. The check above shows contradictions between settings and wishes.'}</p>
+      </section>
 
       {/* ── Overview cards ── */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1443,42 +1595,15 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </div>
 
-      <section className={`rounded-3xl border p-5 ${planningAuditErrors.length > 0 ? 'border-red-400/30 bg-red-500/10' : planningAuditWarnings.length > 0 ? 'border-amber-400/30 bg-amber-500/10' : 'border-emerald-400/30 bg-emerald-500/10'}`}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="flex items-start gap-3">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl ${planningAuditErrors.length > 0 ? 'bg-red-500/20 text-red-200' : planningAuditWarnings.length > 0 ? 'bg-amber-500/20 text-amber-100' : 'bg-emerald-500/20 text-emerald-100'}`}>
-              {planningAuditErrors.length > 0 || planningAuditWarnings.length > 0 ? <ShieldAlert className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
-            </div>
-            <div>
-              <h2 className="text-base font-semibold text-foreground">{isGerman ? 'Planungsprüfung' : 'Planning check'}</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {planningAuditIssues.length === 0
-                  ? (isGerman ? 'Die aktuell geladenen Einstellungen sind logisch miteinander vereinbar.' : 'The currently loaded settings are logically consistent.')
-                  : (isGerman ? 'Diese Einstellungen sollten vor der nächsten Generierung geprüft werden.' : 'Review these settings before the next generation.')}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-2 text-xs font-medium">
-            <span className="rounded-full border border-red-400/30 bg-red-500/10 px-3 py-1 text-red-200">{planningAuditErrors.length} {isGerman ? 'kritisch' : 'critical'}</span>
-            <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-amber-100">{planningAuditWarnings.length} {isGerman ? 'Hinweise' : 'notes'}</span>
-          </div>
+
         </div>
-        {planningAuditIssues.length > 0 ? (
-          <div className="mt-4 grid gap-2 lg:grid-cols-2">
-            {planningAuditIssues.map((issue) => (
-              <div key={issue.id} className={`rounded-2xl border px-4 py-3 text-sm ${issue.level === 'error' ? 'border-red-400/25 bg-red-950/20 text-red-100' : 'border-amber-400/25 bg-amber-950/15 text-amber-100'}`}>
-                {isGerman ? issue.messageDe : issue.messageEn}
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </section>
-
-      <SettingsGroup
-        title={isGerman ? '1. Schichtmodell und Kapazität' : '1. Shift model and capacity'}
-        description={isGerman ? 'Grundlage für Zeiten, Besetzung und verfügbare Schichten.' : 'Foundation for times, staffing, and available shifts.'}
-      />
-
+      ) : null}
+      {activeGroup === 'shifts' ? (
+        <div className="space-y-4">
+      <div className="rounded-3xl border border-sky-400/20 bg-sky-500/5 px-5 py-4">
+        <div className="text-sm font-semibold text-foreground">{isGerman ? "Schichten und Zeiten" : "Shifts and times"}</div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{isGerman ? "Jede Schicht hat Code, Art (Früh, Spät, Nacht), Zeiten, Blocklänge und Wochentage. Wie viele Personen pro Schicht gebraucht werden, stellst du im Reiter „Besetzung“ ein – nicht hier." : "Every shift has a code, a type (early, late, night), times, block length and weekdays. How many people each shift needs is set in the \"Staffing\" tab, not here."}</p>
+      </div>
       {/* ── Shift definitions ── */}
       <Section title={t("shiftAdmin.sectionDefinitions")} icon={Clock} helpKey="shiftAdmin.helpSectionDefinitions" t={t}>
         <div className="mb-4 flex items-start gap-3 rounded-2xl border border-sky-400/15 bg-sky-500/10 px-4 py-3 text-sm text-slate-200">
@@ -1731,10 +1856,296 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
-      <SettingsGroup
-        title={isGerman ? '2. Spezialdienste und Rollen' : '2. Special duties and roles'}
-        description={isGerman ? 'DBS und Colo-Pools mit ihrer tatsächlichen Kapazität.' : 'DBS and Colo pools with their actual capacity.'}
-      />
+
+        </div>
+      ) : null}
+      {activeGroup === 'rules' ? (
+        <div className="space-y-4">
+      <div className="rounded-3xl border border-sky-400/20 bg-sky-500/5 px-5 py-4">
+        <div className="text-sm font-semibold text-foreground">{isGerman ? "Regeln für Erholung und Grenzen" : "Rules for recovery and limits"}</div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{isGerman ? "Diese Regeln gelten für alle und werden vom Generator nie verletzt: Ruhezeiten, freie Tage nach Nächten und Wochenenden, Höchstgrenzen für Nächte und Wochenenden sowie Arbeitszeitgrenzen. Widersprüche zu Besetzung und Wünschen zeigt die Prüfung im Überblick." : "These rules apply to everyone and the generator never violates them: rest periods, days off after nights and weekends, limits for nights and weekends, and working time limits. The check in the overview shows contradictions with staffing and wishes."}</p>
+      </div>
+
+      {/* ── Rotation rules & overtime ── */}
+      <Section title={t("shiftAdmin.sectionRotation")} icon={RotateCcw} helpKey="shiftAdmin.helpSectionRotation" t={t}>
+        {rotation ? (
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxConsecutiveSame")} <HelpTooltip textKey="shiftAdmin.helpRotMaxConsecutiveSame" t={t} /></label>
+                <input type="number" min="1" max="30" value={rotation.max_consecutive_same} onChange={(event) => setRotation({ ...rotation, max_consecutive_same: Number.parseInt(event.target.value, 10) || 1 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxConsecutiveWorkdays")} <HelpTooltip textKey="shiftAdmin.helpRotMaxConsecutiveWorkdays" t={t} /></label>
+                <input type="number" min="1" max="30" value={rotation.max_consecutive_workdays} onChange={(event) => setRotation({ ...rotation, max_consecutive_workdays: Number.parseInt(event.target.value, 10) || 1 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMinFreeAfterStreak")} <HelpTooltip textKey="shiftAdmin.helpRotMinFreeAfterStreak" t={t} /></label>
+                <input type="number" min="0" max="7" value={rotation.min_free_after_streak} onChange={(event) => setRotation({ ...rotation, min_free_after_streak: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMinRestHours")} <HelpTooltip textKey="shiftAdmin.helpRotMinRestHours" t={t} /></label>
+                <input type="number" min="8" max="24" value={rotation.min_hours_between_shifts} onChange={(event) => setRotation({ ...rotation, min_hours_between_shifts: Number.parseInt(event.target.value, 10) || 11 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxNightsMonth")} <HelpTooltip textKey="shiftAdmin.helpRotMaxNightsMonth" t={t} /></label>
+                <input type="number" min="0" max="31" value={rotation.max_nights_per_month} onChange={(event) => setRotation({ ...rotation, max_nights_per_month: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxWeekendsMonth")} <HelpTooltip textKey="shiftAdmin.helpRotMaxWeekendsMonth" t={t} /></label>
+                <input type="number" min="0" max="10" value={rotation.max_weekends_per_month} onChange={(event) => setRotation({ ...rotation, max_weekends_per_month: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotFreeDaysAfterNight")} <HelpTooltip textKey="shiftAdmin.helpRotFreeDaysAfterNight" t={t} /></label>
+                <input type="number" min="0" max="7" value={rotation.free_days_after_night} onChange={(event) => setRotation({ ...rotation, free_days_after_night: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotFreeDaysAfterWeekend")} <HelpTooltip textKey="shiftAdmin.helpRotFreeDaysAfterWeekend" t={t} /></label>
+                <input type="number" min="0" max="7" value={rotation.free_days_after_weekend} onChange={(event) => setRotation({ ...rotation, free_days_after_weekend: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">{isGerman ? 'Erster Arbeitstag nach Nacht' : 'First workday after nights'}</label>
+                <select value={rotation.night_next_workday ?? 4} onChange={(event) => setRotation({ ...rotation, night_next_workday: Number.parseInt(event.target.value, 10) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
+                  {weekdayOptions.map((option) => <option key={`night-next-${option.value}`} value={option.value}>{option.label}</option>)}
+                </select>
+                <p className="mt-1 text-xs text-slate-500">{isGerman ? 'Standard Donnerstag: Montag bis Mittwoch bleiben frei.' : 'Default Thursday: Monday through Wednesday remain free.'}</p>
+              </div>
+              <div>
+                <label className="text-xs text-slate-400">{isGerman ? 'Feste Schicht nach Nacht' : 'Fixed shift after nights'}</label>
+                <select value={rotation.night_next_shift_code || ''} onChange={(event) => setRotation({ ...rotation, night_next_shift_code: event.target.value || null })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
+                  <option value="">{isGerman ? 'Keine feste Folgeschicht' : 'No fixed follow-up shift'}</option>
+                  {shiftCodeOptions.filter((option) => option.value !== 'N').map((option) => <option key={`night-shift-${option.value}`} value={option.value}>{option.label}</option>)}
+                </select>
+                <p className="mt-1 text-xs text-slate-500">{isGerman ? 'Verhindert eine zufällige Schichtart nach dem Nachtblock.' : 'Prevents a random shift type after a night block.'}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-3">
+              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+                <input type="checkbox" checked={rotation.night_to_early_forbidden} onChange={(event) => setRotation({ ...rotation, night_to_early_forbidden: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+                <span className="flex items-center">{t("shiftAdmin.rotNightToEarlyForbidden")} <HelpTooltip textKey="shiftAdmin.helpRotNightToEarlyForbidden" t={t} /></span>
+              </label>
+              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+                <input type="checkbox" checked={rotation.late_to_early_forbidden} onChange={(event) => setRotation({ ...rotation, late_to_early_forbidden: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+                <span className="flex items-center">{t("shiftAdmin.rotLateToEarlyForbidden")} <HelpTooltip textKey="shiftAdmin.helpRotLateToEarlyForbidden" t={t} /></span>
+              </label>
+              <div className="rounded-2xl border border-violet-300/25 bg-violet-500/10 px-4 py-3 text-sm text-slate-100">
+                <label className="block">
+                  <span className="block font-medium">{isGerman ? 'Nachtplanungsmodell' : 'Night planning model'}</span>
+                  <select value={shortNightOptions.mode} disabled={saving === 'short-night'} onChange={(event) => { const mode = event.target.value as ShortNightOptions['mode']; setShortNightOptions({ ...shortNightOptions, mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); void saveShortNightOptions({ mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); }} className="mt-2 w-full rounded-lg border border-violet-300/25 bg-slate-950/80 px-3 py-2 text-xs text-slate-100">
+                    <option value="SEVEN_DAY_ONLY">{isGerman ? 'Nur 7-Tage-Nachtblöcke' : 'Seven-night blocks only'}</option>
+                    <option value="SHORT_ONLY">{isGerman ? 'Nur kurze Nachtblöcke' : 'Short night blocks only'}</option>
+                    <option value="MIXED">{isGerman ? 'Beide Modelle parallel (7-Tage-Blöcke plus kurze Blöcke bis zur Maximalbesetzung)' : 'Both models in parallel (seven-night blocks plus short blocks up to the maximum staffing)'}</option>
+                  </select>
+                  <span className="mt-2 block text-xs text-slate-400">{isGerman
+                    ? `Im Parallelmodus erhalten Mitarbeitende mit 7-Tage-Wunsch einen vollständigen Nachtblock. Zusätzlich werden Mitarbeitende mit Kurzblock-Wunsch in Blöcken von bis zu ${shortNightOptions.series_days ?? 3} Nächten geplant, bis die Maximalbesetzung der Nachtschicht erreicht ist.`
+                    : `In parallel mode, employees preferring seven nights receive a full block. Employees preferring short blocks are additionally planned in blocks of up to ${shortNightOptions.series_days ?? 3} nights until the maximum night staffing is reached.`}</span>
+                </label>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Start' : 'Start'}<input type="time" value={shortNightOptions.start_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, start_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Ende' : 'End'}<input type="time" value={shortNightOptions.end_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, end_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Frei danach' : 'Days off'}<input type="number" min="0" max="14" value={shortNightOptions.free_days_after} onChange={(event) => setShortNightOptions({ ...shortNightOptions, free_days_after: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                  <label className="text-[10px] text-slate-400">{isGerman ? 'Länge kurzer Nachtblöcke (Tage)' : 'Length of short night blocks (days)'}<input type="number" min="1" max="7" value={shortNightOptions.series_days ?? 3} onChange={(event) => setShortNightOptions({ ...shortNightOptions, series_days: Math.max(1, Math.min(7, Number.parseInt(event.target.value, 10) || 3)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
+                </div>
+                <p className="mt-2 text-[10px] leading-4 text-violet-100/75">{isGerman ? `N und NK teilen sich dieselbe Obergrenze: maximal ${normalNightStaffCap || '—'} Personen pro Nacht. Die Grenze änderst du bei der normalen Nachtschicht N.` : `N and NK share one cap: at most ${normalNightStaffCap || '—'} people per night. Change the cap on the regular N shift.`}</p>
+              </div>
+            </div>
+
+            {/* ── Overtime sub-section ── */}
+            <div className="grid gap-3 lg:grid-cols-3">
+              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+                <input type="checkbox" checked={rotation.late_before_night_required ?? false} onChange={(event) => setRotation({ ...rotation, late_before_night_required: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+                <span>{isGerman ? 'Spaetschicht vor Nachtschicht erzwingen' : 'Require late shift before night shift'}</span>
+              </label>
+            </div>
+            <p className="text-xs text-slate-500">
+              {isGerman
+                ? 'Wenn aktiv, startet die Engine einen Nachtblock nur bei Mitarbeitern, die am Vortag eine Spaetschicht hatten. Das macht den Wechsel in die Nacht planbarer.'
+                : 'When enabled, the engine starts a night block only for employees who worked a late shift on the previous day. This makes the transition into nights more predictable.'}
+            </p>
+
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/5 p-4">
+              <div className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/90">
+                {isGerman ? 'Work-Life-Balance' : 'Work-life balance'}
+              </div>
+              <p className="mb-4 text-xs leading-relaxed text-slate-400">
+                {isGerman
+                  ? 'Diese Regeln reduzieren belastende Schichtwechsel und schützen zusammenhängende Freizeit. Die verpflichtende Sollzeit bleibt vorrangig; unvereinbare Ziele werden als Konflikt angezeigt.'
+                  : 'These rules reduce disruptive shift changes and protect coherent time off. Contracted target hours remain mandatory; incompatible goals are reported as conflicts.'}
+              </p>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <div>
+                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Max. Schichtartwechsel / Monat' : 'Max shift-type changes / month'}</label>
+                  <input type="number" min="0" max="12" value={rotation.max_shift_type_changes_per_month ?? 4} onChange={(event) => setRotation({ ...rotation, max_shift_type_changes_per_month: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <div className="mt-1 text-xs text-slate-500">{isGerman ? '0 = unbegrenzt. Vermeidet häufiges Wechseln zwischen Früh, Spät und Nacht.' : '0 = unlimited. Avoids frequent switching between early, late and night.'}</div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Mindestens freie Wochenenden' : 'Minimum free weekends'}</label>
+                  <input type="number" min="0" max="5" value={rotation.min_free_weekends_per_month ?? 2} onChange={(event) => setRotation({ ...rotation, min_free_weekends_per_month: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <div className="mt-1 text-xs text-slate-500">{isGerman ? 'Schützt vollständige Wochenenden ohne Samstag- oder Sonntagsdienst.' : 'Protects complete weekends without Saturday or Sunday duty.'}</div>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Freie Tage vor Schichtwechsel' : 'Days off before shift change'}</label>
+                  <input type="number" min="0" max="3" value={rotation.min_recovery_days_after_shift_change ?? 1} onChange={(event) => setRotation({ ...rotation, min_recovery_days_after_shift_change: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <div className="mt-1 text-xs text-slate-500">{isGerman ? 'Bevorzugte Erholung zwischen unterschiedlichen Schichtarten.' : 'Preferred recovery between different shift types.'}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-2 rounded-2xl border border-amber-400/15 bg-amber-500/5 p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">
+                <Timer className="h-4 w-4" />
+                {t("shiftAdmin.overtimeTitle")}
+              </div>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="flex items-center text-xs text-slate-400">
+                    {t("shiftAdmin.overtimeMax")}
+                    <HelpTooltip textKey="shiftAdmin.helpOvertimeMax" t={t} />
+                  </label>
+                  <input type="number" min="0" max="200" value={overtimeConfig.maxOvertimeHours} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, maxOvertimeHours: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <div className="mt-1 text-xs text-slate-500">{t("shiftAdmin.overtimeHint")}</div>
+                </div>
+                <div>
+                  <label className="flex items-center text-xs text-slate-400">
+                    {t("shiftAdmin.overtimeMode")}
+                    <HelpTooltip textKey="shiftAdmin.helpOvertimeMode" t={t} />
+                  </label>
+                  <select value={overtimeConfig.overtimeMode} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, overtimeMode: event.target.value as OvertimeConfig['overtimeMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
+                    <option value="show">{t("shiftAdmin.overtimeModeShow")}</option>
+                    <option value="warn">{t("shiftAdmin.overtimeModeWarn")}</option>
+                    <option value="hard">{t("shiftAdmin.overtimeModeHard")}</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Daily / Weekly hour limits sub-section ── */}
+            <div className="mt-2 rounded-2xl border border-sky-400/15 bg-sky-500/5 p-4">
+              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
+                <Clock className="h-4 w-4" />
+                {isGerman ? "Arbeitszeitgrenzen" : "Working Time Limits"}
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <div>
+                  <label className="text-xs text-slate-400">{isGerman ? "Max. Stunden / Tag" : "Max hours / day"}</label>
+                  <input type="number" min="0" max="24" step="0.5" value={overtimeConfig.maxDailyHours} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, maxDailyHours: Math.max(0, Math.min(24, parseFloat(e.target.value) || 0)) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <div className="mt-1 text-xs text-slate-500">{isGerman ? "0 = kein Limit" : "0 = no limit"}</div>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">{isGerman ? "Modus (Tag)" : "Mode (daily)"}</label>
+                  <select value={overtimeConfig.dailyMode} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, dailyMode: e.target.value as OvertimeConfig['dailyMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
+                    <option value="off">{isGerman ? "Aus" : "Off"}</option>
+                    <option value="warn">{isGerman ? "Warnung" : "Warning"}</option>
+                    <option value="block">{isGerman ? "Sperre" : "Block"}</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">{isGerman ? "Max. Stunden / Woche" : "Max hours / week"}</label>
+                  <input type="number" min="0" max="168" step="0.5" value={overtimeConfig.maxWeeklyHours} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, maxWeeklyHours: Math.max(0, Math.min(168, parseFloat(e.target.value) || 0)) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <div className="mt-1 text-xs text-slate-500">{isGerman ? "0 = kein Limit" : "0 = no limit"}</div>
+                </div>
+                <div>
+                  <label className="text-xs text-slate-400">{isGerman ? "Modus (Woche)" : "Mode (weekly)"}</label>
+                  <select value={overtimeConfig.weeklyMode} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, weeklyMode: e.target.value as OvertimeConfig['weeklyMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
+                    <option value="off">{isGerman ? "Aus" : "Off"}</option>
+                    <option value="warn">{isGerman ? "Warnung" : "Warning"}</option>
+                    <option value="block">{isGerman ? "Sperre" : "Block"}</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        ) : null}
+      </Section>
+
+
+        </div>
+      ) : null}
+      {activeGroup === 'wishes' ? (
+        <div className="space-y-4">
+      <div className="rounded-3xl border border-sky-400/20 bg-sky-500/5 px-5 py-4">
+        <div className="text-sm font-semibold text-foreground">{isGerman ? "Wünsche, Abwechslung und Sollstunden" : "Wishes, variety and target hours"}</div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{isGerman ? "Hier legst du fest, wie stark der Generator auf Wünsche der Mitarbeitenden Rücksicht nimmt und wie die Arbeitszeit verteilt wird. Pro Wunschart gibt es genau eine Einstellung: 100 % = verbindlich, 0 % = aus. Es gibt keine zweiten Schalter mehr, die sich mit diesen Werten widersprechen können." : "Set how much the generator respects employee wishes and how working time is distributed. Each wish type has exactly one setting: 100 % = binding, 0 % = off. There are no second switches any more that could contradict these values."}</p>
+      </div>
+
+      <Section title={isGerman ? 'Mitarbeiterwünsche: wie verbindlich?' : 'Employee wishes: how binding?'} icon={Scale}>
+        {planConfig ? (
+          <div className="space-y-4">
+            <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <input type="checkbox" checked={planConfig.respect_employee_wishes} onChange={(event) => setPlanConfig({ ...planConfig, respect_employee_wishes: event.target.checked })} className="mt-1 rounded border-white/20 bg-slate-950" />
+              <span>
+                <span className="block font-medium">{isGerman ? 'Mitarbeiterwünsche beim Planen berücksichtigen' : 'Consider employee wishes when planning'}</span>
+                <span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Hauptschalter für alle Wünsche. Ist er aus, gelten die Regler darunter nicht.' : 'Main switch for all wishes. While it is off the sliders below have no effect.'}</span>
+              </span>
+            </label>
+            <PreferenceWeightSettings value={wishStrengths} onChange={setWishStrengths} disabled={!planConfig.respect_employee_wishes} />
+          </div>
+        ) : null}
+      </Section>
+
+      <Section title={isGerman ? 'Abwechslung und Fairness' : 'Variety and fairness'} icon={Sliders}>
+        {planConfig && fairness ? (
+          <div className="space-y-5">
+            <div>
+              <label className="text-sm font-medium text-slate-200">{isGerman ? 'Schichtart von Woche zu Woche' : 'Shift type from week to week'}</label>
+              <input type="range" min="0" max="100" value={advancedSettings.varietyPriority} onChange={(event) => setAdvancedSettings({ ...advancedSettings, varietyPriority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
+              <div className="mt-1 flex justify-between text-xs text-slate-500">
+                <span>{isGerman ? 'immer dieselbe Schichtart' : 'always the same shift type'}</span>
+                <span>{advancedSettings.varietyPriority}%</span>
+                <span>{isGerman ? 'häufig wechseln' : 'change often'}</span>
+              </div>
+              <p className="mt-2 text-xs leading-5 text-slate-400">{isGerman ? 'Ein Regler statt zwei gegensätzlicher Einstellungen (Stabilität und Abwechslung): niedrig = Mitarbeitende bleiben möglichst bei ihrer Schichtart, hoch = der Plan wechselt Früh, Spät und Nacht stärker durch. Wünsche und harte Regeln gehen immer vor.' : 'One slider instead of two opposite settings (stability and variety): low = employees stay with their shift type, high = the plan rotates early, late and night more. Wishes and hard rules always come first.'}</p>
+            </div>
+
+            <div>
+              <label className="text-sm font-medium text-slate-200">{isGerman ? 'Stunden gleichmäßig verteilen' : 'Level hours between employees'}</label>
+              <input type="range" min="0" max="100" value={planConfig.fairness_priority} onChange={(event) => setPlanConfig({ ...planConfig, fairness_priority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
+              <div className="mt-1 text-xs text-slate-500">{planConfig.fairness_priority}% · {isGerman ? '0 = aus, 80 = Standard' : '0 = off, 80 = default'}</div>
+              <p className="mt-2 text-xs leading-5 text-slate-400">{isGerman ? 'Wie stark Personen mit weniger Stunden bevorzugt werden, damit niemand deutlich mehr oder weniger arbeitet als das Team.' : 'How strongly people with fewer hours are preferred so nobody works much more or less than the team.'}</p>
+            </div>
+
+            <div className="grid gap-3 lg:grid-cols-2">
+              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+                <input type="checkbox" checked={fairness.balance_nights} onChange={(event) => setFairness({ ...fairness, balance_nights: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+                <span className="flex items-center">{t("shiftAdmin.fairBalanceNights")} <HelpTooltip textKey="shiftAdmin.helpFairBalanceNights" t={t} /></span>
+              </label>
+              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+                <input type="checkbox" checked={fairness.balance_weekends} onChange={(event) => setFairness({ ...fairness, balance_weekends: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+                <span className="flex items-center">{t("shiftAdmin.fairBalanceWeekends")} <HelpTooltip textKey="shiftAdmin.helpFairBalanceWeekends" t={t} /></span>
+              </label>
+            </div>
+          </div>
+        ) : null}
+      </Section>
+
+      <Section title={isGerman ? 'Sollstunden' : 'Target hours'} icon={Timer}>
+        {planConfig ? (
+          <div className="space-y-3">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.planTargetHours")} <HelpTooltip textKey="shiftAdmin.helpPlanTargetHours" t={t} /></label>
+                <input type="number" min="0" step="0.5" value={planConfig.monthly_target_hours} onChange={(event) => setPlanConfig({ ...planConfig, monthly_target_hours: Number.parseFloat(event.target.value) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+              <div>
+                <label className="flex items-center text-xs text-slate-400">{isGerman ? 'Jährliche Sollzeit (Std.)' : 'Annual target hours'}</label>
+                <input type="number" min="0" step="0.5" value={planConfig.annual_target_hours} onChange={(event) => setPlanConfig({ ...planConfig, annual_target_hours: Number.parseFloat(event.target.value) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+              </div>
+            </div>
+            <p className="text-xs leading-5 text-slate-400">{isGerman ? 'Die Sollzeit eines Monats richtet sich nach seinen Werktagen (Mo–Fr). Ein Feiertag unter der Woche, an dem jemand nicht arbeitet, zählt mit 8 Stunden – genau wie in der Stundenanzeige des Dienstplans.' : 'The monthly target follows the working days (Mon–Fri) of the month. A weekday holiday on which somebody does not work counts as 8 hours, exactly like in the hours display of the shift plan.'}</p>
+          </div>
+        ) : null}
+      </Section>
+
+        </div>
+      ) : null}
+      {activeGroup === 'special' ? (
+        <div className="space-y-4">
+      <div className="rounded-3xl border border-sky-400/20 bg-sky-500/5 px-5 py-4">
+        <div className="text-sm font-semibold text-foreground">{isGerman ? "Sonderdienste mit festem Personal" : "Special duties with fixed staff"}</div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{isGerman ? "DBS wird wochenweise im Wechsel von Personen aus dem DBS-Pool übernommen. Außerhalb ihrer DBS-Woche arbeiten diese Personen nur Früh- oder Spätschicht (je nach Auswahl) und nie in 7-Tage-Blöcken. Colo-Bedarf legst du mit Tagen, Schicht und Personenzahl fest." : "DBS is covered week by week by people from the DBS pool. Outside their DBS week they only work early or late shifts (as selected) and never in seven-day blocks. Colo demand is set with days, shift and head count."}</p>
+      </div>
 
       {/* ── DBS Configuration ── */}
       <Section title={t("shiftAdmin.sectionDbs")} icon={Users} helpKey="shiftAdmin.helpSectionDbs" t={t}>
@@ -1894,15 +2305,16 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
 
       </Section>
 
+
       {/* ── Colo competency planning ── */}
       <Section title={isGerman ? 'Colo-Kompetenzplanung' : 'Colo competency planning'} icon={Building2} defaultOpen={false}>
         <div className="space-y-5">
           <div className="rounded-2xl border border-cyan-400/20 bg-cyan-500/8 px-4 py-3 text-sm text-slate-200">
-            <div className="font-semibold text-cyan-100">{isGerman ? 'Automatische COLO-Rollen im Wochenplan' : 'Automatic COLO roles in the weekly plan'}</div>
+            <div className="font-semibold text-cyan-100">{isGerman ? 'Colo-Einsätze im Dienstplan' : 'Colo duties in the shift plan'}</div>
             <p className="mt-1 text-xs leading-5 text-slate-400">
               {isGerman
-                ? 'Montag bis Freitag: eine Person in der Frühschicht für Vorbereitung sowie E-Mail- und Telefonverkehr mit der Börse. Jede Nacht: eine Person für die Vorbereitung von Leitungen (Mo–Do) bzw. die Ausführung (Fr–So). Samstag und Sonntag: eine Person in der Frühschicht für Colo-Arbeiten vor Ort. Der Generator plant Pool-Mitarbeitende bevorzugt in diese Schichten – aber nie gegen Schichtwünsche, Sperrtage oder Wellbeing-Grenzen.'
-                : 'Monday to Friday: one early-shift person for preparation and e-mail/phone traffic with the exchange. Every night: one person for line preparation (Mon–Thu) or execution (Fri–Sun). Saturday and Sunday: one early-shift person for on-site Colo work. The generator prefers pool members for these shifts, but never against shift wishes, blocked days or wellbeing limits.'}
+                ? 'Wähle unten, wer Colo-Kompetenz hat, und lege fest, wie viele Personen an welchen Tagen und in welcher Schicht gebraucht werden. Der Generator plant Pool-Mitarbeitende bevorzugt in diese Schichten – aber nie gegen Schichtwünsche, Sperrtage oder Wellbeing-Grenzen. Eingeplante Colo-Mitarbeitende werden im Dienstplan mit „CO“ markiert und lassen sich dort auch von Hand markieren.'
+                : 'Choose below who has Colo competence and how many people are needed on which days and in which shift. The generator prefers pool members for these shifts, but never against shift wishes, blocked days or wellbeing limits. Planned Colo employees are marked "CO" in the shift plan and can also be marked by hand there.'}
             </p>
           </div>
 
@@ -1914,19 +2326,103 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
             <input type="checkbox" checked={coloConfig.enabled} onChange={(event) => setColoConfig({ ...coloConfig, enabled: event.target.checked })} className="h-5 w-5 rounded border-white/20 bg-slate-950 text-cyan-500" />
           </label>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Mo–Fr Frühschicht (Vorbereitung/Börse)' : 'Mon–Fri early (preparation/exchange)'}</label>
-              <input type="number" min="0" max="20" value={coloConfig.weekdayPreparationStaff} onChange={(event) => setColoConfig({ ...coloConfig, weekdayPreparationStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+          <div className="rounded-2xl border border-white/10 bg-slate-900/55 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-100">{isGerman ? 'Colo-Bedarf: an welchen Tagen, in welcher Schicht, wie viele Personen' : 'Colo demand: which days, which shift, how many people'}</div>
+                <p className="mt-1 text-xs leading-5 text-slate-400">
+                  {isGerman
+                    ? 'Lege für jeden Bedarf einen Eintrag an: Tage einzeln anklicken, Schicht wählen (Früh, Spät oder Nacht) und die Anzahl der benötigten Mitarbeitenden eintragen. Beispiel: Mo–Fr · Früh · 1 Person und jede Nacht · Nacht · 1 Person.'
+                    : 'Create one entry per demand: click the days one by one, choose the shift (early, late or night) and enter how many employees are needed. Example: Mon–Fri · early · 1 person and every night · night · 1 person.'}
+                </p>
+              </div>
+              <button type="button" onClick={addColoRequirement} className="inline-flex items-center gap-2 rounded-2xl border border-cyan-300/30 bg-cyan-400/15 px-4 py-2 text-sm font-medium text-cyan-100 transition hover:bg-cyan-400/25">
+                <Plus className="h-4 w-4" />
+                {isGerman ? 'Neuer Eintrag' : 'New entry'}
+              </button>
             </div>
-            <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Jede Nacht (Leitungen/Ausführung)' : 'Every night (lines/execution)'}</label>
-              <input type="number" min="0" max="20" value={coloConfig.nightStaff} onChange={(event) => setColoConfig({ ...coloConfig, nightStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+
+            <div className="mt-4 space-y-3">
+              {coloConfig.requirements.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-400">
+                  {isGerman ? 'Noch kein Colo-Bedarf eingetragen. Mit „Neuer Eintrag“ anlegen.' : 'No Colo demand entered yet. Use "New entry" to add one.'}
+                </div>
+              ) : coloConfig.requirements.map((entry) => (
+                <div key={entry.id} className="grid gap-3 rounded-2xl border border-white/10 bg-slate-950/50 p-3 xl:grid-cols-[minmax(0,1fr)_auto_auto_auto] xl:items-center">
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Tage' : 'Days'}</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {weekdayOptions.map((option) => {
+                        const active = entry.weekdays.includes(option.value);
+                        return (
+                          <button
+                            key={`${entry.id}-day-${option.value}`}
+                            type="button"
+                            onClick={() => updateColoRequirement(entry.id, { weekdays: normalizeColoWeekdays(active ? entry.weekdays.filter((day) => day !== option.value) : [...entry.weekdays, option.value]) })}
+                            className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${active ? 'bg-cyan-400/20 text-cyan-100 ring-1 ring-cyan-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}
+                          >
+                            {option.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {entry.weekdays.length === 0 ? (
+                      <div className="mt-1 text-[11px] text-amber-300">{isGerman ? 'Mindestens einen Tag wählen, sonst wird der Eintrag nicht gespeichert.' : 'Pick at least one day, otherwise the entry is not saved.'}</div>
+                    ) : null}
+                  </div>
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Schicht' : 'Shift'}</div>
+                    <div className="flex gap-1.5">
+                      {COLO_SHIFT_TYPE_OPTIONS.map((option) => (
+                        <button
+                          key={`${entry.id}-type-${option.value}`}
+                          type="button"
+                          onClick={() => updateColoRequirement(entry.id, { shift_type: option.value })}
+                          className={`rounded-full px-3 py-1.5 text-xs font-medium transition ${entry.shift_type === option.value ? 'bg-sky-400/20 text-sky-100 ring-1 ring-sky-300/30' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}
+                        >
+                          {isGerman ? option.labelDe : option.labelEn}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Mitarbeitende' : 'Employees'}</div>
+                    <input type="number" min="1" max="20" value={entry.staff} onChange={(event) => updateColoRequirement(entry.id, { staff: Math.max(1, Math.min(20, Number.parseInt(event.target.value, 10) || 1)) })} className="w-24 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  </div>
+                  <button type="button" onClick={() => removeColoRequirement(entry.id)} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20">
+                    <Trash2 className="h-4 w-4" />
+                    {isGerman ? 'Löschen' : 'Delete'}
+                  </button>
+                </div>
+              ))}
             </div>
-            <div>
-              <label className="text-xs text-slate-400">{isGerman ? 'Sa/So Frühschicht (Arbeiten vor Ort)' : 'Sat/Sun early (on-site work)'}</label>
-              <input type="number" min="0" max="20" value={coloConfig.weekendDayStaff} onChange={(event) => setColoConfig({ ...coloConfig, weekendDayStaff: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-            </div>
+
+            {coloConfig.requirements.length > 0 ? (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[420px] text-center text-xs text-slate-300">
+                  <caption className="pb-2 text-left text-[10px] uppercase tracking-[0.18em] text-slate-400">{isGerman ? 'Übersicht: benötigte Colo-Mitarbeitende je Tag' : 'Overview: Colo employees needed per day'}</caption>
+                  <thead>
+                    <tr className="text-slate-400">
+                      <th className="px-2 py-1 text-left font-medium">{isGerman ? 'Schicht' : 'Shift'}</th>
+                      {weekdayOptions.map((option) => <th key={`ov-h-${option.value}`} className="px-2 py-1 font-medium">{option.label}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {COLO_SHIFT_TYPE_OPTIONS.map((type) => (
+                      <tr key={`ov-${type.value}`} className="border-t border-white/5">
+                        <td className="px-2 py-1 text-left">{isGerman ? type.labelDe : type.labelEn}</td>
+                        {weekdayOptions.map((option) => {
+                          const total = coloConfig.requirements
+                            .filter((entry) => entry.shift_type === type.value && entry.weekdays.includes(option.value))
+                            .reduce((sum, entry) => sum + entry.staff, 0);
+                          return <td key={`ov-${type.value}-${option.value}`} className={total > 0 ? 'px-2 py-1 font-semibold text-cyan-200' : 'px-2 py-1 text-slate-600'}>{total > 0 ? total : '–'}</td>;
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
           </div>
 
           <div className="relative">
@@ -1976,412 +2472,15 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
       </Section>
 
-      <SettingsGroup
-        title={isGerman ? '3. Planungsregeln und Sollzeit' : '3. Planning rules and target time'}
-        description={isGerman ? 'Erholung, Reihenfolgen, Feiertage, Fairness und Stundensteuerung.' : 'Recovery, sequences, holidays, fairness, and hour controls.'}
-      />
 
-      {/* ── Rotation rules & overtime ── */}
-      <Section title={t("shiftAdmin.sectionRotation")} icon={RotateCcw} helpKey="shiftAdmin.helpSectionRotation" t={t}>
-        {rotation ? (
-          <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxConsecutiveSame")} <HelpTooltip textKey="shiftAdmin.helpRotMaxConsecutiveSame" t={t} /></label>
-                <input type="number" min="1" max="30" value={rotation.max_consecutive_same} onChange={(event) => setRotation({ ...rotation, max_consecutive_same: Number.parseInt(event.target.value, 10) || 1 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxConsecutiveWorkdays")} <HelpTooltip textKey="shiftAdmin.helpRotMaxConsecutiveWorkdays" t={t} /></label>
-                <input type="number" min="1" max="30" value={rotation.max_consecutive_workdays} onChange={(event) => setRotation({ ...rotation, max_consecutive_workdays: Number.parseInt(event.target.value, 10) || 1 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMinFreeAfterStreak")} <HelpTooltip textKey="shiftAdmin.helpRotMinFreeAfterStreak" t={t} /></label>
-                <input type="number" min="0" max="7" value={rotation.min_free_after_streak} onChange={(event) => setRotation({ ...rotation, min_free_after_streak: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMinRestHours")} <HelpTooltip textKey="shiftAdmin.helpRotMinRestHours" t={t} /></label>
-                <input type="number" min="8" max="24" value={rotation.min_hours_between_shifts} onChange={(event) => setRotation({ ...rotation, min_hours_between_shifts: Number.parseInt(event.target.value, 10) || 11 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxNightsMonth")} <HelpTooltip textKey="shiftAdmin.helpRotMaxNightsMonth" t={t} /></label>
-                <input type="number" min="0" max="31" value={rotation.max_nights_per_month} onChange={(event) => setRotation({ ...rotation, max_nights_per_month: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotMaxWeekendsMonth")} <HelpTooltip textKey="shiftAdmin.helpRotMaxWeekendsMonth" t={t} /></label>
-                <input type="number" min="0" max="10" value={rotation.max_weekends_per_month} onChange={(event) => setRotation({ ...rotation, max_weekends_per_month: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotFreeDaysAfterNight")} <HelpTooltip textKey="shiftAdmin.helpRotFreeDaysAfterNight" t={t} /></label>
-                <input type="number" min="0" max="7" value={rotation.free_days_after_night} onChange={(event) => setRotation({ ...rotation, free_days_after_night: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.rotFreeDaysAfterWeekend")} <HelpTooltip textKey="shiftAdmin.helpRotFreeDaysAfterWeekend" t={t} /></label>
-                <input type="number" min="0" max="7" value={rotation.free_days_after_weekend} onChange={(event) => setRotation({ ...rotation, free_days_after_weekend: Number.parseInt(event.target.value, 10) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">{isGerman ? 'Erster Arbeitstag nach Nacht' : 'First workday after nights'}</label>
-                <select value={rotation.night_next_workday ?? 4} onChange={(event) => setRotation({ ...rotation, night_next_workday: Number.parseInt(event.target.value, 10) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                  {weekdayOptions.map((option) => <option key={`night-next-${option.value}`} value={option.value}>{option.label}</option>)}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">{isGerman ? 'Standard Donnerstag: Montag bis Mittwoch bleiben frei.' : 'Default Thursday: Monday through Wednesday remain free.'}</p>
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">{isGerman ? 'Feste Schicht nach Nacht' : 'Fixed shift after nights'}</label>
-                <select value={rotation.night_next_shift_code || ''} onChange={(event) => setRotation({ ...rotation, night_next_shift_code: event.target.value || null })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                  <option value="">{isGerman ? 'Keine feste Folgeschicht' : 'No fixed follow-up shift'}</option>
-                  {shiftCodeOptions.filter((option) => option.value !== 'N').map((option) => <option key={`night-shift-${option.value}`} value={option.value}>{option.label}</option>)}
-                </select>
-                <p className="mt-1 text-xs text-slate-500">{isGerman ? 'Verhindert eine zufällige Schichtart nach dem Nachtblock.' : 'Prevents a random shift type after a night block.'}</p>
-              </div>
-            </div>
-
-            <div className="grid gap-3 lg:grid-cols-3">
-              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-                <input type="checkbox" checked={rotation.night_to_early_forbidden} onChange={(event) => setRotation({ ...rotation, night_to_early_forbidden: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-                <span className="flex items-center">{t("shiftAdmin.rotNightToEarlyForbidden")} <HelpTooltip textKey="shiftAdmin.helpRotNightToEarlyForbidden" t={t} /></span>
-              </label>
-              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-                <input type="checkbox" checked={rotation.late_to_early_forbidden} onChange={(event) => setRotation({ ...rotation, late_to_early_forbidden: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-                <span className="flex items-center">{t("shiftAdmin.rotLateToEarlyForbidden")} <HelpTooltip textKey="shiftAdmin.helpRotLateToEarlyForbidden" t={t} /></span>
-              </label>
-              <div className="rounded-2xl border border-violet-300/25 bg-violet-500/10 px-4 py-3 text-sm text-slate-100">
-                <label className="block">
-                  <span className="block font-medium">{isGerman ? 'Nachtplanungsmodell' : 'Night planning model'}</span>
-                  <select value={shortNightOptions.mode} disabled={saving === 'short-night'} onChange={(event) => { const mode = event.target.value as ShortNightOptions['mode']; setShortNightOptions({ ...shortNightOptions, mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); void saveShortNightOptions({ mode, enabled: mode !== 'SEVEN_DAY_ONLY' }); }} className="mt-2 w-full rounded-lg border border-violet-300/25 bg-slate-950/80 px-3 py-2 text-xs text-slate-100">
-                    <option value="SEVEN_DAY_ONLY">{isGerman ? 'Nur 7-Tage-Nachtblöcke' : 'Seven-night blocks only'}</option>
-                    <option value="SHORT_ONLY">{isGerman ? 'Nur kurze Nachtblöcke' : 'Short night blocks only'}</option>
-                    <option value="MIXED">{isGerman ? 'Beide Modelle parallel (7-Tage-Blöcke plus kurze Blöcke bis zur Maximalbesetzung)' : 'Both models in parallel (seven-night blocks plus short blocks up to the maximum staffing)'}</option>
-                  </select>
-                  <span className="mt-2 block text-xs text-slate-400">{isGerman
-                    ? `Im Parallelmodus erhalten Mitarbeitende mit 7-Tage-Wunsch einen vollständigen Nachtblock. Zusätzlich werden Mitarbeitende mit Kurzblock-Wunsch in Blöcken von bis zu ${shortNightOptions.series_days ?? 3} Nächten geplant, bis die Maximalbesetzung der Nachtschicht erreicht ist.`
-                    : `In parallel mode, employees preferring seven nights receive a full block. Employees preferring short blocks are additionally planned in blocks of up to ${shortNightOptions.series_days ?? 3} nights until the maximum night staffing is reached.`}</span>
-                </label>
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  <label className="text-[10px] text-slate-400">{isGerman ? 'Start' : 'Start'}<input type="time" value={shortNightOptions.start_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, start_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
-                  <label className="text-[10px] text-slate-400">{isGerman ? 'Ende' : 'End'}<input type="time" value={shortNightOptions.end_time} onChange={(event) => setShortNightOptions({ ...shortNightOptions, end_time: event.target.value })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
-                  <label className="text-[10px] text-slate-400">{isGerman ? 'Frei danach' : 'Days off'}<input type="number" min="0" max="14" value={shortNightOptions.free_days_after} onChange={(event) => setShortNightOptions({ ...shortNightOptions, free_days_after: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
-                  <label className="text-[10px] text-slate-400">{isGerman ? 'Länge kurzer Nachtblöcke (Tage)' : 'Length of short night blocks (days)'}<input type="number" min="1" max="7" value={shortNightOptions.series_days ?? 3} onChange={(event) => setShortNightOptions({ ...shortNightOptions, series_days: Math.max(1, Math.min(7, Number.parseInt(event.target.value, 10) || 3)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-xs text-slate-100" /></label>
-                </div>
-                <p className="mt-2 text-[10px] leading-4 text-violet-100/75">{isGerman ? `N und NK teilen sich dieselbe Obergrenze: maximal ${normalNightStaffCap || '—'} Personen pro Nacht. Die Grenze änderst du bei der normalen Nachtschicht N.` : `N and NK share one cap: at most ${normalNightStaffCap || '—'} people per night. Change the cap on the regular N shift.`}</p>
-              </div>
-            </div>
-
-            {/* ── Overtime sub-section ── */}
-            <div className="grid gap-3 lg:grid-cols-3">
-              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-                <input type="checkbox" checked={rotation.late_before_night_required ?? false} onChange={(event) => setRotation({ ...rotation, late_before_night_required: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-                <span>{isGerman ? 'Spaetschicht vor Nachtschicht erzwingen' : 'Require late shift before night shift'}</span>
-              </label>
-            </div>
-            <p className="text-xs text-slate-500">
-              {isGerman
-                ? 'Wenn aktiv, startet die Engine einen Nachtblock nur bei Mitarbeitern, die am Vortag eine Spaetschicht hatten. Das macht den Wechsel in die Nacht planbarer.'
-                : 'When enabled, the engine starts a night block only for employees who worked a late shift on the previous day. This makes the transition into nights more predictable.'}
-            </p>
-
-            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/5 p-4">
-              <div className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200/90">
-                {isGerman ? 'Work-Life-Balance' : 'Work-life balance'}
-              </div>
-              <p className="mb-4 text-xs leading-relaxed text-slate-400">
-                {isGerman
-                  ? 'Diese Regeln reduzieren belastende Schichtwechsel und schützen zusammenhängende Freizeit. Die verpflichtende Sollzeit bleibt vorrangig; unvereinbare Ziele werden als Konflikt angezeigt.'
-                  : 'These rules reduce disruptive shift changes and protect coherent time off. Contracted target hours remain mandatory; incompatible goals are reported as conflicts.'}
-              </p>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div>
-                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Schichtstabilität' : 'Shift stability'}</label>
-                  <input type="range" min="0" max="100" value={rotation.stability_priority ?? 70} onChange={(event) => setRotation({ ...rotation, stability_priority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
-                  <div className="mt-1 text-xs text-slate-500">{rotation.stability_priority ?? 70}% · {isGerman ? 'Bevorzugt dieselbe Schichtart in aufeinanderfolgenden Wochen.' : 'Prefers the same shift type in consecutive weeks.'}</div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Max. Schichtartwechsel / Monat' : 'Max shift-type changes / month'}</label>
-                  <input type="number" min="0" max="12" value={rotation.max_shift_type_changes_per_month ?? 4} onChange={(event) => setRotation({ ...rotation, max_shift_type_changes_per_month: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-                  <div className="mt-1 text-xs text-slate-500">{isGerman ? '0 = unbegrenzt. Vermeidet häufiges Wechseln zwischen Früh, Spät und Nacht.' : '0 = unlimited. Avoids frequent switching between early, late and night.'}</div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Mindestens freie Wochenenden' : 'Minimum free weekends'}</label>
-                  <input type="number" min="0" max="5" value={rotation.min_free_weekends_per_month ?? 2} onChange={(event) => setRotation({ ...rotation, min_free_weekends_per_month: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-                  <div className="mt-1 text-xs text-slate-500">{isGerman ? 'Schützt vollständige Wochenenden ohne Samstag- oder Sonntagsdienst.' : 'Protects complete weekends without Saturday or Sunday duty.'}</div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-slate-300">{isGerman ? 'Freie Tage vor Schichtwechsel' : 'Days off before shift change'}</label>
-                  <input type="number" min="0" max="3" value={rotation.min_recovery_days_after_shift_change ?? 1} onChange={(event) => setRotation({ ...rotation, min_recovery_days_after_shift_change: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-                  <div className="mt-1 text-xs text-slate-500">{isGerman ? 'Bevorzugte Erholung zwischen unterschiedlichen Schichtarten.' : 'Preferred recovery between different shift types.'}</div>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-2 rounded-2xl border border-amber-400/15 bg-amber-500/5 p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">
-                <Timer className="h-4 w-4" />
-                {t("shiftAdmin.overtimeTitle")}
-              </div>
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="flex items-center text-xs text-slate-400">
-                    {t("shiftAdmin.overtimeMax")}
-                    <HelpTooltip textKey="shiftAdmin.helpOvertimeMax" t={t} />
-                  </label>
-                  <input type="number" min="0" max="200" value={overtimeConfig.maxOvertimeHours} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, maxOvertimeHours: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-                  <div className="mt-1 text-xs text-slate-500">{t("shiftAdmin.overtimeHint")}</div>
-                </div>
-                <div>
-                  <label className="flex items-center text-xs text-slate-400">
-                    {t("shiftAdmin.overtimeMode")}
-                    <HelpTooltip textKey="shiftAdmin.helpOvertimeMode" t={t} />
-                  </label>
-                  <select value={overtimeConfig.overtimeMode} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, overtimeMode: event.target.value as OvertimeConfig['overtimeMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                    <option value="show">{t("shiftAdmin.overtimeModeShow")}</option>
-                    <option value="warn">{t("shiftAdmin.overtimeModeWarn")}</option>
-                    <option value="hard">{t("shiftAdmin.overtimeModeHard")}</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* ── Daily / Weekly hour limits sub-section ── */}
-            <div className="mt-2 rounded-2xl border border-sky-400/15 bg-sky-500/5 p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/80">
-                <Clock className="h-4 w-4" />
-                {isGerman ? "Arbeitszeitgrenzen" : "Working Time Limits"}
-              </div>
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <div>
-                  <label className="text-xs text-slate-400">{isGerman ? "Max. Stunden / Tag" : "Max hours / day"}</label>
-                  <input type="number" min="0" max="24" step="0.5" value={overtimeConfig.maxDailyHours} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, maxDailyHours: Math.max(0, Math.min(24, parseFloat(e.target.value) || 0)) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-                  <div className="mt-1 text-xs text-slate-500">{isGerman ? "0 = kein Limit" : "0 = no limit"}</div>
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400">{isGerman ? "Modus (Tag)" : "Mode (daily)"}</label>
-                  <select value={overtimeConfig.dailyMode} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, dailyMode: e.target.value as OvertimeConfig['dailyMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                    <option value="off">{isGerman ? "Aus" : "Off"}</option>
-                    <option value="warn">{isGerman ? "Warnung" : "Warning"}</option>
-                    <option value="block">{isGerman ? "Sperre" : "Block"}</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400">{isGerman ? "Max. Stunden / Woche" : "Max hours / week"}</label>
-                  <input type="number" min="0" max="168" step="0.5" value={overtimeConfig.maxWeeklyHours} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, maxWeeklyHours: Math.max(0, Math.min(168, parseFloat(e.target.value) || 0)) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-                  <div className="mt-1 text-xs text-slate-500">{isGerman ? "0 = kein Limit" : "0 = no limit"}</div>
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400">{isGerman ? "Modus (Woche)" : "Mode (weekly)"}</label>
-                  <select value={overtimeConfig.weeklyMode} onChange={(e) => setOvertimeConfig({ ...overtimeConfig, weeklyMode: e.target.value as OvertimeConfig['weeklyMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                    <option value="off">{isGerman ? "Aus" : "Off"}</option>
-                    <option value="warn">{isGerman ? "Warnung" : "Warning"}</option>
-                    <option value="block">{isGerman ? "Sperre" : "Block"}</option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-          </div>
-        ) : null}
-      </Section>
-
-      {/* Holiday staffing is set globally (national / international) in the admin tab "Besetzung". */}
-
-      {/* ── Fairness ── */}
-      <Section title={t("shiftAdmin.sectionFairness")} icon={Scale} helpKey="shiftAdmin.helpSectionFairness" t={t}>
-        {fairness ? (
-          <div className="space-y-4">
-            <div className="grid gap-3 lg:grid-cols-3">
-              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-                <input type="checkbox" checked={fairness.balance_nights} onChange={(event) => setFairness({ ...fairness, balance_nights: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-                <span className="flex items-center">{t("shiftAdmin.fairBalanceNights")} <HelpTooltip textKey="shiftAdmin.helpFairBalanceNights" t={t} /></span>
-              </label>
-              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-                <input type="checkbox" checked={fairness.balance_weekends} onChange={(event) => setFairness({ ...fairness, balance_weekends: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-                <span className="flex items-center">{t("shiftAdmin.fairBalanceWeekends")} <HelpTooltip textKey="shiftAdmin.helpFairBalanceWeekends" t={t} /></span>
-              </label>
-              <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-                <input type="checkbox" checked={fairness.balance_total_load} onChange={(event) => setFairness({ ...fairness, balance_total_load: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-                <span className="flex items-center">{t("shiftAdmin.fairBalanceLoad")} <HelpTooltip textKey="shiftAdmin.helpFairBalanceLoad" t={t} /></span>
-              </label>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.fairMaxDeviation")} <HelpTooltip textKey="shiftAdmin.helpFairMaxDeviation" t={t} /></label>
-                <input type="number" min="5" max="100" value={fairness.max_deviation_percent} onChange={(event) => setFairness({ ...fairness, max_deviation_percent: Number.parseInt(event.target.value, 10) || 5 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.fairPriority")} <HelpTooltip textKey="shiftAdmin.helpFairPriority" t={t} /></label>
-                <select value={fairness.fairness_vs_preference} onChange={(event) => setFairness({ ...fairness, fairness_vs_preference: event.target.value })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-                  <option value="fairness">{t("shiftAdmin.fairOptFairness")}</option>
-                  <option value="preference">{t("shiftAdmin.fairOptPreference")}</option>
-                  <option value="balanced">{t("shiftAdmin.fairOptBalanced")}</option>
-                </select>
-              </div>
-            </div>
-
-          </div>
-        ) : null}
-      </Section>
-
-      {/* ── Planning config ── */}
-      <Section title={t("shiftAdmin.sectionPlanning")} icon={Sliders} helpKey="shiftAdmin.helpSectionPlanning" t={t}>
-        {planConfig ? (
-          <div className="space-y-4">
-            <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-              <input type="checkbox" checked={planConfig.respect_employee_wishes} onChange={(event) => setPlanConfig({ ...planConfig, respect_employee_wishes: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-              <span className="flex items-center">{t("shiftAdmin.planRespectWishes")} <HelpTooltip textKey="shiftAdmin.helpPlanRespectWishes" t={t} /></span>
-            </label>
-
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.planTargetHours")} <HelpTooltip textKey="shiftAdmin.helpPlanTargetHours" t={t} /></label>
-                <input type="number" min="0" step="0.5" value={planConfig.monthly_target_hours} onChange={(event) => setPlanConfig({ ...planConfig, monthly_target_hours: Number.parseFloat(event.target.value) || 0 })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">
-                  {isGerman ? 'Jaehrliche Sollzeit (Std.)' : 'Annual target hours'}
-                  <HelpTooltip textKey="shiftAdmin.helpPlanTargetHours" t={t} />
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.5"
-                  value={planConfig.annual_target_hours}
-                  onChange={(event) => setPlanConfig({ ...planConfig, annual_target_hours: Number.parseFloat(event.target.value) || 0 })}
-                  className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                />
-                <div className="mt-1 text-xs text-slate-400">
-                  {isGerman ? 'Wird fuer die Jahresauswertung im Statistikbereich genutzt.' : 'Used for yearly progress in the statistics area.'}
-                </div>
-              </div>
-              <div>
-                <label className="flex items-center text-xs text-slate-400">{t("shiftAdmin.planHardRules")} <HelpTooltip textKey="shiftAdmin.helpPlanHardRules" t={t} /></label>
-                <input type="range" min="0" max="100" value={planConfig.hard_rules_priority} onChange={(event) => setPlanConfig({ ...planConfig, hard_rules_priority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
-                <div className="mt-1 text-xs text-slate-400">{planConfig.hard_rules_priority}%</div>
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">{t("shiftAdmin.planSoftWishes")}</label>
-                <input type="range" min="0" max="100" value={planConfig.soft_wishes_priority} onChange={(event) => setPlanConfig({ ...planConfig, soft_wishes_priority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
-                <div className="mt-1 text-xs text-slate-400">{planConfig.soft_wishes_priority}%</div>
-                <p className="mt-2 text-xs text-slate-400">
-                  {isGerman
-                    ? 'Bei aktivierter Wunschberücksichtigung bleiben ausgewählte Schichten und freie Feiertage verbindlich. Das Gewicht beeinflusst die Auswahl zwischen zulässigen Einsätzen. Unlösbare Wünsche führen zu offenen Diensten oder fehlenden Sollstunden.'
-                    : 'When employee wishes are enabled, selected shifts and holidays off remain binding. This weight ranks eligible assignments. Infeasible wishes leave shifts unfilled or target hours unmet.'}
-                </p>
-              </div>
-              <div>
-                <label className="text-xs text-slate-400">{t("shiftAdmin.planFairness")}</label>
-                <input type="range" min="0" max="100" value={planConfig.fairness_priority} onChange={(event) => setPlanConfig({ ...planConfig, fairness_priority: Number.parseInt(event.target.value, 10) || 0 })} className="mt-3 w-full" />
-                <div className="mt-1 text-xs text-slate-400">{planConfig.fairness_priority}%</div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-              {t("shiftAdmin.planAdminOverride")}: <span className="font-semibold text-slate-100">{planConfig.admin_override_priority}%</span>
-            </div>
-
-          </div>
-        ) : null}
-      </Section>
-
-      <SettingsGroup
-        title={isGerman ? '4. Eingriffe und Mitarbeiterrechte' : '4. Interventions and employee access'}
-        description={isGerman ? 'Vertretungen, Warnungen und verbindliche Mitarbeiterregeln.' : 'Coverage changes, warnings, and binding employee rules.'}
-      />
-
-      {/* ── Issues / control panel ── */}
-      <Section title={t("shiftAdmin.sectionIssues")} icon={AlertTriangle} helpKey="shiftAdmin.helpSectionIssues" t={t}>
-        <div className="mb-4 rounded-2xl border border-amber-400/15 bg-amber-500/10 px-4 py-3 text-sm text-slate-200">
-          {t("shiftAdmin.sectionIssuesInfo")}
         </div>
-
-        <div className="grid gap-3 lg:grid-cols-2">
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.issuePanelEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issuePanelEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.issuePanel")}
-          </label>
-          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.issueShowSolutions} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issueShowSolutions: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            {t("shiftAdmin.issueShowSolutions")}
-          </label>
-        </div>
-
-        <div className="mt-4 max-w-sm">
-          <label className="text-xs text-slate-400">{t("shiftAdmin.issuePriorityMode")}</label>
-          <select value={advancedSettings.issuePriorityMode} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issuePriorityMode: event.target.value as AdvancedPlanningSettings['issuePriorityMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-            <option value="staffing_first">{t("shiftAdmin.issueModeStaffing")}</option>
-            <option value="balanced">{t("shiftAdmin.issueModeBalanced")}</option>
-            <option value="fairness_first">{t("shiftAdmin.issueModeFairness")}</option>
-          </select>
-        </div>
-      </Section>
-
-      {/* ── Variety ── */}
-      <Section title={isGerman ? 'Abwechslung im Dienstplan' : 'Plan variety'} icon={Users} defaultOpen={false}>
-        <div className="space-y-3">
-          <label className="text-xs font-medium text-slate-300">{isGerman ? 'Abwechslung' : 'Variety'}</label>
-          <input type="range" min="0" max="100" value={advancedSettings.varietyPriority} onChange={(event) => setAdvancedSettings({ ...advancedSettings, varietyPriority: Number.parseInt(event.target.value, 10) || 0 })} className="w-full" />
-          <div className="text-xs text-slate-500">{advancedSettings.varietyPriority}% · {isGerman ? '0 = keine Abwechslung, 60 = Standard, 100 = stark wechselnde Blöcke.' : '0 = none, 60 = default, 100 = strongly changing blocks.'}</div>
-          <p className="text-xs leading-5 text-slate-400">
-            {isGerman
-              ? 'Der Generator vermeidet, dass dieselbe Person Woche für Woche denselben Block (gleiche Schicht, gleiche Schichtart) bekommt, bevorzugt Schichtarten, die zuletzt nicht dabei waren, und verteilt Ausgleichsschichten gleichmäßiger auf die Wochentage. Wünsche und harte Regeln haben immer Vorrang. Speichern über „Leitstand & Autopilot speichern“ unten.'
-              : 'The generator avoids giving the same person the same block week after week, prefers shift types that were not part of the recent blocks and spreads filler shifts more evenly over the weekdays. Wishes and hard rules always win. Save with “Save control & autopilot” below.'}
-          </p>
-        </div>
-      </Section>
-
-      {/* ── Preferred colleagues ── */}
-      <Section title={isGerman ? 'Wunschkollegen' : 'Preferred colleagues'} icon={Users} defaultOpen={false}>
-        <div className="space-y-3">
-          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.preferredColleaguesEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, preferredColleaguesEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            <span>{isGerman ? 'Wunschkollegen im Generator berücksichtigen' : 'Use preferred colleagues in the generator'}</span>
-          </label>
-          <p className="text-xs leading-5 text-slate-400">
-            {isGerman
-              ? 'Mitarbeitende können in ihren Einstellungen bis zu vier Wunschkollegen wählen. Die Auswahl bleibt immer gespeichert; ist der Schalter aus, ignoriert der Generator sie.               Speichern über „Leitstand & Autopilot speichern“ unten.'
-                            : 'Employees can pick up to four preferred colleagues in their settings. Selections are always stored; while this switch is off the generator ignores them. Save with “Save control & autopilot” below.'}
-          </p>
-        </div>
-      </Section>
-
-      {/* ── Unavailable weekdays (all employees may enter them; admin only switches the generator) ── */}
-      <Section title={isGerman ? 'Nicht verfügbare Wochentage' : 'Unavailable weekdays'} icon={Users} defaultOpen={false}>
-        <div className="space-y-3">
-          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-            <input type="checkbox" checked={advancedSettings.blockedDaysEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, blockedDaysEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-            <span>{isGerman ? 'Nicht verfügbare Wochentage im Generator berücksichtigen' : 'Use unavailable weekdays in the generator'}</span>
-          </label>
-          <p className="text-xs leading-5 text-slate-400">
-            {isGerman
-              ? 'Alle Mitarbeitenden können in ihren Einstellungen Wochentage wählen, an denen sie nicht arbeiten können. Die Auswahl bleibt immer gespeichert; ist der Schalter aus, ignoriert der Generator sie. Speichern über „Leitstand & Autopilot speichern“ unten.'
-              : 'All employees can pick weekdays they cannot work in their settings. Selections are always stored; while this switch is off the generator ignores them. Save with “Save control & autopilot” below.'}
-          </p>
-        </div>
-      </Section>
-
-      <PreferenceWeightSettings />
-
-      {user.isRoot ? (
-        <Section title={isGerman ? 'Interne Admin-Hinweise' : 'Internal admin notes'} icon={ShieldAlert} defaultOpen={false}>
-          <div className="space-y-4">
-            <div className="rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-100">
-              {isGerman
-                ? 'Dieser Bereich ist ausschließlich für den Admin sichtbar. Die Hinweise sind nicht Teil der Mitarbeiteransicht und beeinflussen die automatische Planung nicht.'
-                : 'This area is visible to the administrator only. Notes are not shown to employees and do not affect automated planning.'}
-            </div>
-            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
-              <input type="checkbox" checked={advancedSettings.adminFlagsEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, adminFlagsEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
-              <span>{isGerman ? 'Hervorhebung in dieser Admin-Liste aktivieren' : 'Enable highlighting in this admin list'}</span>
-            </label>
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
-              <select value={newAdminFlagName} onChange={(event) => setNewAdminFlagName(event.target.value)} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"><option value="">{isGerman ? 'Mitarbeiter auswählen' : 'Select employee'}</option>{employees.filter((employee) => !adminFlags.some((flag) => flag.employee_name === employee)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}</select>
-              <input value={newAdminFlagNote} onChange={(event) => setNewAdminFlagNote(event.target.value)} placeholder={isGerman ? 'Interne Notiz (optional)' : 'Internal note (optional)'} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
-              <button type="button" onClick={() => void saveAdminFlag()} disabled={!newAdminFlagName || saving === 'admin-flag'} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-400 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50"><Save className="h-4 w-4" />{saving === 'admin-flag' ? '…' : (isGerman ? 'Hinweis speichern' : 'Save note')}</button>
-            </div>
-            <div className="space-y-2">
-              {adminFlags.length === 0 ? <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-500">{isGerman ? 'Keine internen Hinweise vorhanden.' : 'No internal notes recorded.'}</div> : adminFlags.map((flag) => <div key={flag.id} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${advancedSettings.adminFlagsEnabled && flag.is_active ? 'border-red-400/40 bg-red-500/10' : 'border-white/10 bg-slate-900/55'}`}><div><div className="font-medium text-slate-100">{flag.employee_name}</div>{flag.note ? <div className="mt-1 text-sm text-slate-400">{flag.note}</div> : null}<div className="mt-1 text-xs text-slate-500">{isGerman ? 'Zuletzt geändert' : 'Last updated'}: {new Date(flag.updated_at).toLocaleDateString(isGerman ? 'de-DE' : 'en-US')}</div></div><button type="button" onClick={() => void removeAdminFlag(flag.id)} disabled={saving === `admin-flag-${flag.id}`} className="rounded-2xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm text-red-200 hover:bg-red-500/20 disabled:opacity-50">{isGerman ? 'Entfernen' : 'Remove'}</button></div>)}
-            </div>
-          </div>
-        </Section>
       ) : null}
+      {activeGroup === 'exceptions' ? (
+        <div className="space-y-4">
+      <div className="rounded-3xl border border-sky-400/20 bg-sky-500/5 px-5 py-4">
+        <div className="text-sm font-semibold text-foreground">{isGerman ? "Ausnahmen und Hinweise" : "Exceptions and notes"}</div>
+        <p className="mt-1 text-sm leading-6 text-muted-foreground">{isGerman ? "Einzelne Personen vom Plan ausnehmen oder auf eine Schicht festlegen. Außerdem stellst du hier ein, welche Hinweise der Dienstplan bei Problemen zeigt." : "Exclude single people from the plan or fix them to one shift. Here you also choose which hints the shift plan shows when there are problems."}</p>
+      </div>
 
       {/* Save button for advanced settings */}
 
@@ -2478,6 +2577,63 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           </div>
         )}
       </Section>
+
+
+      {/* ── Issues / control panel ── */}
+      <Section title={t("shiftAdmin.sectionIssues")} icon={AlertTriangle} helpKey="shiftAdmin.helpSectionIssues" t={t}>
+        <div className="mb-4 rounded-2xl border border-amber-400/15 bg-amber-500/10 px-4 py-3 text-sm text-slate-200">
+          {t("shiftAdmin.sectionIssuesInfo")}
+        </div>
+
+        <div className="grid gap-3 lg:grid-cols-2">
+          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={advancedSettings.issuePanelEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issuePanelEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+            {t("shiftAdmin.issuePanel")}
+          </label>
+          <label className="flex items-center gap-2 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={advancedSettings.issueShowSolutions} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issueShowSolutions: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+            {t("shiftAdmin.issueShowSolutions")}
+          </label>
+        </div>
+
+        <div className="mt-4 max-w-sm">
+          <label className="text-xs text-slate-400">{t("shiftAdmin.issuePriorityMode")}</label>
+          <select value={advancedSettings.issuePriorityMode} onChange={(event) => setAdvancedSettings({ ...advancedSettings, issuePriorityMode: event.target.value as AdvancedPlanningSettings['issuePriorityMode'] })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
+            <option value="staffing_first">{t("shiftAdmin.issueModeStaffing")}</option>
+            <option value="balanced">{t("shiftAdmin.issueModeBalanced")}</option>
+            <option value="fairness_first">{t("shiftAdmin.issueModeFairness")}</option>
+          </select>
+        </div>
+      </Section>
+
+
+      {user.isRoot ? (
+        <Section title={isGerman ? 'Interne Admin-Hinweise' : 'Internal admin notes'} icon={ShieldAlert} defaultOpen={false}>
+          <div className="space-y-4">
+            <div className="rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+              {isGerman
+                ? 'Dieser Bereich ist ausschließlich für den Admin sichtbar. Die Hinweise sind nicht Teil der Mitarbeiteransicht und beeinflussen die automatische Planung nicht.'
+                : 'This area is visible to the administrator only. Notes are not shown to employees and do not affect automated planning.'}
+            </div>
+            <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <input type="checkbox" checked={advancedSettings.adminFlagsEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, adminFlagsEnabled: event.target.checked })} className="rounded border-white/20 bg-slate-950" />
+              <span>{isGerman ? 'Hervorhebung in dieser Admin-Liste aktivieren' : 'Enable highlighting in this admin list'}</span>
+            </label>
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
+              <select value={newAdminFlagName} onChange={(event) => setNewAdminFlagName(event.target.value)} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"><option value="">{isGerman ? 'Mitarbeiter auswählen' : 'Select employee'}</option>{employees.filter((employee) => !adminFlags.some((flag) => flag.employee_name === employee)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}</select>
+              <input value={newAdminFlagNote} onChange={(event) => setNewAdminFlagNote(event.target.value)} placeholder={isGerman ? 'Interne Notiz (optional)' : 'Internal note (optional)'} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
+              <button type="button" onClick={() => void saveAdminFlag()} disabled={!newAdminFlagName || saving === 'admin-flag'} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-400 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50"><Save className="h-4 w-4" />{saving === 'admin-flag' ? '…' : (isGerman ? 'Hinweis speichern' : 'Save note')}</button>
+            </div>
+            <div className="space-y-2">
+              {adminFlags.length === 0 ? <div className="rounded-2xl border border-dashed border-white/10 px-4 py-6 text-center text-sm text-slate-500">{isGerman ? 'Keine internen Hinweise vorhanden.' : 'No internal notes recorded.'}</div> : adminFlags.map((flag) => <div key={flag.id} className={`flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between ${advancedSettings.adminFlagsEnabled && flag.is_active ? 'border-red-400/40 bg-red-500/10' : 'border-white/10 bg-slate-900/55'}`}><div><div className="font-medium text-slate-100">{flag.employee_name}</div>{flag.note ? <div className="mt-1 text-sm text-slate-400">{flag.note}</div> : null}<div className="mt-1 text-xs text-slate-500">{isGerman ? 'Zuletzt geändert' : 'Last updated'}: {new Date(flag.updated_at).toLocaleDateString(isGerman ? 'de-DE' : 'en-US')}</div></div><button type="button" onClick={() => void removeAdminFlag(flag.id)} disabled={saving === `admin-flag-${flag.id}`} className="rounded-2xl border border-red-400/25 bg-red-500/10 px-3 py-2 text-sm text-red-200 hover:bg-red-500/20 disabled:opacity-50">{isGerman ? 'Entfernen' : 'Remove'}</button></div>)}
+            </div>
+          </div>
+        </Section>
+      ) : null}
+
+
+        </div>
+      ) : null}
 
       {/* ── One central save for the whole page ── */}
       <div className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-950/90 px-4 py-3 shadow-lg backdrop-blur">
