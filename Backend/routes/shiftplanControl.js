@@ -1078,14 +1078,22 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   let staffingRules = weekdayStaffingRules;
   let staffingMaximums = weekdayStaffingMaximums;
   const selectStaffingForDay = (dow, holidayName) => {
+    const context = resolveStaffingDayContext({ dayOfWeek: dow, holidayName });
     const staffing = buildStaffingForContext({
-      context: resolveStaffingDayContext({ dayOfWeek: dow, holidayName }),
+      context,
       weekdayRules: weekdayStaffingRules,
       weekdayMaximums: weekdayStaffingMaximums,
       dayLimitMap: staffingDayLimitMap,
     });
     staffingRules = staffing.rules;
     staffingMaximums = staffing.maximums;
+    // Early shift is the overflow pool on normal weekdays: when late/night are full (or fewer people
+    // wished for them), everybody else must still fit somewhere. Saturday, Sunday and holidays keep
+    // their configured maximums.
+    if (context === 'weekday') {
+      const { early: _earlyMaximum, ...withoutEarlyMaximum } = staffingMaximums;
+      staffingMaximums = withoutEarlyMaximum;
+    }
   };
   sharedNightStaffCap = Math.max(Number.parseInt(String(weekdayStaffingMaximums.night ?? 0), 10) || 0, 0);
   const getShiftTypeMaximum = (shiftType) => {
@@ -2941,7 +2949,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
-  for (const employee of activeEmployees) {
+  // Largest hour deficit first: the free capacity goes to those who need it most, not to whoever
+  // comes first in the alphabet.
+  const catchupOrder = [...activeEmployees].sort((left, right) => (
+    (employeeTargetHours[right] - empHours[right]) - (employeeTargetHours[left] - empHours[left])
+  ));
+  for (const employee of catchupOrder) {
     const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
     const prefs = preferencesForDate(employee, `${month}-01`);
     const candidateDefinitions = regularCatchupDefinitions
@@ -2967,11 +2980,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         }
         return Number(left.sort_order || 0) - Number(right.sort_order || 0);
       });
-    const catchupDefinition = candidateDefinitions[0];
-    if (!catchupDefinition) continue;
+    if (candidateDefinitions.length === 0) continue;
 
     while (empHours[employee] < employeeTargetHours[employee]) {
       const availableDays = [];
+      // Every allowed shift is checked, not only the preferred one: when the preferred shift is
+      // full (e.g. late is at its maximum) the employee still gets another shift with free capacity.
+      for (const [definitionRank, catchupDefinition] of candidateDefinitions.entries())
       for (let day = planningStartDay; day <= planningEndDay; day++) {
         if (empDayAssignment[employee][day]) continue;
         const dateStr = `${month}-${String(day).padStart(2, '0')}`;
@@ -3005,7 +3020,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const touchesWorkDay = Boolean(empDayAssignment[employee][day - 1]) || Boolean(empDayAssignment[employee][day + 1]);
         availableDays.push({
           day,
+          definition: catchupDefinition,
           score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) + (touchesWorkDay ? 40 : -80) - (recoveryEntry ? 50 : 0)
+            - definitionRank * 12
             - colleaguesOfTypeThatDay * 8 * (varietyPriority / 60)
             - getBlockedDayPenalty(employee, dow) - getShiftWishPenaltyOnDate(employee, dateStr, catchupDefinition.code),
         });
@@ -3014,6 +3031,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (availableDays.length === 0) break;
       availableDays.sort((left, right) => right.score - left.score || left.day - right.day);
       const selectedDay = availableDays[0].day;
+      const catchupDefinition = availableDays[0].definition;
       const selectedDate = `${month}-${String(selectedDay).padStart(2, '0')}`;
       const shiftHours = getShiftHoursForDay(catchupDefinition, selectedDay);
       releaseHolidayCredit(employee, selectedDay);
@@ -3355,6 +3373,45 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         'Ruhezeiten, max. Arbeitstage am Stück und Wochenendlimits geprüft',
       ]);
     }
+  }
+
+  // Explain every employee who stays clearly below the target hours: count, per free day, which
+  // rule or limit blocked the filler shift, so a "free for weeks" employee is never unexplained.
+  for (const employee of activeEmployees) {
+    const deficit = employeeTargetHours[employee] - empHours[employee];
+    if (!(deficit >= 8)) continue;
+    const fixedType = fixedShiftTypeByEmployee.get(employee);
+    const options = regularCatchupDefinitions
+      .filter((definition) => !fixedType || fixedType === normalizePlanningShiftTypeKey(definition.shift_type));
+    const tally = new Map();
+    const count = (reason) => tally.set(reason, (tally.get(reason) || 0) + 1);
+    let freeDays = 0;
+    for (let day = planningStartDay; day <= planningEndDay; day++) {
+      if (empDayAssignment[employee][day]) continue;
+      freeDays++;
+      const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+      const dow = dayOfWeek(year, mon, day);
+      if (isEmployeeAbsentOnDate(employee, dateStr)) { count('Abwesenheit/Urlaub'); continue; }
+      if (isEmployeeBlockedByPreferenceOnDay(employee, dow)) { count('gesperrter Wochentag (Ausschluss/Wunsch)'); continue; }
+      if (isRecoveryProtectedDay(employee, day)) { count('Erholungstag'); continue; }
+      if (options.length === 0) { count('keine passende Schicht (feste Schichtart/Wunsch/DBS-Regel)'); continue; }
+      const free = options.find((definition) => !isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)
+        && normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow)
+        && !wouldViolateAdjacentTransition(employee, day, definition)
+        && keepsEmployeeShiftCohesion(employee, day, definition));
+      if (!free) { count('Schichtfolge-/Ruheregel'); continue; }
+      if (!options.some((definition) => hasDefinitionCapacityForEmployee(employee, day, definition))) { count('Tagesbesetzung bereits am Maximum'); continue; }
+      count('Arbeitstage-am-Stück-Limit');
+    }
+    const detail = [...tally.entries()].sort((left, right) => right[1] - left[1]).map(([reason, days]) => `${reason}: ${days}`).join('; ');
+    conflicts.push({
+      day: 1,
+      date: `${month}-01`,
+      shift: 'Soll',
+      severity: 'warning',
+      type: 'target_hours_unreached',
+      message: `${employee}: Sollstunden um ${deficit.toFixed(1)}h unterschritten (${empHours[employee].toFixed(1)} von ${employeeTargetHours[employee]}h), ${freeDays} freie Tage. Gründe je freiem Tag: ${detail || 'unbekannt'}.`,
+    });
   }
 
   // Re-audit configured minimum staffing after all target-hour catch-up passes.

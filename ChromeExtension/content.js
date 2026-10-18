@@ -15,19 +15,18 @@
       * { box-sizing: border-box; }
       button, input { font: inherit; }
       /* Enterprise look: flat surfaces, hairline borders, one blue accent, no glow or animation. */
-      .launcher { position: fixed; z-index: 2147483646; top: 8px; left: 108px; display: none; width: 112px; height: 32px; padding: 0; overflow: hidden; touch-action:none; user-select:none; border: 1px solid #3a4658; border-radius: 6px; background:#171d26; color:#e7ebf0; font:600 12px/1 "Segoe UI",system-ui,Arial,sans-serif; cursor:grab; box-shadow:0 1px 2px rgba(0,0,0,.3); transition:background .12s ease,border-color .12s ease; }
+      /* Bottom navigation entry: icon above a small label, like the Jarvis items (Priority List, Smart Hands ...). */
+      .launcher { position: fixed; z-index: 2147483646; bottom: 0; left: 8px; display: none; width: 96px; height: 56px; padding: 0; overflow: hidden; user-select:none; border: 0; border-radius: 4px; background:transparent; color:#e7ebf0; font:500 11px/1.1 "Segoe UI",system-ui,Arial,sans-serif; cursor:pointer; transition:background .12s ease; }
       .launcher.context-open { display: none !important; visibility: hidden; pointer-events: none; }
-      .launcher:hover { background:#1e2631; border-color:#4a86e8; }
-      .launcher:active { background:#212a37; }
-      .launcher:focus-visible { outline:2px solid #4a86e8; outline-offset:2px; }
-      .launcher.dragging { cursor:grabbing; box-shadow:0 4px 12px rgba(0,0,0,.4); }
+      .launcher:hover { background:rgba(255,255,255,.1); }
+      .launcher:active { background:rgba(255,255,255,.16); }
+      .launcher:focus-visible { outline:2px solid #4a86e8; outline-offset:-2px; }
       .launcher img { display:none; }
-      .lx-face { position:relative; display:flex; align-items:center; gap:9px; width:100%; height:100%; padding:0 10px 0 0; overflow:hidden; background:transparent; }
-      .lx-mark { flex:0 0 auto; align-self:stretch; width:4px; background:#4a86e8; }
-      .lx-text { display:flex; align-items:baseline; gap:5px; white-space:nowrap; letter-spacing:.06em; }
-      .lx-text b { font-weight:600; color:#e7ebf0; }
-      .lx-text i { font-style:normal; font-weight:600; color:#8ab4f8; }
-      .lx-live { margin-left:auto; width:6px; height:6px; border-radius:50%; background:#2e9e6a; }
+      .lx-face { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; width:100%; height:100%; }
+      .lx-icon { display:block; width:32px; height:32px; color:#e7ebf0; filter:drop-shadow(0 0 3px rgba(138,180,248,.35)); transition:color .12s ease,filter .12s ease; }
+      .launcher:hover .lx-icon { color:#8ab4f8; filter:drop-shadow(0 0 5px rgba(138,180,248,.7)); }
+      .lx-dots rect { fill:#8ab4f8; stroke:none; }
+      .lx-text { white-space:nowrap; color:#fff; }
       .odin-brand { flex:0 0 auto; display:flex; align-items:center; justify-content:center; height:72px; overflow:hidden; border-bottom:1px solid #2c3644; background:#0f141b; }
       .odin-brand img { display:block; width:auto; height:64px; max-width:88%; object-fit:contain; filter:none; opacity:1; }
       .odin-title { font-family:"Segoe UI",system-ui,Arial,sans-serif; font-weight:600; letter-spacing:.02em; text-shadow:none; }
@@ -83,7 +82,7 @@
       .jarvis-notification footer { padding:0 20px 16px; color:#707b8b; font-size:11px; }
       .jarvis-notification button { border:0; background:transparent; color:#b9c2ce; cursor:pointer; font-size:20px; }
     </style>
-    <button class="launcher" type="button" aria-label="ODIN GO öffnen oder verschieben" title="Klicken zum Öffnen, gedrückt halten zum Verschieben"><span class="lx-face"><span class="lx-mark"></span><span class="lx-text"><b>ODIN</b><i>GO</i></span><span class="lx-live"></span></span><img alt="ODIN GO" /></button>
+    <button class="launcher" type="button" aria-label="ODIN GO öffnen" title="ODIN GO öffnen"><span class="lx-face"><svg class="lx-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.4"/><path d="M3 9.6h18M8 2.6v3.8M16 2.6v3.8"/><g class="lx-dots"><rect x="6.2" y="12.2" width="3" height="2.4" rx=".6"/><rect x="10.5" y="12.2" width="3" height="2.4" rx=".6"/><rect x="14.8" y="12.2" width="3" height="2.4" rx=".6"/><rect x="6.2" y="16.3" width="3" height="2.4" rx=".6"/><rect x="10.5" y="16.3" width="3" height="2.4" rx=".6"/></g></svg><span class="lx-text">ODIN GO</span></span><img alt="ODIN GO" /></button>
     <div class="app-menu" role="menu" aria-label="Anwendung auswählen">
       <button class="app-choice" type="button" data-app="planner"><span class="app-symbol">S</span><span><strong>Schichtplaner</strong><small>Dienstplan, Drafts und Wellbeing</small></span></button>
       <button class="app-choice" type="button" data-app="notices"><span class="app-symbol">N</span><span><strong>Notifications</strong><small>Aktuelle Informationen und Anweisungen</small></span></button>
@@ -353,6 +352,7 @@
   }
 
   async function loadLauncherPosition() {
+    return; // fixed placement in the bottom navigation: saved drag positions are ignored
     if (!verifiedUser || !identityToken) return;
     const userKey = launcherStorageKey();
     if (launcherPositionLoadedForUser === userKey) return;
@@ -381,39 +381,97 @@
     if (response?.ok && !serverPosition && localPosition) void persistLauncherPosition(localPosition);
   }
 
-  function positionLauncher() {
-    if (launcherPosition) {
-      applyLauncherPosition(launcherPosition);
-      return;
+  // The launcher sits in the free area of the bottom navigation, directly left of "Priority List",
+  // at the same height as the other entries. Without that item (other Jarvis page) it sits bottom left.
+  let cachedNavAnchor = null;
+  let cachedNavAnchorAt = 0;
+  let cachedNavLabel = null;
+  let lastLauncherPlacement = "";
+  function findBottomNavAnchor() {
+    // The text search walks the whole page: reuse the entry while it is still on the page and
+    // search again only when it is gone or after 30 seconds.
+    if (cachedNavAnchor && cachedNavAnchor.isConnected && Date.now() - cachedNavAnchorAt < 30_000) return cachedNavAnchor;
+    cachedNavAnchor = null;
+    cachedNavLabel = null;
+    cachedNavAnchorAt = Date.now();
+    const result = document.evaluate("//*[normalize-space(text())='Priority List']", document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    for (let index = 0; index < result.snapshotLength; index++) {
+      const label = result.snapshotItem(index);
+      if (!label || host.contains(label)) continue;
+      const rect = label.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0 || rect.top < window.innerHeight * 0.75) continue;
+      // The navigation entry: the widest ancestor that is still a single item (not the whole bar).
+      let item = label;
+      while (item.parentElement && item.parentElement.getBoundingClientRect().width < window.innerWidth * 0.3) item = item.parentElement;
+      cachedNavAnchor = item;
+      cachedNavLabel = label;
+      return item;
     }
-    const brandAnchor = findBrandAnchor();
-    const brandRect = brandAnchor?.getBoundingClientRect();
-    const launcherWidth = launcher.getBoundingClientRect().width || 122;
-    const launcherHeight = launcher.getBoundingClientRect().height || 34;
-    const preferredTop = brandRect
-      ? Math.max(4, brandRect.top + (brandRect.height - launcherHeight) / 2)
-      : 7;
-    const preferredLeft = brandRect ? brandRect.right + 10 : 108;
-    const maximumLeft = Math.min(window.innerWidth * 0.48, 760) - launcherWidth;
-
-    const candidates = [preferredLeft];
-    for (let left = Math.max(90, preferredLeft); left <= maximumLeft; left += 8) candidates.push(left);
-
-    const occupiedRects = collectOccupiedRects(brandAnchor);
-    const freeLeft = candidates.find((left) => !overlapsRects(occupiedRects, left, preferredTop, launcherWidth, launcherHeight));
-    if (freeLeft == null) {
-      launcher.style.display = 'none';
-      return;
-    }
-
-    launcher.style.top = `${Math.round(preferredTop)}px`;
-    launcher.style.left = `${Math.round(freeLeft)}px`;
-    launcher.style.right = 'auto';
-    launcher.style.display = 'block';
-    appMenu.style.top = `${Math.round(preferredTop + launcherHeight + 7)}px`;
-    appMenu.style.left = `${Math.round(freeLeft)}px`;
+    return null;
   }
 
+  function positionLauncher() {
+    const anchor = findBottomNavAnchor();
+    let width = 96;
+    let height = 56;
+    let left = 8;
+    let top = window.innerHeight - height;
+    let iconSize = 26;
+    let padTop = 8;
+    let gap = 4;
+    let font = { family: '"Segoe UI",system-ui,Arial,sans-serif', size: 11, weight: "500", spacing: "normal", lineHeight: "1.1" };
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      height = Math.max(40, Math.round(rect.height));
+      width = Math.min(110, Math.max(72, Math.round(height * 1.7)));
+      top = Math.round(rect.top);
+      left = Math.max(4, Math.round(rect.left / 2 - width / 2));
+      // Take the look from the Jarvis entry itself: label font and the position of icon and label inside the box.
+      if (cachedNavLabel) {
+        const style = window.getComputedStyle(cachedNavLabel);
+        const labelRect = cachedNavLabel.getBoundingClientRect();
+        font = { family: style.fontFamily, size: parseFloat(style.fontSize) || 11, weight: style.fontWeight, spacing: style.letterSpacing, lineHeight: style.lineHeight };
+        const iconElement = [...anchor.querySelectorAll('img,svg,i,span,div')].find((element) => {
+          if (element === cachedNavLabel || cachedNavLabel.contains(element) || element.contains(cachedNavLabel)) return false;
+          const iconRect = element.getBoundingClientRect();
+          return iconRect.width >= 12 && iconRect.width <= 64 && iconRect.height >= 12 && iconRect.height <= 64 && iconRect.bottom <= labelRect.top + 4;
+        });
+        if (iconElement) {
+          const iconRect = iconElement.getBoundingClientRect();
+          iconSize = Math.round(Math.max(iconRect.width, iconRect.height));
+          padTop = Math.max(0, Math.round(iconRect.top - rect.top));
+          gap = Math.max(0, Math.round(labelRect.top - iconRect.bottom));
+        } else {
+          iconSize = Math.round(height * 0.5);
+        }
+      }
+    }
+    const placement = `${top}:${left}:${height}:${width}:${iconSize}:${padTop}:${gap}:${font.size}:${font.family}`;
+    if (placement === lastLauncherPlacement && launcher.style.display === "block") return;
+    lastLauncherPlacement = placement;
+    const face = launcher.querySelector('.lx-face');
+    const icon = launcher.querySelector('.lx-icon');
+    const label = launcher.querySelector('.lx-text');
+    launcher.style.bottom = 'auto';
+    launcher.style.top = `${Math.max(0, top)}px`;
+    launcher.style.left = `${left}px`;
+    launcher.style.right = 'auto';
+    launcher.style.width = `${width}px`;
+    launcher.style.height = `${height}px`;
+    if (face) { face.style.justifyContent = 'flex-start'; face.style.paddingTop = `${padTop}px`; face.style.gap = `${gap}px`; }
+    if (icon) { icon.style.width = `${iconSize}px`; icon.style.height = `${iconSize}px`; }
+    if (label) {
+      label.style.fontFamily = font.family;
+      label.style.fontSize = `${font.size}px`;
+      label.style.fontWeight = font.weight;
+      label.style.letterSpacing = font.spacing;
+      label.style.lineHeight = font.lineHeight;
+      label.style.color = '#ffffff';
+    }
+    launcher.style.display = 'block';
+    appMenu.style.top = `${Math.max(0, top - 8)}px`;
+    appMenu.style.left = `${left}px`;
+  }
   const baseTabs = [
     ["shiftplan", "Dienstplan", "/shiftplan"],
     ["drafts", "Drafts", "/drafts"],
@@ -699,8 +757,17 @@
     return { email: String(email || "").toLowerCase(), displayName: displayName || "", jarvisUserName: userName || email || "" };
   }
 
+  // Without a recognised Jarvis user the scans must not run forever: back off 15 s, 30 s ... up to 5 min.
+  let identityFailures = 0;
+  let identityBackoffUntil = 0;
+  function noteIdentityFailure() {
+    identityFailures += 1;
+    identityBackoffUntil = Date.now() + Math.min(300_000, 15_000 * 2 ** Math.min(identityFailures - 1, 5));
+  }
+
   async function verifyJarvisIdentity({ showPrompt = true, preferLive = false } = {}) {
     if (identityVerificationPending) return false;
+    if (!showPrompt && !preferLive && Date.now() < identityBackoffUntil) return false;
     // Jarvis renders the account popover asynchronously. Keep a previously
     // verified device identity when the live popover is not available yet.
     let identity = readJarvisIdentity({ preferLive })
@@ -708,6 +775,7 @@
       || await readJarvisSessionFromPage();
     if (!identity) {
       log("Kein Jarvis-Profil erkannt; Backend-Aufruf wird noch nicht gestartet.");
+      noteIdentityFailure();
       verifiedUser = null;
       identityToken = "";
       employeeNode.textContent = "Jarvis-Profil nicht erkannt";
@@ -730,6 +798,7 @@
       identityToken = "";
       lastRejectedEmail = identity.email || identity.jarvisUserName || "";
       lastRejectedAt = Date.now();
+      noteIdentityFailure();
       employeeNode.textContent = identity.email || identity.jarvisUserName || "Jarvis-Benutzer";
       const keyProblem = /application key/i.test(String(response?.message || ""));
       showNotice(keyProblem
@@ -738,6 +807,8 @@
       return false;
     }
 
+    identityFailures = 0;
+    identityBackoffUntil = 0;
     verifiedUser = response.user;
     identityToken = response.token;
     lastRejectedEmail = "";
@@ -940,6 +1011,7 @@
   });
 
   launcher.addEventListener("pointerdown", (event) => {
+    return; // fixed placement in the bottom navigation: no dragging
     if (event.button !== 0) return;
     const rect = launcher.getBoundingClientRect();
     launcherDrag = {
@@ -1102,4 +1174,6 @@
   window.setTimeout(positionLauncher, 2000);
   window.setTimeout(positionLauncher, 7000);
   window.setTimeout(positionLauncher, 15000);
+  // The Jarvis page is a single-page app: keep the entry next to "Priority List" after navigation.
+  window.setInterval(() => { if (document.visibilityState === "visible" && !backdrop.classList.contains("open")) positionLauncher(); }, 4000);
 })();

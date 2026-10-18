@@ -191,7 +191,7 @@ export default function StaffingLimitsTab() {
             <h3 className="text-lg font-semibold text-foreground">{isGerman ? "Besetzung (Minimum / Maximum)" : "Staffing (minimum / maximum)"}</h3>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
               {isGerman
-                ? "Globale Werte je Tagesart. Jeder Wert ist die Summe aller Schichten dieser Art an dem Tag (z. B. Früh = E1 + E2). Ein leeres Maximum bedeutet unbegrenzt. Die Werte gelten nicht mehr je einzelne Schicht."
+                ? "Globale Werte je Tagesart. Jeder Wert ist die Summe aller Schichten dieser Art an dem Tag (z. B. Früh = E1 + E2). Ein leeres Maximum bedeutet unbegrenzt. Die Werte gelten nicht mehr je einzelne Schicht. Hinweis: Montag bis Freitag (ohne Feiertag) dient die Frühschicht als Auffangbecken – ihr Maximum wird dort nicht angewendet, damit Mitarbeitende nicht ohne Schicht bleiben, wenn Spät und Nacht voll sind."
                 : "Global values per day type. Each value is the sum of all shifts of that type on the day (e.g. early = E1 + E2). An empty maximum means unlimited. They no longer apply per individual shift."}
             </p>
           </div>
