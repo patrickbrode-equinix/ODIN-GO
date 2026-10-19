@@ -11,7 +11,9 @@
 
   root.innerHTML = `
     <style>
-      :host { all: initial; }
+      :host { all: initial; pointer-events: none; }
+      /* The host itself never catches clicks meant for Jarvis; only the real controls do. */
+      .launcher, .app-menu, .backdrop.open { pointer-events: auto; }
       * { box-sizing: border-box; }
       button, input { font: inherit; }
       /* Enterprise look: flat surfaces, hairline borders, one blue accent, no glow or animation. */
@@ -137,6 +139,7 @@
   const optionsButton = root.querySelector(".options");
   const tabsNode = root.querySelector(".tabs");
   const iframe = root.querySelector("iframe");
+  iframe.inert = true; // closed until the workspace is opened (see setWorkspaceOpen)
   const offlineFallback = root.querySelector(".offline-fallback");
   const offlineFallbackClose = root.querySelector(".offline-fallback-close");
   offlineFallback.querySelector("img").src = chrome.runtime.getURL("icons/odin-unavailable.png");
@@ -214,15 +217,42 @@
     }
   }
 
+  // Element that had the focus in Jarvis before ODIN GO opened; it gets the focus back on close.
+  let focusBeforeOpen = null;
+  // Last element of the Jarvis page that had the focus (the click on the ODIN GO button moves the focus
+  // to the extension itself, so it has to be tracked beforehand).
+  let lastPageFocus = null;
+  document.addEventListener("focusin", (event) => {
+    const target = event.target;
+    if (target instanceof Element && target !== host && !host.contains(target)) lastPageFocus = target;
+  }, { capture: true, passive: true });
+
   function setWorkspaceOpen(open) {
+    if (open) {
+      focusBeforeOpen = lastPageFocus && lastPageFocus.isConnected ? lastPageFocus : null;
+    }
+    // A closed (hidden) app must not keep keyboard focus or a mouse capture: inert makes the whole
+    // embedded page unreachable until the workspace is opened again.
+    iframe.inert = !open;
     backdrop.classList.toggle("open", open);
     launcher.classList.toggle("context-open", open);
     launcher.style.setProperty("display", open ? "none" : "", "important");
     launcher.setAttribute("aria-expanded", String(open));
     // The iframe stays loaded while the panel is closed; let it pause clocks and polling.
     notifyPanelVisible(open);
-    if (open) appMenu.style.display = "none";
-    else window.requestAnimationFrame(() => positionLauncher());
+    if (open) {
+      appMenu.style.display = "none";
+    } else {
+      // Hand the focus back to Jarvis so its buttons react at once after closing.
+      try { iframe.blur(); } catch { /* cross-origin frames may refuse */ }
+      try {
+        const target = focusBeforeOpen && focusBeforeOpen.isConnected ? focusBeforeOpen : document.body;
+        if (typeof target.focus === "function") target.focus({ preventScroll: true });
+        window.focus();
+      } catch { /* focus is best effort */ }
+      focusBeforeOpen = null;
+      window.requestAnimationFrame(() => positionLauncher());
+    }
   }
 
   function isVisible(element) {

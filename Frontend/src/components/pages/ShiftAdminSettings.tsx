@@ -403,6 +403,8 @@ interface PlanningHealthIssue {
 }
 
 interface OvertimeConfig {
+  /** true = the generator may plan days beyond the target hours without limit (adjustable). */
+  unlimited: boolean;
   maxOvertimeHours: number;
   overtimeMode: 'show' | 'warn' | 'hard';
   maxDailyHours: number;
@@ -506,6 +508,7 @@ function newColoRequirementId() {
 }
 
 const DEFAULT_OVERTIME_CONFIG: OvertimeConfig = {
+  unlimited: true,
   maxOvertimeHours: 0,
   overtimeMode: 'show',
   maxDailyHours: 10,
@@ -595,7 +598,9 @@ function extractColoConfig(settings: Record<string, string>): ColoConfig {
 
 
 function extractOvertimeConfig(settings: Record<string, string>): OvertimeConfig {
+  const storedUnlimited = settings['shiftplan.overtime_unlimited'];
   return {
+    unlimited: storedUnlimited === undefined || storedUnlimited === null || storedUnlimited === '' ? DEFAULT_OVERTIME_CONFIG.unlimited : String(storedUnlimited) === 'true',
     maxOvertimeHours: parseNumberSetting(settings['shiftplan.max_overtime_hours'], DEFAULT_OVERTIME_CONFIG.maxOvertimeHours),
     overtimeMode: (settings['shiftplan.overtime_mode'] as OvertimeConfig['overtimeMode']) || DEFAULT_OVERTIME_CONFIG.overtimeMode,
     maxDailyHours: parseNumberSetting(settings['shiftplan.max_daily_hours'], DEFAULT_OVERTIME_CONFIG.maxDailyHours),
@@ -952,6 +957,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     try {
       await api.put('/shift-config/rotation-rules', rotation);
       await api.put('/app-settings', {
+        'shiftplan.overtime_unlimited': overtimeConfig.unlimited,
         'shiftplan.max_overtime_hours': overtimeConfig.maxOvertimeHours,
         'shiftplan.overtime_mode': overtimeConfig.overtimeMode,
         'shiftplan.max_daily_hours': overtimeConfig.maxDailyHours,
@@ -1239,6 +1245,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       await api.put('/shift-config/short-night-options', shortNightOptions);
       const shiftCode = String(dbsConfig.shiftCode || 'DBS').trim().toUpperCase() || 'DBS';
       await api.put('/app-settings', {
+        'shiftplan.overtime_unlimited': overtimeConfig.unlimited,
         'shiftplan.max_overtime_hours': overtimeConfig.maxOvertimeHours,
         'shiftplan.overtime_mode': overtimeConfig.overtimeMode,
         'shiftplan.max_daily_hours': overtimeConfig.maxDailyHours,
@@ -1997,13 +2004,22 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <Timer className="h-4 w-4" />
                 {t("shiftAdmin.overtimeTitle")}
               </div>
+              <label className="mb-3 flex cursor-pointer items-start gap-3 rounded-2xl border border-amber-400/20 bg-slate-950/40 p-3 text-sm text-slate-200">
+                <input type="checkbox" className="mt-1 h-4 w-4" checked={overtimeConfig.unlimited} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, unlimited: event.target.checked })} />
+                <span>
+                  <span className="font-semibold">{isGerman ? 'Überstunden unbegrenzt' : 'Unlimited overtime'}</span>
+                  <span className="mt-1 block text-xs text-slate-400">{isGerman
+                    ? 'Der Generator darf Tage auch nach Erreichen der Sollstunden planen (z. B. den Freitag nach einem Wochenend- oder Nachtblock), um Lücken zu schließen. Ohne Haken gilt das Maximum unten (0 = nur bis zum Soll). Jederzeit änderbar.'
+                    : 'The generator may plan days after the target hours are reached (e.g. the Friday after a weekend or night block) to close gaps. Without the tick the maximum below applies (0 = only up to target). Can be changed at any time.'}</span>
+                </span>
+              </label>
               <div className="grid gap-4 md:grid-cols-2">
-                <div>
+                <div className={overtimeConfig.unlimited ? 'opacity-50' : ''}>
                   <label className="flex items-center text-xs text-slate-400">
                     {t("shiftAdmin.overtimeMax")}
                     <HelpTooltip textKey="shiftAdmin.helpOvertimeMax" t={t} />
                   </label>
-                  <input type="number" min="0" max="200" value={overtimeConfig.maxOvertimeHours} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, maxOvertimeHours: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
+                  <input type="number" min="0" max="200" disabled={overtimeConfig.unlimited} value={overtimeConfig.maxOvertimeHours} onChange={(event) => setOvertimeConfig({ ...overtimeConfig, maxOvertimeHours: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 w-full rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
                   <div className="mt-1 text-xs text-slate-500">{t("shiftAdmin.overtimeHint")}</div>
                 </div>
                 <div>

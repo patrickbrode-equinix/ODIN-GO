@@ -14,12 +14,13 @@ import type { Absence } from '../../api/absences';
 import { GroupedDraftList } from '../shiftplan/GroupedDraftList';
 import { ColoLegend } from '../shiftplan/ColoBadge';
 import { buildColoMarkLookup, getColoMark } from '../../utils/coloMarks';
-import type { PlanningDraftGroup } from '../../api/planningPeriods';
+import { excelExportParams, type ExcelExportInclude, type ExcelExportVariant, type PlanningDraftGroup } from '../../api/planningPeriods';
 import {
   CalendarClock, Play, ChevronDown, ChevronUp,
   AlertTriangle, CheckCircle2, FileSpreadsheet, Eye, Trash2,
-  ArrowRight, Users, Calendar, ShieldAlert, BarChart3, List, Info
+  ArrowRight, Users, Calendar, ShieldAlert, BarChart3, List, Info, ArrowLeftRight, Undo2
 } from 'lucide-react';
+import { describeCellIssues, type DraftIssueContext } from '../shiftplan/draftCellIssues';
 
 /* ------------------------------------------------ */
 /* TYPES                                            */
@@ -342,6 +343,18 @@ export default function ShiftplanControlCenter() {
     }
   };
 
+  const handleDraftSwap = async (a: { employeeName: string; day: number }, b: { employeeName: string; day: number }) => {
+    if (!activeDraft) return;
+    try {
+      const res = await api.patch(`/shiftplan-control/drafts/${activeDraft.id}/swap`, { a, b });
+      setActiveDraft((prev) => (prev ? { ...prev, ...res.data.draft } : res.data.draft));
+      await loadDrafts();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e.message);
+      throw e;
+    }
+  };
+
   const handleDraftColoChange = async (employeeName: string, day: number, assigned: boolean) => {
     if (!activeDraft) return;
     try {
@@ -415,9 +428,9 @@ export default function ShiftplanControlCenter() {
     }
   };
 
-  const handleExport = async (id: number) => {
+  const handleExport = async (id: number, variant: ExcelExportVariant = 'team', include?: ExcelExportInclude) => {
     try {
-      const res = await api.get(`/shiftplan-control/drafts/${id}/excel`, { responseType: 'blob' });
+      const res = await api.get(`/shiftplan-control/drafts/${id}/excel`, { responseType: 'blob', params: excelExportParams(variant, include) });
       const blob = res.data;
       const cd = String(res.headers?.['content-disposition'] || '');
       const match = cd.match(/filename="?([^"]+)"?/);
@@ -801,7 +814,7 @@ export default function ShiftplanControlCenter() {
 
               <GroupedDraftList groups={draftGroups} activeId={activeDraft?.id}
                 onOpen={draft => { setSelectedMonth(draft.month); void loadDraft(draft.id); setTab('draft'); }}
-                onExportMonth={draft => void handleExport(draft.id)} onError={setError} onMetadataSaved={loadDrafts}
+                onExportMonth={(draft, variant, include) => void handleExport(draft.id, variant, include)} onError={setError} onMetadataSaved={loadDrafts}
                 onDeleted={async (ids) => { if (activeDraft && ids.includes(activeDraft.id)) setActiveDraft(null); await loadDrafts(); }} />
               {!draftGroups.length && <p className="py-8 text-center text-sm text-muted-foreground">{isGerman ? 'Noch keine Drafts für dieses Jahr vorhanden.' : 'No drafts for this year yet.'}</p>}
             </div>
@@ -856,6 +869,7 @@ export default function ShiftplanControlCenter() {
                     draft={activeDraft}
                     manualOnly={showManualEmployeesOnly}
                     onCellChange={handleDraftCellChange}
+                    onSwap={handleDraftSwap}
                     onColoChange={handleDraftColoChange}
                   />
                 </>
@@ -893,7 +907,12 @@ export default function ShiftplanControlCenter() {
 /* SUB-COMPONENTS                                   */
 /* ================================================ */
 
-function DraftShiftTable({ draft, manualOnly = false, onCellChange, onColoChange }: { draft: Draft; manualOnly?: boolean; onCellChange?: (employeeName: string, day: number, shiftCode: string) => Promise<void>; onColoChange?: (employeeName: string, day: number, assigned: boolean) => Promise<void> }) {
+type DraftCell = { employeeName: string; day: number };
+type DraftEditAction =
+  | { kind: 'swap'; a: DraftCell; b: DraftCell }
+  | { kind: 'set'; cell: DraftCell; previous: string };
+
+function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onColoChange }: { draft: Draft; manualOnly?: boolean; onCellChange?: (employeeName: string, day: number, shiftCode: string) => Promise<void>; onSwap?: (a: DraftCell, b: DraftCell) => Promise<void>; onColoChange?: (employeeName: string, day: number, assigned: boolean) => Promise<void> }) {
   const { language, t } = useLanguage();
   const locale = getLanguageLocale(language);
   const isGerman = language === 'de';
@@ -983,6 +1002,94 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onColoChange
     return map;
   }, [draft.config_snapshot?.planningConfig?.monthly_target_hours, draft.fairness, employees]);
 
+  /* ── manual editing: select, set, swap, undo ── */
+  const [selA, setSelA] = useState<DraftCell | null>(null);
+  const [selB, setSelB] = useState<DraftCell | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [history, setHistory] = useState<DraftEditAction[]>([]);
+  const [touched, setTouched] = useState<DraftCell[]>([]);
+  const [editError, setEditError] = useState('');
+
+  useEffect(() => {
+    setSelA(null); setSelB(null); setHistory([]); setTouched([]); setEditError('');
+  }, [draft.id]);
+
+  const codeOf = (cell: DraftCell | null) => (cell ? (schedule[cell.employeeName]?.[cell.day] || '') : '');
+  const cellLabel = (cell: DraftCell) => `${cell.employeeName} · ${String(cell.day).padStart(2, '0')}.${String(mon).padStart(2, '0')}.`;
+  const selectedKeys = useMemo(() => new Set([selA, selB].filter(Boolean).map((cell) => `${cell!.employeeName}|||${cell!.day}`)), [selA, selB]);
+
+  const issueContext = useMemo<DraftIssueContext>(() => {
+    const definitions = Array.isArray(draft.config_snapshot?.shiftDefinitions) ? draft.config_snapshot.shiftDefinitions : [];
+    const typeByCode: Record<string, string> = {};
+    for (const definition of definitions) typeByCode[String(definition.code || '').trim().toUpperCase()] = String(definition.type || '');
+    const rules = draft.config_snapshot?.rotationRules || {};
+    return {
+      schedule,
+      typeByCode,
+      absences: (draft.absences || []) as DraftIssueContext['absences'],
+      month: draft.month,
+      lateToEarlyForbidden: rules.late_to_early_forbidden !== false,
+      nightToEarlyForbidden: rules.night_to_early_forbidden !== false,
+      maxConsecutiveWorkdays: Number(rules.max_consecutive_workdays) || 6,
+    };
+  }, [draft.absences, draft.config_snapshot, draft.month, schedule]);
+  const issues = useMemo(
+    () => touched.flatMap((cell) => describeCellIssues(issueContext, cell.employeeName, cell.day, isGerman).map((text) => ({ cell, text }))),
+    [isGerman, issueContext, touched]
+  );
+
+  const runEdit = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setEditError('');
+    try { await action(); }
+    catch (error: any) { setEditError(error?.response?.data?.error || error?.message || (isGerman ? 'Änderung fehlgeschlagen' : 'Change failed')); }
+    finally { setBusy(false); }
+  };
+  const resetSelection = () => { setSelA(null); setSelB(null); };
+  const handleEditClick = (employeeName: string, day: number) => {
+    if (busy || draft.status === 'activated') return;
+    const cell = { employeeName, day };
+    setEditError('');
+    if (!selA) { setSelA(cell); return; }
+    if (selA.employeeName === employeeName && selA.day === day) { resetSelection(); return; }
+    setSelB(cell);
+  };
+  const doSwap = () => {
+    if (!selA || !selB || !onSwap) return;
+    const a = selA; const b = selB;
+    void runEdit(async () => {
+      await onSwap(a, b);
+      setHistory((current) => [...current.slice(-19), { kind: 'swap', a, b }]);
+      setTouched([a, b]);
+      resetSelection();
+    });
+  };
+  const doSet = (code: string) => {
+    if (!selA || !onCellChange) return;
+    const cell = selA; const previous = codeOf(cell);
+    if (previous === code) { resetSelection(); return; }
+    void runEdit(async () => {
+      await onCellChange(cell.employeeName, cell.day, code);
+      setHistory((current) => [...current.slice(-19), { kind: 'set', cell, previous }]);
+      setTouched([cell]);
+      resetSelection();
+    });
+  };
+  const doUndo = () => {
+    const last = history[history.length - 1];
+    if (!last) return;
+    void runEdit(async () => {
+      if (last.kind === 'swap') {
+        await onSwap?.(last.a, last.b);
+        setTouched([last.a, last.b]);
+      } else {
+        await onCellChange?.(last.cell.employeeName, last.cell.day, last.previous);
+        setTouched([last.cell]);
+      }
+      setHistory((current) => current.slice(0, -1));
+      resetSelection();
+    });
+  };
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -1011,70 +1118,80 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onColoChange
         </div>
       )}
       {editMode && onCellChange ? (
-        <div className="overflow-auto rounded-xl border border-border/30">
-          <table className="w-full min-w-[1200px] text-xs">
-            <thead>
-              <tr className="bg-muted/30 text-left text-muted-foreground">
-                <th className="sticky left-0 z-10 bg-muted/60 px-3 py-2">{isGerman ? 'Mitarbeiter' : 'Employee'}</th>
-                {Array.from({ length: numDays }, (_, index) => index + 1).map((day) => (
-                  <th key={day} className={`px-1 py-2 text-center ${isWeekend(year, mon, day) ? 'text-amber-300' : ''}`}>{day}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((employee) => (
-                <tr key={employee} className="border-t border-border/10">
-                  <td className="sticky left-0 z-10 bg-background px-3 py-2 font-semibold text-foreground">{employee}</td>
-                  {Array.from({ length: numDays }, (_, index) => index + 1).map((day) => {
-                    const key = `${employee}-${day}`;
-                    const cellShift = filteredSchedule[employee]?.[day] || '';
-                    const coloMark = getColoMark(coloMarks, employee, `${draft.month}-${String(day).padStart(2, '0')}`);
-                    return (
-                      <td key={day} className="px-1 py-1">
-                        <select
-                          value={filteredSchedule[employee]?.[day] || ''}
-                          disabled={savingCell === key}
-                          onChange={async (event) => {
-                            setSavingCell(key);
-                            try {
-                              await onCellChange(employee, day, event.target.value);
-                            } finally {
-                              setSavingCell(null);
-                            }
-                          }}
-                          className="w-16 rounded border border-border/40 bg-background px-1 py-1 text-center text-xs text-foreground disabled:opacity-50"
-                        >
-                          {shiftOptions.map((code) => <option key={code || 'empty'} value={code}>{code || '–'}</option>)}
-                        </select>
-                        {onColoChange && (coloMark || cellShift) ? (
-                          <button
-                            type="button"
-                            disabled={savingCell === key || draft.status === 'activated'}
-                            title={coloMark
-                              ? `${isGerman ? 'Colo-Markierung entfernen' : 'Remove Colo mark'}${coloMark.comment ? ` · ${coloMark.comment}` : ''}${coloMark.manual ? ` · ${isGerman ? 'manuell' : 'manual'}` : ''}`
-                              : (isGerman ? 'Als Colo markieren' : 'Mark as Colo')}
-                            onClick={async () => {
-                              setSavingCell(key);
-                              try {
-                                await onColoChange(employee, day, !coloMark);
-                              } finally {
-                                setSavingCell(null);
-                              }
-                            }}
-                            className={`mt-0.5 block w-16 rounded border px-1 text-[9px] font-black leading-4 disabled:opacity-50 ${coloMark ? 'border-cyan-400/60 bg-cyan-500/25 text-cyan-100' : 'border-border/40 text-muted-foreground hover:border-cyan-400/50 hover:text-cyan-200'}`}
-                          >
-                            CO
-                          </button>
-                        ) : null}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
+        <div className="space-y-2">
+          <div className="space-y-2 rounded-xl border border-blue-500/30 bg-blue-500/5 p-3 text-xs">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-bold text-blue-200">{isGerman ? 'Bearbeitungsmodus' : 'Edit mode'}</span>
+              <span className="text-muted-foreground">
+                {!selA
+                  ? (isGerman ? 'Zelle anklicken. Danach eine zweite Zelle anklicken, um beide Schichten zu tauschen, oder unten eine Schicht setzen.' : 'Click a cell. Then click a second cell to swap both shifts, or set a shift below.')
+                  : selB
+                    ? (isGerman ? 'Tausch bestätigen oder abbrechen.' : 'Confirm or cancel the swap.')
+                    : (isGerman ? 'Zweite Zelle zum Tauschen anklicken oder Schicht setzen.' : 'Click a second cell to swap, or set a shift.')}
+              </span>
+              <button type="button" onClick={doUndo} disabled={!history.length || busy}
+                className="ml-auto inline-flex items-center gap-1 rounded-lg border border-border/40 px-2.5 py-1 font-bold text-foreground transition hover:bg-muted/40 disabled:opacity-40">
+                <Undo2 className="h-3.5 w-3.5" />{isGerman ? 'Rückgängig' : 'Undo'}{history.length ? ` (${history.length})` : ''}
+              </button>
+            </div>
+            {selA && !selB ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-foreground">{cellLabel(selA)} · {codeOf(selA) || (isGerman ? 'frei' : 'free')}</span>
+                <select value="" disabled={busy} onChange={(event) => { if (event.target.value !== '') doSet(event.target.value === '__clear__' ? '' : event.target.value); }}
+                  className="rounded border border-border/40 bg-background px-2 py-1 text-xs text-foreground disabled:opacity-50">
+                  <option value="">{isGerman ? 'Schicht setzen …' : 'Set shift …'}</option>
+                  {shiftOptions.filter((code) => code).map((code) => <option key={code} value={code}>{code}</option>)}
+                  <option value="__clear__">{isGerman ? '– (Schicht entfernen)' : '– (remove shift)'}</option>
+                </select>
+                {onColoChange && (codeOf(selA) || getColoMark(coloMarks, selA.employeeName, `${draft.month}-${String(selA.day).padStart(2, '0')}`)) ? (
+                  <button type="button" disabled={busy}
+                    onClick={() => { const cell = selA; const marked = Boolean(getColoMark(coloMarks, cell.employeeName, `${draft.month}-${String(cell.day).padStart(2, '0')}`)); void runEdit(async () => { await onColoChange(cell.employeeName, cell.day, !marked); resetSelection(); }); }}
+                    className="rounded border border-cyan-400/40 px-2 py-1 font-bold text-cyan-200 hover:bg-cyan-500/10 disabled:opacity-50">
+                    {isGerman ? 'Colo umschalten' : 'Toggle Colo'}
+                  </button>
+                ) : null}
+                <button type="button" onClick={resetSelection} className="rounded border border-border/40 px-2 py-1 text-muted-foreground hover:bg-muted/40">{isGerman ? 'Abbrechen' : 'Cancel'}</button>
+              </div>
+            ) : null}
+            {selA && selB ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-foreground">{cellLabel(selA)} · {codeOf(selA) || '–'}</span>
+                <ArrowLeftRight className="h-4 w-4 text-blue-300" />
+                <span className="font-semibold text-foreground">{cellLabel(selB)} · {codeOf(selB) || '–'}</span>
+                <button type="button" onClick={doSwap} disabled={busy || !onSwap}
+                  className="rounded bg-blue-600 px-3 py-1 font-bold text-white hover:bg-blue-500 disabled:opacity-50">{busy ? '…' : (isGerman ? 'Tauschen' : 'Swap')}</button>
+                <button type="button" onClick={resetSelection} className="rounded border border-border/40 px-2 py-1 text-muted-foreground hover:bg-muted/40">{isGerman ? 'Abbrechen' : 'Cancel'}</button>
+              </div>
+            ) : null}
+            {editError ? <div className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-red-300">{editError}</div> : null}
+            {issues.length > 0 ? (
+              <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-amber-200">
+                <div className="mb-1 flex items-center gap-2 font-bold">
+                  <AlertTriangle className="h-3.5 w-3.5" />{isGerman ? 'Hinweise zur letzten Änderung (nur Warnung, Änderung ist gespeichert)' : 'Hints for the last change (warning only, the change is saved)'}
+                  <button type="button" onClick={() => setTouched([])} className="ml-auto text-[10px] font-normal underline">{isGerman ? 'ausblenden' : 'hide'}</button>
+                </div>
+                <ul className="list-disc space-y-0.5 pl-5">
+                  {issues.map((entry, index) => <li key={`${entry.cell.employeeName}-${entry.cell.day}-${index}`}>{cellLabel(entry.cell)}: {entry.text}</li>)}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+          <ShiftplanTable
+            schedule={filteredSchedule}
+            daysInMonth={numDays}
+            year={year}
+            monthIndex1={mon}
+            holidays={{}}
+            warnings={[]}
+            isEditMode
+            selectedCells={selectedKeys}
+            onCellClick={(employeeName, day) => handleEditClick(employeeName, day)}
+            employeeHours={employeeHours}
+            absences={draft.absences || []}
+            employeeBadges={employeeBadges}
+            coloMarks={coloMarks}
+          />
+        </div>      ) : (
         <ShiftplanTable
           schedule={filteredSchedule}
           daysInMonth={numDays}

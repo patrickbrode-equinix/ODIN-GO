@@ -52,11 +52,19 @@ test('40 generated employees: wishes, DBS rule and holiday credit hold in the re
   }
 
   const base = (code) => ({ E1SA: 'E1', E1WE: 'E1', E2SA: 'E2', E2WE: 'E2', L1WE: 'L1', NK: 'N' }[code] || code);
+  const durationOf = (code) => Number(db.definitions.find((definition) => definition.code === code)?.duration_hours || 8);
   for (const employee of employees) {
+    // A weekday the employee asked to keep free is only used as a last resort: without those shifts the
+    // person would be more than 15 hours below the official target.
+    const blockedDayHours = [...byEmployee.get(employee.name)]
+      .filter(([day, code]) => code !== 'DBS' && employee.blocked.includes(new Date(2027, 2, day).getDay()))
+      .reduce((sum, [, code]) => sum + durationOf(code), 0);
+    if (blockedDayHours > 0) {
+      const entry = result.fairness[employee.name];
+      assert.ok(entry.actualHours - blockedDayHours < entry.targetHours - 15, `${employee.name} works on a blocked weekday although the target is reachable without it`);
+    }
     for (const [day, code] of byEmployee.get(employee.name)) {
       if (code === 'DBS') continue;
-      const dow = new Date(2027, 2, day).getDay();
-      assert.ok(!employee.blocked.includes(dow), `${employee.name} works on a blocked weekday (day ${day})`);
       assert.ok(!employee.unwanted.includes(base(code)), `${employee.name} got unwanted ${code}`);
       // Wishes are honoured first; only when the wished shift is full (or the person would stay below
       // the target hours) early is the overflow pool. Never late or night against the wish.
@@ -73,7 +81,11 @@ test('40 generated employees: wishes, DBS rule and holiday credit hold in the re
       assert.ok((seriesByCode.get(code) || 1) < 6 && !/(SA|WE)$/.test(code), `${member.name} has seven-day block ${code} outside DBS`);
       const type = typeByCode.get(code);
       assert.ok(type === 'early' || type === 'late', `${member.name} has ${type} outside DBS`);
-      if (index === 0) assert.equal(type, 'late');
+      // Outside type of the first member is LATE; only the guarantee pass (more than 15 h below target) may open it.
+      if (index === 0 && type !== 'late') {
+        const entry = result.fairness[member.name];
+        assert.ok(entry.deltaHours < 0 || entry.actualHours - durationOf(code) < entry.targetHours - 15, `${member.name} got ${code} against the LATE-only rule without need`);
+      }
     }
   }
 
@@ -93,4 +105,37 @@ test('no staffing maximum is exceeded across holidays and month changes', async 
       assert.deepEqual(exceeded.map((conflict) => conflict.message), [], `seed ${seed} month ${month}`);
     }
   }
+});
+
+test('overtime setting: unlimited plans more days than "only up to the target hours"', async () => {
+  const hoursOf = (result) => Object.values(result.fairness).reduce((sum, entry) => sum + Number(entry.actualHours || 0), 0);
+  const { db } = buildScenario(5);
+  db.settings.set('shiftplan.overtime_unlimited', 'false');
+  db.settings.set('shiftplan.max_overtime_hours', '0');
+  const limited = await generateShiftPlan(2027, 3, 31, 'test');
+  db.settings.set('shiftplan.overtime_unlimited', 'true');
+  const unlimited = await generateShiftPlan(2027, 3, 31, 'test');
+  assert.ok(hoursOf(unlimited) > hoursOf(limited), 'unlimited overtime adds shifts that close gaps in the weeks');
+  // Absolute rules still hold: nobody works two shifts on one day.
+  const seen = new Set();
+  for (const shift of unlimited.shifts) {
+    const key = `${shift.employee_name}|${shift.day}`;
+    assert.ok(!seen.has(key), `double booking ${key}`);
+    seen.add(key);
+  }
+});
+
+test('year balance: hours behind the target are planned on top of the next month (damped), fairness keeps the official target', async () => {
+  buildScenario(7);
+  const january = await generateShiftPlan(2027, 1, 31, 'test');
+  const february = await generateShiftPlan(2027, 2, 28, 'test', { carryState: january.carryState });
+  let checked = 0;
+  for (const [name, entry] of Object.entries(february.fairness)) {
+    const balance = Number(january.carryState[name]?.hourBalance || 0);
+    assert.equal(entry.carriedHourBalance, balance, `${name}: carried balance is reported`);
+    const expected = Math.min(Math.max(-balance, -16), 24);
+    assert.ok(Math.abs((entry.planningTargetHours - entry.targetHours) - expected) < 0.05, `${name}: planning target = official target + capped balance`);
+    if (balance < -1) checked++;
+  }
+  assert.ok(checked > 0, 'at least one employee was behind after January');
 });

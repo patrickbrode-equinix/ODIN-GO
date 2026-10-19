@@ -63,9 +63,51 @@ export async function deletePlanningDrafts(ids: number[]) {
 
 export type ExcelExportVariant = 'team' | 'management';
 
+/** Content of the management Excel: the admin chooses before every export. */
+export interface ExcelExportInclude {
+  /** Soll / Ist / Differenz */
+  hours: boolean;
+  /** Wish fulfilment and the sheet with every single wish */
+  wishes: boolean;
+  /** Whether wishes were submitted (employees without wishes are highlighted) */
+  wishStatus: boolean;
+}
+
+export const DEFAULT_EXCEL_INCLUDE: ExcelExportInclude = { hours: true, wishes: true, wishStatus: true };
+const EXCEL_INCLUDE_STORAGE_KEY = 'odin.excelExportInclude';
+
+/** The last choice is remembered on this computer. */
+export function loadExcelInclude(): ExcelExportInclude {
+  try {
+    const raw = window.localStorage.getItem(EXCEL_INCLUDE_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_EXCEL_INCLUDE };
+    const parsed = JSON.parse(raw);
+    return {
+      hours: parsed?.hours !== false,
+      wishes: parsed?.wishes !== false,
+      wishStatus: parsed?.wishStatus !== false,
+    };
+  } catch {
+    return { ...DEFAULT_EXCEL_INCLUDE };
+  }
+}
+
+export function saveExcelInclude(include: ExcelExportInclude) {
+  try { window.localStorage.setItem(EXCEL_INCLUDE_STORAGE_KEY, JSON.stringify(include)); } catch { /* storage may be unavailable */ }
+}
+
+/** Query value for ?include=… of the management export (hours,wishes,wishStatus). */
+export function excelIncludeParam(include: ExcelExportInclude): string {
+  return [include.hours ? 'hours' : '', include.wishes ? 'wishes' : '', include.wishStatus ? 'wishStatus' : ''].filter(Boolean).join(',');
+}
+
+export function excelExportParams(variant: ExcelExportVariant, include?: ExcelExportInclude) {
+  return variant === 'management' && include ? { variant, include: excelIncludeParam(include) } : { variant };
+}
+
 /** team = shifts only; management = hours (target/actual) and wish fulfilment (admins only). */
-export async function exportPlanningGroup(groupId: string, variant: ExcelExportVariant = 'team') {
-  const response = await api.get(`/shiftplan-control/drafts/groups/${encodeURIComponent(groupId)}/excel`, { responseType: 'blob', params: { variant } });
+export async function exportPlanningGroup(groupId: string, variant: ExcelExportVariant = 'team', include?: ExcelExportInclude) {
+  const response = await api.get(`/shiftplan-control/drafts/groups/${encodeURIComponent(groupId)}/excel`, { responseType: 'blob', params: excelExportParams(variant, include) });
   const filename = String(response.headers?.['content-disposition'] || '').match(/filename="?([^";]+)"?/)?.[1] || 'ODIN_Planung.xlsx';
   const url = URL.createObjectURL(response.data);
   const link = document.createElement('a');

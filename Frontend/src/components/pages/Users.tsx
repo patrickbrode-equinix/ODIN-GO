@@ -278,6 +278,8 @@ export default function Users() {
   const [vacationPreview, setVacationPreview] = useState<Record<number, Absence[]>>({});
   const [savingNotesForUser, setSavingNotesForUser] = useState<number | null>(null);
   const [userMessage, setUserMessage] = useState("");
+  // Filter: everybody / only employees who submitted wishes / only those without wishes.
+  const [wishFilter, setWishFilter] = useState<"all" | "submitted" | "missing">("all");
 
   /* ------------------------------------------------ */
   /* LOAD USERS                                      */
@@ -540,12 +542,19 @@ export default function Users() {
     }
   }
 
+  const wishCounts = useMemo(() => {
+    const submitted = users.filter((user) => Boolean(user.hasShiftPreferences)).length;
+    return { all: users.length, submitted, missing: users.length - submitted };
+  }, [users]);
+
   const userRows = useMemo(
-    () => users.map((user) => ({
-      user,
-      displayName: getDisplayName(user),
-    })),
-    [users]
+    () => users
+      .filter((user) => wishFilter === "all" || (wishFilter === "submitted") === Boolean(user.hasShiftPreferences))
+      .map((user) => ({
+        user,
+        displayName: getDisplayName(user),
+      })),
+    [users, wishFilter]
   );
 
   /* ------------------------------------------------ */
@@ -597,6 +606,28 @@ export default function Users() {
         </div>
       </EnterpriseCard>
 
+      {/* WISH FILTER */}
+      <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label={language === "de" ? "Filter nach Wünschen" : "Filter by wishes"}>
+        <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">{language === "de" ? "Wünsche" : "Wishes"}</span>
+        {([
+          ["all", language === "de" ? "Alle" : "All", wishCounts.all],
+          ["submitted", language === "de" ? "Wünsche abgegeben" : "Wishes submitted", wishCounts.submitted],
+          ["missing", language === "de" ? "Keine Wünsche" : "No wishes", wishCounts.missing],
+        ] as const).map(([key, label, count]) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={wishFilter === key}
+            onClick={() => setWishFilter(key)}
+            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${wishFilter === key
+              ? (key === "missing" ? "border-amber-400/60 bg-amber-500/20 text-amber-100" : "border-indigo-400/60 bg-indigo-500/20 text-indigo-100")
+              : "border-border/40 text-muted-foreground hover:bg-muted/40"}`}
+          >
+            {label} <span className="ml-1 opacity-80">({count})</span>
+          </button>
+        ))}
+      </div>
+
       {/* TABLE */}
       <EnterpriseCard
         noPadding
@@ -639,6 +670,12 @@ export default function Users() {
                 <TableRow>
                   <TableCell colSpan={6} className="text-center py-8 text-[13px] text-[#4b5563]">
                     {copy.empty}
+                  </TableCell>
+                </TableRow>
+              ) : userRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center py-8 text-[13px] text-muted-foreground">
+                    {language === "de" ? "Keine Mitarbeiter für diesen Filter." : "No employees match this filter."}
                   </TableCell>
                 </TableRow>
               ) : (

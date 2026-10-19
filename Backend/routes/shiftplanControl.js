@@ -241,6 +241,38 @@ function getPlannedWeekendBlockKey(year, month, day, definition, numDays) {
   return null;
 }
 
+// Sum of (actual - official target) hours per employee over the earlier months of the same year, taken from
+// the latest saved draft of each month (an activated draft wins). Used when a plan is generated without a
+// previous result in the same run (single month, or the first month of a quarter).
+async function loadYearToDateHourBalances({ year, month, employees, employeeNameLookup }) {
+  const balances = new Map();
+  if (month <= 1) return balances;
+  const employeeSet = new Set(employees);
+  try {
+    const first = `${year}-01`;
+    const current = `${year}-${String(month).padStart(2, '0')}`;
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (month) month, fairness
+         FROM shiftplan_drafts
+        WHERE month >= $1 AND month < $2 AND status <> 'failed'
+        ORDER BY month, (status = 'activated') DESC, version DESC`,
+      [first, current]
+    );
+    for (const row of rows) {
+      const fairness = typeof row.fairness === 'string' ? JSON.parse(row.fairness) : (row.fairness || {});
+      for (const [name, entry] of Object.entries(fairness)) {
+        const employee = resolveEmployeeName(name, employeeNameLookup);
+        if (!employee || !employeeSet.has(employee)) continue;
+        const delta = Number(entry?.actualHours) - Number(entry?.targetHours);
+        if (Number.isFinite(delta)) balances.set(employee, (balances.get(employee) || 0) + delta);
+      }
+    }
+  } catch (error) {
+    console.warn('Year-to-date hour balance unavailable:', error.message);
+  }
+  return balances;
+}
+
 async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftDefinitions, employeeNameLookup }) {
   const previousYear = month === 1 ? year - 1 : year;
   const previousMonth = month === 1 ? 12 : month - 1;
@@ -1016,6 +1048,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // Admin setting "Abwechslung" (0-100): how strongly the plan avoids repeating the same blocks.
   const varietySetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.variety_priority' LIMIT 1");
   const varietyPriority = normalizeVarietyPriority(varietySetting.rows[0]?.value);
+  // Admin setting "Überstunden": unlimited (default) or at most N hours above the target hours.
+  const overtimeRows = (await pool.query(
+    'SELECT key, value FROM app_settings WHERE key = ANY($1::text[])',
+    [['shiftplan.overtime_unlimited', 'shiftplan.max_overtime_hours']]
+  )).rows;
+  const overtimeSetting = (key) => overtimeRows.find((row) => row.key === key)?.value;
+  const overtimeUnlimited = parseBooleanAppSetting(overtimeSetting('shiftplan.overtime_unlimited'), true);
+  const overtimeAllowance = overtimeUnlimited
+    ? Infinity
+    : Math.max(parseNumberAppSetting(overtimeSetting('shiftplan.max_overtime_hours'), 0), 0);
   const preferredColleagueMap = new Map();
   const preferredColleagueWishes = [];
   if (preferredColleaguesEnabled) {
@@ -1213,12 +1255,31 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // month must not inflate the next target, otherwise year plans oscillate.
   const monthWeekdays = countWeekdaysInRange(year, mon, 1, numDays);
   const periodWeekdays = countWeekdaysInRange(year, mon, planningStartDay, planningEndDay);
-  const employeeTargetHours = Object.fromEntries(activeEmployees.map((employee) => {
+  // Official target of the period (what Excel and the fairness report show).
+  const employeeOfficialTargetHours = Object.fromEntries(activeEmployees.map((employee) => {
     const periodBaseTarget = isPartialPeriod
       ? employeeBaseTargetHours[employee] * (monthWeekdays > 0 ? periodWeekdays / monthWeekdays : planningDays / numDays)
       : employeeBaseTargetHours[employee];
     return [employee, Number(Math.max(0, periodBaseTarget).toFixed(2))];
   }));
+  // Year balance: hours behind (or ahead of) the official targets of the earlier months of the year are
+  // made up (or reduced) in this month, damped and capped so a year plan does not oscillate.
+  const yearToDateBalance = await loadYearToDateHourBalances({ year, month: mon, employees: activeEmployees, employeeNameLookup });
+  // Inside one run (quarter/year) the balance is chained from the previous month and already contains the
+  // year-to-date part; a single month starts from the saved drafts of the earlier months.
+  const balanceFromChain = Object.keys(options.carryState || {}).length > 0;
+  const carriedHourBalance = Object.fromEntries(activeEmployees.map((employee) => {
+    const chained = Number(carryState?.[employee]?.hourBalance);
+    return [employee, balanceFromChain ? (Number.isFinite(chained) ? chained : 0) : (yearToDateBalance.get(employee) || 0)];
+  }));
+  const MAX_CATCHUP_HOURS = 24;
+  const MAX_RELIEF_HOURS = 16;
+  const employeeTargetHours = Object.fromEntries(activeEmployees.map((employee) => {
+    const adjustment = isPartialPeriod ? 0 : Math.min(Math.max(-carriedHourBalance[employee], -MAX_RELIEF_HOURS), MAX_CATCHUP_HOURS);
+    return [employee, Number(Math.max(0, employeeOfficialTargetHours[employee] + adjustment).toFixed(2))];
+  }));
+  // Nobody may end the month further than this below the official target (last-resort fill, see below).
+  const MAX_HOURS_BELOW_TARGET = 15;
   const baselineShiftSlots = buildShiftSlots(shiftDefs, staffingRules, null, staffingMaximums);
   const holidayMap = buildHessenHolidayMap(year);
   // Shift-level wish check resolved against the admin strengths: only wishes
@@ -1236,6 +1297,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // their preferred list (e.g. early when late/night are full). Unwanted shifts, blocked days,
   // limits and absences stay absolute.
   let relaxedWishPass = false;
+  // Guarantee pass: employees more than MAX_HOURS_BELOW_TARGET below the official target may also be planned on
+  // weekdays they asked to keep free (a wish, never a rule). Only used when everything else is exhausted.
+  let guaranteePass = false;
   const isHardBlockedForPass = (evaluation) => (relaxedWishPass
     ? evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred')
     : evaluation.hardBlocked);
@@ -1390,8 +1454,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     // DBS members never run a Saturday/weekend block (6 or 7 days) outside DBS: only weekday blocks.
     if (!usesShortNight && getShiftSeriesDays(definition) >= 6) return false;
     if (/(SA|WE)$/.test(code) && code !== dbsPlanningConfig.shiftCode) return false;
-    if (rule.otherShiftCodes.length > 0) {
+    if (rule.otherShiftCodes.length > 0 && !guaranteePass) {
       // Tokens EARLY/LATE/NIGHT (shift type) or legacy shift codes.
+      // (In the guarantee pass the early/late choice is open: only weekday early/late blocks, never night.)
       const allowedByRule = rule.otherShiftCodes.some((allowed) => {
         const token = String(allowed || '').trim().toUpperCase();
         if (token === 'EARLY' || token === 'LATE' || token === 'NIGHT') return token === typeToken;
@@ -2694,6 +2759,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       && !['E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1WE'].includes(code)
       && getShiftSeriesDays(definition) <= 5;
   });
+  // Last resort for people who would stay more than 15 h below target: single Saturdays (never Sunday) with
+  // the early/late weekend variants. Saturday staffing maximums and weekend limits still apply.
+  const saturdayCatchupDefinitions = shiftDefs.filter((definition) => {
+    const code = String(definition.code || '').trim().toUpperCase();
+    return ['E1SA', 'E2SA', 'L1WE', 'E1WE', 'E2WE'].includes(code)
+      && ['early', 'late'].includes(normalizePlanningShiftTypeKey(definition.shift_type) || '')
+      && normalizeWeekdaySetting(definition.applicable_days, [0, 1, 2, 3, 4, 5, 6]).includes(6);
+  });
   const targetCatchupSeriesDefinitions = shiftDefs.filter((definition) => {
     const code = String(definition.code || '').trim().toUpperCase();
     return ['E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1WE'].includes(code) && getShiftSeriesDays(definition) > 1;
@@ -2975,13 +3048,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const catchupRuns = [
     ...catchupOrder.map((employee) => ({ employee, relaxedPass: false })),
     ...catchupOrder.map((employee) => ({ employee, relaxedPass: true })),
+    ...catchupOrder.map((employee) => ({ employee, relaxedPass: true, guarantee: true })),
   ];
-  for (const { employee, relaxedPass } of catchupRuns) {
+  for (const { employee, relaxedPass, guarantee = false } of catchupRuns) {
     relaxedWishPass = relaxedPass;
-    if (relaxedPass && !(employeeTargetHours[employee] - empHours[employee] >= 1)) continue;
+    guaranteePass = guarantee;
+    if (relaxedPass && !guarantee && !(employeeTargetHours[employee] - empHours[employee] >= 1)) continue;
+    if (guarantee && !(empHours[employee] < employeeOfficialTargetHours[employee] - MAX_HOURS_BELOW_TARGET)) continue;
     const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
     const prefs = preferencesForDate(employee, `${month}-01`);
-    const candidateDefinitions = regularCatchupDefinitions
+    const candidateDefinitions = (guaranteePass ? [...regularCatchupDefinitions, ...saturdayCatchupDefinitions] : regularCatchupDefinitions)
       .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
       .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code)))
       .filter((definition) => isOutsideDbsAllowed(employee, definition, 1))
@@ -3012,7 +3088,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       });
     if (candidateDefinitions.length === 0) continue;
 
-    while (empHours[employee] < employeeTargetHours[employee]) {
+    // Guarantee pass: fill to 10 h below the official target (the limit is 15 h).
+    const fillTarget = () => (guaranteePass ? employeeOfficialTargetHours[employee] - (MAX_HOURS_BELOW_TARGET - 5) : employeeTargetHours[employee]);
+    while (empHours[employee] < fillTarget()) {
       const availableDays = [];
       // Every allowed shift is checked, not only the preferred one: when the preferred shift is
       // full (e.g. late is at its maximum) the employee still gets another shift with free capacity.
@@ -3022,7 +3100,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const dateStr = `${month}-${String(day).padStart(2, '0')}`;
         const dow = dayOfWeek(year, mon, day);
         if (isEmployeeAbsentOnDate(employee, dateStr)) continue;
-        if (isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
+        if (guaranteePass && dow === 0) continue;
+        if (!guaranteePass && isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
         if (isEmployeeShiftBlockedOnDate(employee, dateStr, catchupDefinition.code)) continue;
         if (isRecoveryProtectedDay(employee, day)) continue;
         if (wouldViolateAdjacentTransition(employee, day, catchupDefinition)) continue;
@@ -3048,12 +3127,25 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         // Avoid isolated single days: a filler day that touches an existing work day extends a block,
         // a day with no working neighbour would be a lone shift between free days.
         const touchesWorkDay = Boolean(empDayAssignment[employee][day - 1]) || Boolean(empDayAssignment[employee][day + 1]);
+        // Stay with one shift type per week: switching late -> early needs a free day in between (rest rule),
+        // which would leave a gap in the middle of the week (late Mon-Tue, free, early Thu-Fri).
+        let weekTypeBonus = 0;
+        const weekStartDay = day - ((dow + 6) % 7);
+        for (let weekDay = weekStartDay; weekDay < weekStartDay + 7; weekDay++) {
+          if (weekDay === day || weekDay < 1 || weekDay > numDays) continue;
+          const assignedType = getAssignedShiftType(employee, weekDay);
+          if (!assignedType || assignedType === 'special') continue;
+          weekTypeBonus = assignedType === catchupType ? 120 : -200;
+          break;
+        }
         availableDays.push({
           day,
           definition: catchupDefinition,
           score: (sameCodeNeighbor ? 100 : 0) + (sameTypeNeighbor ? 60 : 0) + (touchesWorkDay ? 40 : -80) - (recoveryEntry ? 50 : 0)
-            - definitionRank * 12
-            - colleaguesOfTypeThatDay * 8 * (varietyPriority / 60)
+            // Last-resort pass: the order of the shifts (early first = overflow pool) decides; spreading the
+            // fillers over the days would pull people into late shifts that only have room on a few days.
+            - definitionRank * (relaxedWishPass ? 80 : 12) - (guaranteePass && dow === 6 ? 60 : 0) + weekTypeBonus
+            - (relaxedWishPass ? 0 : colleaguesOfTypeThatDay * 8 * (varietyPriority / 60))
             - getBlockedDayPenalty(employee, dow) - getShiftWishPenaltyOnDate(employee, dateStr, catchupDefinition.code),
         });
       }
@@ -3084,6 +3176,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         ],
       };
     }
+
+    if (guaranteePass) continue;
 
     // Saturday block (E1SA/E2SA) is extended to the full Mon-Sun block of the SAME family.
     for (const [saturdayBlockCode, weekendBlockCode] of [['E1SA', 'E1WE'], ['E2SA', 'E2WE']]) {
@@ -3406,10 +3500,72 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   relaxedWishPass = false;
+  guaranteePass = false;
+
+  // Overtime pass (admin setting "Überstunden": unlimited or a maximum above the target hours). Runs after
+  // everybody below target was served, so overtime never takes capacity from those who still miss hours.
+  // It only completes runs: a free day is added when it touches a worked day or when it is the first
+  // day after a recovery period (e.g. the Friday after a weekend/night block). No isolated days.
+  if (overtimeAllowance > 0) {
+    const overtimeOrder = [...activeEmployees].sort((left, right) => (
+      (empHours[left] - employeeTargetHours[left]) - (empHours[right] - employeeTargetHours[right])
+    ));
+    for (const employee of overtimeOrder) {
+      const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
+      const prefs = preferencesForDate(employee, `${month}-01`);
+      const definitions = regularCatchupDefinitions
+        .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
+        .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code)))
+        .filter((definition) => isOutsideDbsAllowed(employee, definition, 1));
+      if (definitions.length === 0) continue;
+      for (let added = 0; added < 12; added++) {
+        let best = null;
+        for (let day = planningStartDay; day <= planningEndDay; day++) {
+          if (empDayAssignment[employee][day]) continue;
+          const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+          const dow = dayOfWeek(year, mon, day);
+          if (dow === 0 || dow === 6) continue;
+          if (isEmployeeAbsentOnDate(employee, dateStr) || isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
+          if (isRecoveryProtectedDay(employee, day)) continue;
+          const neighborCode = empDayAssignment[employee][day - 1] || empDayAssignment[employee][day + 1] || null;
+          const firstDayAfterRecovery = !neighborCode && day > planningStartDay && isRecoveryProtectedDay(employee, day - 1);
+          if (!neighborCode && !firstDayAfterRecovery) continue;
+          let adjacentWorkdays = 0;
+          for (let previous = day - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) adjacentWorkdays++;
+          for (let next = day + 1; next <= numDays && empDayAssignment[employee][next]; next++) adjacentWorkdays++;
+          if (adjacentWorkdays + 1 > Math.max(rotation.max_consecutive_workdays || 6, 5)) continue;
+          const neighborType = neighborCode ? normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(neighborCode).trim().toUpperCase())?.shift_type) : null;
+          const ranked = definitions
+            .map((definition) => ({
+              definition,
+              rank: (definition.code === neighborCode ? 0 : normalizePlanningShiftTypeKey(definition.shift_type) === neighborType ? 1 : 2)
+                + (isShiftPreferredByEmployeePreference(prefs, definition.code) ? -0.5 : 0),
+            }))
+            .sort((left, right) => left.rank - right.rank);
+          const choice = ranked.find(({ definition }) => (
+            normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow)
+            && !isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)
+            && !wouldViolateAdjacentTransition(employee, day, definition)
+            && keepsEmployeeShiftCohesion(employee, day, definition)
+            && hasDefinitionCapacityForEmployee(employee, day, definition)
+            && empHours[employee] + getShiftHoursForDay(definition, day) <= employeeTargetHours[employee] + overtimeAllowance
+          ));
+          if (!choice) continue;
+          const score = (neighborCode ? 50 : 0) - choice.rank * 20 - getBlockedDayPenalty(employee, dow);
+          if (!best || score > best.score || (score === best.score && day < best.day)) best = { day, definition: choice.definition, score };
+        }
+        if (!best) break;
+        addEmployeeTargetCatchupShift(employee, best.day, best.definition, [
+          'Überstunden erlaubt (Admin-Einstellung): Lücke zur Woche geschlossen',
+          `${best.definition.code} direkt anschließend an einen Arbeitstag bzw. nach der Erholung`,
+        ]);
+      }
+    }
+  }
   // Explain every employee who stays clearly below the target hours: count, per free day, which
   // rule or limit blocked the filler shift, so a "free for weeks" employee is never unexplained.
   for (const employee of activeEmployees) {
-    const deficit = employeeTargetHours[employee] - empHours[employee];
+    const deficit = employeeOfficialTargetHours[employee] - empHours[employee];
     if (!(deficit >= 8)) continue;
     const fixedType = fixedShiftTypeByEmployee.get(employee);
     relaxedWishPass = true;
@@ -3451,9 +3607,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       day: 1,
       date: `${month}-01`,
       shift: 'Soll',
-      severity: 'warning',
+      severity: deficit > MAX_HOURS_BELOW_TARGET ? 'critical' : 'warning',
       type: 'target_hours_unreached',
-      message: `${employee}: Sollstunden um ${deficit.toFixed(1)}h unterschritten (${empHours[employee].toFixed(1)} von ${employeeTargetHours[employee]}h), ${freeDays} freie Tage. Gründe je freiem Tag: ${detail || 'unbekannt'}.`,
+      message: `${employee}: Sollstunden um ${deficit.toFixed(1)}h unterschritten (${empHours[employee].toFixed(1)} von ${employeeOfficialTargetHours[employee]}h${deficit > MAX_HOURS_BELOW_TARGET ? `, mehr als ${MAX_HOURS_BELOW_TARGET}h` : ''}), ${freeDays} freie Tage. Gründe je freiem Tag: ${detail || 'unbekannt'}.`,
     });
   }
 
@@ -3781,8 +3937,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       lateCount: empStats[employee].lateCount,
       total: empStats[employee].total,
       actualHours: Number(empHours[employee].toFixed(2)),
-      targetHours: employeeTargetHours[employee],
-      deltaHours: Number((empHours[employee] - employeeTargetHours[employee]).toFixed(2)),
+      targetHours: employeeOfficialTargetHours[employee],
+      planningTargetHours: employeeTargetHours[employee],
+      carriedHourBalance: Number((carriedHourBalance[employee] || 0).toFixed(2)),
+      deltaHours: Number((empHours[employee] - employeeOfficialTargetHours[employee]).toFixed(2)),
     };
   }
 
@@ -3847,7 +4005,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       lastWorkedShiftCode: empLastWorkedShiftCode[employee],
       lastWorkedShiftType: empLastWorkedShiftType[employee],
       forcedNextShiftCode: empForcedNextShiftCode[employee],
-      hourBalance: Number(((Number.parseFloat(String(carryState[employee]?.hourBalance ?? 0)) || 0) + empHours[employee] - employeeBaseTargetHours[employee]).toFixed(2)),
+      hourBalance: Number(((carriedHourBalance[employee] || 0) + empHours[employee] - employeeOfficialTargetHours[employee]).toFixed(2)),
     }])),
     configSnapshot: {
       employees: employees.length,
@@ -4415,6 +4573,45 @@ router.patch('/drafts/groups/:groupId/metadata', requirePageAccess('shiftplan_co
   }
 });
 
+// Paid hours of one shift code on one day of a draft, taken from the shift definitions stored with the draft
+// (day-specific overrides win). Free markers and unknown codes count 0.
+export function getDraftShiftHours(snapshot, month, day, code) {
+  const normalized = String(code || '').trim().toUpperCase();
+  const definition = (Array.isArray(snapshot?.shiftDefinitions) ? snapshot.shiftDefinitions : [])
+    .find((entry) => String(entry?.code || '').trim().toUpperCase() === normalized);
+  if (!definition) return 0;
+  const [year, mon] = String(month || '').split('-').map(Number);
+  const weekday = new Date(year, (mon || 1) - 1, day).getDay();
+  const override = (Array.isArray(definition.dayOverrides) ? definition.dayOverrides : [])
+    .find((entry) => Number(entry?.weekday) === weekday && Number.isFinite(Number(entry?.duration_hours)));
+  const hours = override ? Number(override.duration_hours) : Number(definition.durationHours);
+  return Number.isFinite(hours) ? hours : 0;
+}
+
+// Keeps Ist/Differenz of the fairness block in step with manual edits (incremental, so credited hours stay).
+export function applyDraftHoursChange(fairness, employeeName, deltaHours, deltaShifts = 0) {
+  const base = fairness && typeof fairness === 'object' ? { ...fairness } : {};
+  const entry = { ...(base[employeeName] || {}) };
+  if (!Number.isFinite(Number(entry.actualHours)) && !Number.isFinite(Number(entry.targetHours))) return base;
+  entry.actualHours = Number((Number(entry.actualHours || 0) + deltaHours).toFixed(2));
+  if (Number.isFinite(Number(entry.targetHours))) entry.deltaHours = Number((entry.actualHours - Number(entry.targetHours)).toFixed(2));
+  if (Number.isFinite(Number(entry.total))) entry.total = Math.max(0, Number(entry.total) + deltaShifts);
+  base[employeeName] = entry;
+  return base;
+}
+
+function sortDraftShifts(shifts) {
+  return shifts.sort((left, right) => String(left.employee_name).localeCompare(String(right.employee_name), 'de') || Number(left.day) - Number(right.day));
+}
+
+// A cell without a shift cannot carry a Colo mark any more.
+function dropColoMarks(snapshot, month, cells) {
+  if (!Array.isArray(snapshot?.coloAssignments) || cells.length === 0) return snapshot;
+  const dates = new Set(cells.map(({ employeeName, day }) => `${employeeName}|${month}-${String(day).padStart(2, '0')}`));
+  const remaining = snapshot.coloAssignments.filter((entry) => !dates.has(`${entry.employee_name}|${String(entry.date).slice(0, 10)}`));
+  return remaining.length === snapshot.coloAssignments.length ? snapshot : { ...snapshot, coloAssignments: remaining };
+}
+
 router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
   try {
     const draftId = parseInt(req.params.id, 10);
@@ -4431,38 +4628,97 @@ router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write
     if (rows[0].status === 'activated') return res.status(400).json({ ok: false, error: 'Aktivierte Drafts koennen nicht bearbeitet werden' });
 
     const shifts = Array.isArray(rows[0].shifts_json) ? rows[0].shifts_json : [];
+    const snapshot = rows[0].config_snapshot && typeof rows[0].config_snapshot === 'object' ? rows[0].config_snapshot : {};
+    const previous = shifts.find((entry) => entry.employee_name === employeeName && Number(entry.day) === day);
     const nextShifts = shifts.filter((entry) => !(entry.employee_name === employeeName && Number(entry.day) === day));
     if (shiftCode) {
       nextShifts.push({ employee_name: employeeName, day, shift_code: shiftCode, manual_override: true });
     }
-    nextShifts.sort((left, right) => String(left.employee_name).localeCompare(String(right.employee_name), 'de') || Number(left.day) - Number(right.day));
+    sortDraftShifts(nextShifts);
 
-    // A cell without a shift cannot carry a Colo mark any more.
-    const snapshot = rows[0].config_snapshot && typeof rows[0].config_snapshot === 'object' ? rows[0].config_snapshot : {};
-    let nextSnapshot = snapshot;
-    if (!shiftCode && Array.isArray(snapshot.coloAssignments)) {
-      const monthPrefix = String(rows[0].month || '');
-      const cellDate = `${monthPrefix}-${String(day).padStart(2, '0')}`;
-      const remaining = snapshot.coloAssignments.filter((entry) => !(entry.employee_name === employeeName && String(entry.date).slice(0, 10) === cellDate));
-      if (remaining.length !== snapshot.coloAssignments.length) nextSnapshot = { ...snapshot, coloAssignments: remaining };
-    }
+    const nextSnapshot = shiftCode ? snapshot : dropColoMarks(snapshot, rows[0].month, [{ employeeName, day }]);
+    const deltaHours = getDraftShiftHours(snapshot, rows[0].month, day, shiftCode) - getDraftShiftHours(snapshot, rows[0].month, day, previous?.shift_code);
+    const nextFairness = applyDraftHoursChange(rows[0].fairness, employeeName, deltaHours, (shiftCode ? 1 : 0) - (previous ? 1 : 0));
 
     const { rows: updatedRows } = await pool.query(
       `UPDATE shiftplan_drafts
           SET shifts_json = $2::jsonb,
               config_snapshot = $3::jsonb,
+              fairness = $4::jsonb,
               note = COALESCE(note, 'Manuell angepasst')
         WHERE id = $1
         RETURNING *`,
-      [draftId, JSON.stringify(nextShifts), JSON.stringify(nextSnapshot)]
+      [draftId, JSON.stringify(nextShifts), JSON.stringify(nextSnapshot), JSON.stringify(nextFairness)]
     );
 
-    res.json({ ok: true, draft: updatedRows[0] });
+    res.json({ ok: true, draft: updatedRows[0], previousShiftCode: previous?.shift_code || '' });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
 });
 
+/* ------------------------------------------------ */
+/* SWAP TWO SHIFTS OF A DRAFT                       */
+/* Body: { a: { employeeName, day }, b: { ... } }   */
+/* Exchanges the two cells (also an empty cell      */
+/* = moving a shift). Hours are updated atomically. */
+/* ------------------------------------------------ */
+
+router.patch('/drafts/:id/swap', requirePageAccess('shiftplan_control', 'write'), requireOwnedDraft, async (req, res) => {
+  try {
+    const draftId = parseInt(req.params.id, 10);
+    const readCell = (cell) => ({ employeeName: String(cell?.employeeName || '').trim(), day: Number.parseInt(cell?.day, 10) });
+    const a = readCell(req.body?.a);
+    const b = readCell(req.body?.b);
+    const valid = (cell) => cell.employeeName && Number.isInteger(cell.day) && cell.day >= 1 && cell.day <= 31;
+    if (!valid(a) || !valid(b)) return res.status(400).json({ ok: false, error: 'Beide Zellen (employeeName, day) sind erforderlich' });
+    if (a.employeeName === b.employeeName && a.day === b.day) return res.status(400).json({ ok: false, error: 'Es muessen zwei unterschiedliche Zellen gewaehlt werden' });
+
+    const { rows } = await pool.query('SELECT id, month, status, shifts_json, fairness, config_snapshot FROM shiftplan_drafts WHERE id = $1', [draftId]);
+    if (!rows.length) return res.status(404).json({ ok: false, error: 'Draft nicht gefunden' });
+    if (rows[0].status === 'activated') return res.status(400).json({ ok: false, error: 'Aktivierte Drafts koennen nicht bearbeitet werden' });
+
+    const shifts = Array.isArray(rows[0].shifts_json) ? rows[0].shifts_json : [];
+    const snapshot = rows[0].config_snapshot && typeof rows[0].config_snapshot === 'object' ? rows[0].config_snapshot : {};
+    const month = rows[0].month;
+    const find = (cell) => shifts.find((entry) => entry.employee_name === cell.employeeName && Number(entry.day) === cell.day);
+    const codeA = String(find(a)?.shift_code || '').trim().toUpperCase();
+    const codeB = String(find(b)?.shift_code || '').trim().toUpperCase();
+    if (!codeA && !codeB) return res.status(400).json({ ok: false, error: 'Beide Zellen sind leer - es gibt nichts zu tauschen' });
+    if (codeA === codeB && a.employeeName === b.employeeName) return res.status(400).json({ ok: false, error: 'Beide Zellen haben dieselbe Schicht' });
+
+    const without = (cell) => (entry) => !(entry.employee_name === cell.employeeName && Number(entry.day) === cell.day);
+    let nextShifts = shifts.filter(without(a)).filter(without(b));
+    if (codeB) nextShifts.push({ employee_name: a.employeeName, day: a.day, shift_code: codeB, manual_override: true });
+    if (codeA) nextShifts.push({ employee_name: b.employeeName, day: b.day, shift_code: codeA, manual_override: true });
+    sortDraftShifts(nextShifts);
+
+    let nextFairness = rows[0].fairness;
+    const apply = (cell, oldCode, newCode) => {
+      const delta = getDraftShiftHours(snapshot, month, cell.day, newCode) - getDraftShiftHours(snapshot, month, cell.day, oldCode);
+      nextFairness = applyDraftHoursChange(nextFairness, cell.employeeName, delta, (newCode ? 1 : 0) - (oldCode ? 1 : 0));
+    };
+    apply(a, codeA, codeB);
+    apply(b, codeB, codeA);
+    // A Colo mark stays with the person and day only when the cell still holds a shift.
+    const emptied = [!codeB ? a : null, !codeA ? b : null].filter(Boolean);
+    const nextSnapshot = dropColoMarks(snapshot, month, emptied);
+
+    const { rows: updatedRows } = await pool.query(
+      `UPDATE shiftplan_drafts
+          SET shifts_json = $2::jsonb,
+              config_snapshot = $3::jsonb,
+              fairness = $4::jsonb,
+              note = COALESCE(note, 'Manuell angepasst')
+        WHERE id = $1
+        RETURNING *`,
+      [draftId, JSON.stringify(nextShifts), JSON.stringify(nextSnapshot), JSON.stringify(nextFairness)]
+    );
+    res.json({ ok: true, draft: updatedRows[0], swapped: { a: { ...a, before: codeA, after: codeB }, b: { ...b, before: codeB, after: codeA } } });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
 /* ------------------------------------------------ */
 /* COLO MARK OF A DRAFT CELL                        */
 /* Body: { employeeName, day, assigned, comment? }  */
@@ -4814,7 +5070,16 @@ function statusFill(status) {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
 }
 
-async function addManagementSheets(workbook, drafts, absenceInfo = new Map()) {
+// Colour for employees without submitted wishes (all management sheets).
+const MISSING_WISH_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FDE68A' } };
+const MISSING_WISH_FONT = { name: 'Calibri', size: 10, bold: true, color: { argb: '92400E' } };
+
+// options: includeHours (Soll/Ist), includeWishes (Wunscherfüllung + Details), includeWishStatus (Wünsche abgegeben ja/nein, farbig).
+// Returns the employees without submitted wishes so the month sheets can mark them as well.
+async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), options = {}) {
+  const includeHours = options.includeHours !== false;
+  const includeWishes = options.includeWishes !== false;
+  const includeWishStatus = options.includeWishStatus !== false;
   const allNames = new Set();
   for (const draft of drafts) {
     for (const shift of draft.shifts_json || []) if (shift.employee_name) allNames.add(shift.employee_name);
@@ -4877,102 +5142,137 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map()) {
         wishCount: wishes.items.length,
         vacationDays: [...(absenceInfo.get(draft.month)?.marks?.get(employee)?.values() || [])].filter((mark) => mark.code === 'URL').length,
         wishScoreSum: wishes.items.reduce((sum, entry) => sum + entry.score, 0),
+        submitted: Boolean(prefsByEmployee.has(employee) && hasSubmittedEmployeePreferences(prefsByEmployee.get(employee))),
       });
       for (const entry of wishes.items) detailRows.push({ monthLabel, employee, ...entry });
     }
   }
 
-  /* ---- Sheet 1: hours and wish percent per month ---- */
-  const ws = workbook.addWorksheet('Stunden & Wünsche');
-  ws.mergeCells(1, 1, 1, 9);
-  ws.getCell(1, 1).value = 'Soll-/Ist-Stunden und Wunscherfüllung';
+  /* ---- shared helpers for the overview sheets ---- */
+  const missingWishEmployees = new Set(summaryRows.filter((entry) => !entry.submitted).map((entry) => entry.employee));
+  const solidFill = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+  const styleBodyCell = (cell, { bold = false, align = 'center', numFmt = null } = {}) => {
+    cell.font = { name: 'Calibri', size: 10, bold };
+    cell.alignment = { horizontal: align, vertical: 'middle' };
+    cell.border = EXCEL_THIN_BORDER;
+    if (numFmt) cell.numFmt = numFmt;
+  };
+  const describeContent = () => [
+    includeHours ? 'Soll-/Ist-Stunden' : null,
+    includeWishes ? 'Wunscherfüllung' : null,
+    includeWishStatus ? 'Wünsche abgegeben (ja/nein)' : null,
+  ].filter(Boolean).join(', ');
+  const noteLines = [
+    includeWishes ? 'Wunscherfüllung = Durchschnitt der Erfüllung aller hinterlegten Wünsche des Monats (Details im Blatt „Wunschdetails“). Basis sind die aktuell gespeicherten Wünsche.' : null,
+    includeWishStatus ? 'Gelb markiert = für diese Person wurden keine Wünsche abgegeben.' : null,
+  ].filter(Boolean).join(' ');
+
+  /* ---- Sheet 1: per month (columns follow the chosen content) ---- */
+  const ws = workbook.addWorksheet(includeHours && includeWishes ? 'Stunden & Wünsche' : includeHours ? 'Stunden' : includeWishes ? 'Wünsche' : 'Wunsch-Status');
+  const diffOf = (entry) => (entry.target !== null && entry.actual !== null ? Number((entry.actual - entry.target).toFixed(2)) : null);
+  const reachedOf = (entry) => (entry.target > 0 && entry.actual !== null ? Math.round((entry.actual / entry.target) * 100) : null);
+  const columns = [
+    { header: 'Monat', width: 14, align: 'left', value: (entry) => entry.monthLabel },
+    { header: 'Mitarbeiter', width: 24, align: 'left', bold: true, key: 'name', value: (entry) => entry.employee },
+    ...(includeHours ? [
+      { header: 'Soll (h)', width: 10, numFmt: '0.0', value: (entry) => entry.target },
+      { header: 'Ist (h)', width: 10, numFmt: '0.0', value: (entry) => entry.actual },
+      { header: 'Differenz (h)', width: 13, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (entry) => diffOf(entry) },
+      { header: 'Soll erreicht', width: 13, numFmt: '0%', key: 'reached', value: (entry) => { const r = reachedOf(entry); return r === null ? null : r / 100; } },
+    ] : []),
+    ...(includeWishes ? [{ header: 'Urlaub (Tage)', width: 13, key: 'vacation', value: (entry) => entry.vacationDays }] : []),
+    ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 18, key: 'submitted', value: (entry) => (entry.submitted ? 'Ja' : 'Nein') }] : []),
+    ...(includeWishes ? [
+      { header: 'Wünsche', width: 10, value: (entry) => entry.wishCount },
+      { header: 'Wunscherfüllung', width: 16, numFmt: '0%', key: 'wishPercent', value: (entry) => (entry.wishPercent === null ? null : entry.wishPercent / 100) },
+    ] : []),
+  ];
+  const columnCount = columns.length;
+  ws.mergeCells(1, 1, 1, columnCount);
+  ws.getCell(1, 1).value = describeContent() ? `Auswertung: ${describeContent()}` : 'Auswertung';
   ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
   ws.getRow(1).height = 28;
-  ws.mergeCells(2, 1, 2, 9);
-  ws.getCell(2, 1).value = 'Wunscherfüllung = Durchschnitt der Erfüllung aller hinterlegten Wünsche des Monats (Details im Blatt „Wunschdetails“). Basis sind die aktuell gespeicherten Wünsche.';
+  ws.mergeCells(2, 1, 2, columnCount);
+  ws.getCell(2, 1).value = noteLines || ' ';
   ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
   ws.getCell(2, 1).alignment = { wrapText: true, vertical: 'top' };
   ws.getRow(2).height = 28;
-  const headers = ['Monat', 'Mitarbeiter', 'Soll (h)', 'Ist (h)', 'Differenz (h)', 'Soll erreicht', 'Urlaub (Tage)', 'Wünsche', 'Wunscherfüllung'];
-  headers.forEach((header, index) => { ws.getCell(4, index + 1).value = header; });
-  styleExcelHeaderRow(ws, 4, headers.length);
+  columns.forEach((column, index) => { ws.getCell(4, index + 1).value = column.header; });
+  styleExcelHeaderRow(ws, 4, columnCount);
 
   summaryRows.forEach((entry, index) => {
     const rowNumber = index + 5;
-    const diff = entry.target !== null && entry.actual !== null ? Number((entry.actual - entry.target).toFixed(2)) : null;
-    const reached = entry.target > 0 && entry.actual !== null ? Math.round((entry.actual / entry.target) * 100) : null;
-    const values = [entry.monthLabel, entry.employee, entry.target, entry.actual, diff, reached === null ? null : reached / 100, entry.vacationDays, entry.wishCount, entry.wishPercent === null ? null : entry.wishPercent / 100];
-    values.forEach((value, i) => {
+    columns.forEach((column, i) => {
       const cell = ws.getCell(rowNumber, i + 1);
-      cell.value = value === null ? '–' : value;
-      cell.font = { name: 'Calibri', size: 10, bold: i === 1 };
-      cell.alignment = { horizontal: i < 2 ? 'left' : 'center', vertical: 'middle' };
-      cell.border = EXCEL_THIN_BORDER;
+      const value = column.value(entry);
+      cell.value = value === null || value === undefined ? '–' : value;
+      styleBodyCell(cell, { bold: column.bold, align: column.align || 'center', numFmt: column.numFmt });
+      if (column.key === 'diff' && value !== null) cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: value < 0 ? 'B91C1C' : '047857' } };
+      if (column.key === 'reached') { const fill = percentFill(reachedOf(entry)); if (fill) cell.fill = fill; }
+      if (column.key === 'wishPercent') { const fill = percentFill(entry.wishPercent); if (fill) cell.fill = fill; }
+      if (column.key === 'vacation' && entry.vacationDays > 0) cell.fill = solidFill('EDE9FE');
+      if (column.key === 'submitted') { cell.fill = solidFill(entry.submitted ? 'D1FAE5' : 'FDE68A'); if (!entry.submitted) cell.font = MISSING_WISH_FONT; }
+      // Employees without wishes stand out in the name cell as well.
+      if (includeWishStatus && column.key === 'name' && !entry.submitted) { cell.fill = MISSING_WISH_FILL; cell.font = MISSING_WISH_FONT; }
     });
-    ws.getCell(rowNumber, 3).numFmt = '0.0';
-    ws.getCell(rowNumber, 4).numFmt = '0.0';
-    ws.getCell(rowNumber, 5).numFmt = '+0.0;-0.0;0.0';
-    ws.getCell(rowNumber, 6).numFmt = '0%';
-    ws.getCell(rowNumber, 9).numFmt = '0%';
-    if (diff !== null) ws.getCell(rowNumber, 5).font = { name: 'Calibri', size: 10, bold: true, color: { argb: diff < 0 ? 'B91C1C' : '047857' } };
-    const reachedFill = percentFill(reached);
-    if (reachedFill) ws.getCell(rowNumber, 6).fill = reachedFill;
-    const wishFill = percentFill(entry.wishPercent);
-    if (wishFill) ws.getCell(rowNumber, 9).fill = wishFill;
-    if (entry.vacationDays > 0) ws.getCell(rowNumber, 7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'EDE9FE' } };
   });
-  [14, 24, 10, 10, 13, 13, 13, 10, 16].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
+  columns.forEach((column, index) => { ws.getColumn(index + 1).width = column.width; });
   ws.views = [{ state: 'frozen', ySplit: 4, xSplit: 2, activeCell: 'C5' }];
-  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + summaryRows.length, column: headers.length } };
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + summaryRows.length, column: columnCount } };
   ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, printTitlesRow: '4:4' };
 
   /* ---- Sheet 2: totals per employee (several months only) ---- */
   if (drafts.length > 1) {
     const totals = new Map();
     for (const entry of summaryRows) {
-      const total = totals.get(entry.employee) || { target: 0, actual: 0, scoreSum: 0, count: 0 };
+      const total = totals.get(entry.employee) || { target: 0, actual: 0, scoreSum: 0, count: 0, submitted: false };
       total.target += entry.target || 0;
       total.actual += entry.actual || 0;
       total.scoreSum += entry.wishScoreSum;
       total.count += entry.wishCount;
+      total.submitted = total.submitted || entry.submitted;
       totals.set(entry.employee, total);
     }
+    const totalColumns = [
+      { header: 'Mitarbeiter', width: 26, align: 'left', bold: true, key: 'name', value: (employee) => employee },
+      ...(includeHours ? [
+        { header: 'Soll (h)', width: 11, numFmt: '0.0', value: (_e, total) => total.target },
+        { header: 'Ist (h)', width: 11, numFmt: '0.0', value: (_e, total) => total.actual },
+        { header: 'Differenz (h)', width: 14, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (_e, total) => Number((total.actual - total.target).toFixed(2)) },
+        { header: 'Soll erreicht', width: 13, numFmt: '0%', key: 'reached', value: (_e, total) => (total.target > 0 ? total.actual / total.target : null) },
+      ] : []),
+      ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 18, key: 'submitted', value: (_e, total) => (total.submitted ? 'Ja' : 'Nein') }] : []),
+      ...(includeWishes ? [
+        { header: 'Wünsche', width: 10, value: (_e, total) => total.count },
+        { header: 'Wunscherfüllung', width: 16, numFmt: '0%', key: 'wishPercent', value: (_e, total) => (total.count > 0 ? total.scoreSum / total.count : null) },
+      ] : []),
+    ];
     const ts = workbook.addWorksheet('Gesamt');
-    const totalHeaders = ['Mitarbeiter', 'Soll (h)', 'Ist (h)', 'Differenz (h)', 'Soll erreicht', 'Wünsche', 'Wunscherfüllung'];
-    ts.mergeCells(1, 1, 1, totalHeaders.length);
+    ts.mergeCells(1, 1, 1, totalColumns.length);
     ts.getCell(1, 1).value = 'Gesamtübersicht über alle Monate';
     ts.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
     ts.getRow(1).height = 28;
-    totalHeaders.forEach((header, index) => { ts.getCell(3, index + 1).value = header; });
-    styleExcelHeaderRow(ts, 3, totalHeaders.length);
+    totalColumns.forEach((column, index) => { ts.getCell(3, index + 1).value = column.header; });
+    styleExcelHeaderRow(ts, 3, totalColumns.length);
     [...totals.entries()].sort((left, right) => left[0].localeCompare(right[0], 'de')).forEach(([employee, total], index) => {
       const rowNumber = index + 4;
-      const diff = Number((total.actual - total.target).toFixed(2));
-      const reached = total.target > 0 ? total.actual / total.target : null;
-      const wishRatio = total.count > 0 ? total.scoreSum / total.count : null;
-      [employee, total.target, total.actual, diff, reached, total.count, wishRatio].forEach((value, i) => {
+      totalColumns.forEach((column, i) => {
         const cell = ts.getCell(rowNumber, i + 1);
-        cell.value = value === null ? '–' : value;
-        cell.font = { name: 'Calibri', size: 10, bold: i === 0 };
-        cell.alignment = { horizontal: i === 0 ? 'left' : 'center', vertical: 'middle' };
-        cell.border = EXCEL_THIN_BORDER;
+        const value = column.value(employee, total);
+        cell.value = value === null || value === undefined ? '–' : value;
+        styleBodyCell(cell, { bold: column.bold, align: column.align || 'center', numFmt: column.numFmt });
+        if (column.key === 'diff') cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: value < 0 ? 'B91C1C' : '047857' } };
+        if (column.key === 'reached') { const fill = percentFill(value === null ? null : value * 100); if (fill) cell.fill = fill; }
+        if (column.key === 'wishPercent') { const fill = percentFill(value === null ? null : value * 100); if (fill) cell.fill = fill; }
+        if (column.key === 'submitted') { cell.fill = solidFill(total.submitted ? 'D1FAE5' : 'FDE68A'); if (!total.submitted) cell.font = MISSING_WISH_FONT; }
+        if (includeWishStatus && column.key === 'name' && !total.submitted) { cell.fill = MISSING_WISH_FILL; cell.font = MISSING_WISH_FONT; }
       });
-      ts.getCell(rowNumber, 2).numFmt = '0.0';
-      ts.getCell(rowNumber, 3).numFmt = '0.0';
-      ts.getCell(rowNumber, 4).numFmt = '+0.0;-0.0;0.0';
-      ts.getCell(rowNumber, 5).numFmt = '0%';
-      ts.getCell(rowNumber, 7).numFmt = '0%';
-      ts.getCell(rowNumber, 4).font = { name: 'Calibri', size: 10, bold: true, color: { argb: diff < 0 ? 'B91C1C' : '047857' } };
-      const reachedFill = percentFill(reached === null ? null : reached * 100);
-      if (reachedFill) ts.getCell(rowNumber, 5).fill = reachedFill;
-      const wishFill = percentFill(wishRatio === null ? null : wishRatio * 100);
-      if (wishFill) ts.getCell(rowNumber, 7).fill = wishFill;
     });
-    [26, 11, 11, 14, 13, 10, 16].forEach((width, index) => { ts.getColumn(index + 1).width = width; });
+    totalColumns.forEach((column, index) => { ts.getColumn(index + 1).width = column.width; });
     ts.views = [{ state: 'frozen', ySplit: 3, xSplit: 1, activeCell: 'B4' }];
   }
-
   /* ---- Sheet 3: every single wish ---- */
+  if (!includeWishes) return missingWishEmployees;
   const ds = workbook.addWorksheet('Wunschdetails');
   const detailHeaders = ['Monat', 'Mitarbeiter', 'Art', 'Wunsch', 'Ergebnis', 'Erfüllung', 'Details'];
   ds.mergeCells(1, 1, 1, detailHeaders.length);
@@ -5004,6 +5304,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map()) {
   ds.views = [{ state: 'frozen', ySplit: 3, xSplit: 2, activeCell: 'C4' }];
   if (detailRows.length > 0) ds.autoFilter = { from: { row: 3, column: 1 }, to: { row: 3 + detailRows.length, column: detailHeaders.length } };
   ds.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9, printTitlesRow: '3:3' };
+  return missingWishEmployees;
 }
 
 /**
@@ -5016,7 +5317,11 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   // No variant (internal callers, tests): the complete month sheets with version, status and hours.
   const variant = options.variant || 'full';
   const isTeam = variant === 'team';
-  const showHours = !isTeam;
+  // Management export: the admin picks what is visible (hours, wish fulfilment, wish status).
+  const isManagement = variant === 'management';
+  const includeHours = !isManagement || options.includeHours !== false;
+  const includeWishStatus = isManagement && options.includeWishStatus !== false;
+  const showHours = !isTeam && includeHours;
   drafts = [...drafts].sort((left, right) => left.month.localeCompare(right.month));
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'ODIN Shiftplan';
@@ -5024,7 +5329,9 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
 
   // Overview sheets come first, so they are the first thing the readers see.
   const absenceInfo = await loadAbsenceInfoForDrafts(drafts);
-  if (variant === 'management') await addManagementSheets(workbook, drafts, absenceInfo);
+  const missingWishEmployees = isManagement
+    ? await addManagementSheets(workbook, drafts, absenceInfo, options)
+    : new Set();
 
   for (const draft of drafts) {
     const shifts = draft.shifts_json;
@@ -5132,6 +5439,11 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       nameCell.font = { name: 'Calibri', size: 9, bold: true };
       nameCell.border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
       if (idx % 2 === 1) nameCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F9FAFB' } };
+      // Employees without submitted wishes are highlighted (only when the admin chose the wish status).
+      if (includeWishStatus && missingWishEmployees.has(emp)) {
+        nameCell.fill = MISSING_WISH_FILL;
+        nameCell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '92400E' } };
+      }
 
       let fallbackHours = 0;
       for (let d = 1; d <= numDays; d++) {
@@ -5188,6 +5500,12 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       cell.font = { name: 'Calibri', size: 8, bold: true, color: { argb: colors.font } };
       cell.alignment = { horizontal: 'center' };
       col++;
+    }
+    if (includeWishStatus) {
+      const legendCell = ws.getCell(legendRow + 1, 1);
+      legendCell.value = 'Gelb = keine Wünsche abgegeben';
+      legendCell.fill = MISSING_WISH_FILL;
+      legendCell.font = { name: 'Calibri', size: 8, bold: true, color: { argb: '92400E' } };
     }
 
     // Footer
@@ -5265,6 +5583,15 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
 function exportVariant(req) {
   return req.query?.variant === 'management' ? 'management' : 'team';
 }
+// ?include=hours,wishes,wishStatus chooses the content of the management export (default: everything).
+function exportOptions(req) {
+  const variant = exportVariant(req);
+  if (variant !== 'management') return { variant };
+  const raw = req.query?.include;
+  if (raw === undefined) return { variant, includeHours: true, includeWishes: true, includeWishStatus: true };
+  const parts = new Set(String(raw).split(',').map((part) => part.trim()).filter(Boolean));
+  return { variant, includeHours: parts.has('hours'), includeWishes: parts.has('wishes'), includeWishStatus: parts.has('wishStatus') };
+}
 function variantFileSuffix(variant) {
   return variant === 'management' ? 'Leitung' : 'Team';
 }
@@ -5282,7 +5609,7 @@ router.get('/drafts/:id/excel', managementExportGuard, requireReadableDraft, asy
     const draft = rows[0];
 
     const variant = exportVariant(req);
-    const workbook = await buildExcelWorkbook([draft], null, { variant });
+    const workbook = await buildExcelWorkbook([draft], null, exportOptions(req));
     const filename = `ODIN_Schichtplan_${draft.month}_v${draft.version}_${variantFileSuffix(variant)}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -5311,7 +5638,7 @@ router.get('/drafts/groups/:groupId/excel', managementExportGuard, async (req, r
     const groupTitle = rows.find(row => row.title)?.title || null;
     const groupDescription = rows.find(row => row.description)?.description || null;
     const variant = exportVariant(req);
-    const workbook = await buildExcelWorkbook(rows, { ...group, title: groupTitle, description: groupDescription }, { variant });
+    const workbook = await buildExcelWorkbook(rows, { ...group, title: groupTitle, description: groupDescription }, exportOptions(req));
     const suffix = variantFileSuffix(variant);
     const filename = group.type === 'quarter' ? `ODIN_Quartalsplanung_Q${group.quarter}_${group.year}_${suffix}.xlsx` : `ODIN_Jahresplanung_${group.year}_${suffix}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -5341,7 +5668,7 @@ router.get('/drafts/year-excel/:year', managementExportGuard, async (req, res) =
     if (!rows.length) return res.status(404).json({ ok: false, error: `Keine Drafts für ${year} gefunden` });
 
     const variant = exportVariant(req);
-    const workbook = await buildExcelWorkbook(rows, null, { variant });
+    const workbook = await buildExcelWorkbook(rows, null, exportOptions(req));
     const filename = `ODIN_Jahresschichtplan_${year}_${variantFileSuffix(variant)}.xlsx`;
     // (draft titles/descriptions are rendered per month sheet via the row data)
 
