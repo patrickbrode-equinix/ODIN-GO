@@ -139,3 +139,32 @@ test('year balance: hours behind the target are planned on top of the next month
   }
   assert.ok(checked > 0, 'at least one employee was behind after January');
 });
+
+test('employees who cannot work early get the late/night slots first and reach (almost) their hours', async () => {
+  const { db, employees } = buildScenario(21);
+  const lateOnly = employees.filter((employee) => employee.preferred.length === 0 && employee.blocked.length === 0).slice(3, 6);
+  assert.equal(lateOnly.length, 3);
+  for (const employee of lateOnly) {
+    const row = db.preferences.find((entry) => entry.provisioned_employee_name === employee.name);
+    row.preferred_shifts = ['L1', 'L2', 'N'];
+    row.unwanted_shifts = ['E1', 'E2'];
+    employee.preferred = ['L1', 'L2', 'N'];
+    employee.unwanted = ['E1', 'E2'];
+  }
+  for (const [type, count] of [['late', 5], ['night', 4]]) {
+    const rule = db.staffingRules.find((entry) => entry.shift_type === type);
+    rule.min_count = count; rule.max_count = count;
+  }
+  const result = await generateShiftPlan(2027, 3, 31, 'test');
+  const typeOf = new Map(db.definitions.map((definition) => [definition.code, definition.shift_type]));
+  const shortfalls = [];
+  for (const employee of lateOnly) {
+    const shifts = result.shifts.filter((shift) => shift.employee_name === employee.name);
+    assert.ok(shifts.every((shift) => typeOf.get(shift.shift_code) !== 'early'), `${employee.name} never works early`);
+    const entry = result.fairness[employee.name];
+    shortfalls.push(Math.max(entry.targetHours - entry.actualHours, 0));
+  }
+  const average = shortfalls.reduce((sum, value) => sum + value, 0) / shortfalls.length;
+  assert.ok(average < 25, `average shortfall of late/night-only employees is ${average.toFixed(1)}h`);
+  assert.ok(result.planReport.lateNightOnlyEmployees.length >= 3, 'the plan report lists them');
+});

@@ -88,7 +88,14 @@ const dbsPool = rng.shuffle(employees).slice(0, dbsPoolSize).map((employee, inde
   weekdays: index % 2 ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5],
   outside: index % 3 === 0 ? ['EARLY'] : index % 3 === 1 ? ['LATE'] : [],
 }));
-const coloPool = rng.shuffle(employees).slice(0, Math.min(6, Math.floor(employeeCount / 6))).map((employee) => employee.name);
+// --lnonly N: N employees (not in DBS) who exclude early shifts (unwanted E1/E2) and want late/night only.
+if (args.lnonly) {
+  const dbsNames = new Set(dbsPool.map((entry) => entry.employee.name));
+  const candidates = employees.filter((employee) => !dbsNames.has(employee.name));
+  for (const employee of candidates.slice(0, Number(args.lnonly))) {
+    Object.assign(employee, { preferred: ['L1', 'L2', 'N'], unwanted: ['E1', 'E2'], blocked: [], maxNights: null, nightModel: 'SEVEN_DAY' });
+  }
+}const coloPool = rng.shuffle(employees).slice(0, Math.min(6, Math.floor(employeeCount / 6))).map((employee) => employee.name);
 
 /* ---------- fake database ---------- */
 
@@ -118,7 +125,13 @@ db.specialPools = dbsPool.map(({ employee, weekdays, outside }, index) => ({
   shift_code: 'DBS', employee_name: employee.name, monthly_max_assignments: 31, working_weekdays: weekdays,
   free_days_after_block: 2, duration_hours: null, other_shift_codes: outside, other_days_per_month: null, sort_order: index,
 }));
-db.settings.set('shiftplan.dbs_enabled', 'true');
+// --late N / --night N: fixed weekday staffing (minimum = maximum), like a tightly configured team.
+for (const [type, key] of [['late', 'late'], ['night', 'night']]) {
+  if (args[key]) {
+    const rule = db.staffingRules.find((entry) => entry.shift_type === type);
+    if (rule) { rule.min_count = Number(args[key]); rule.max_count = Number(args[key]); }
+  }
+}db.settings.set('shiftplan.dbs_enabled', 'true');
 if (args.colo !== 'off') {
   db.settings.set('shiftplan.colo_enabled', 'true');
   db.settings.set('shiftplan.colo_pool', JSON.stringify(coloPool));

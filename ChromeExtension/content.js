@@ -251,6 +251,13 @@
         window.focus();
       } catch { /* focus is best effort */ }
       focusBeforeOpen = null;
+      // Closed means closed: the embedded app is emptied, so it cannot keep focus, a mouse capture or timers
+      // behind the Jarvis page (this was the problem after closing the full-screen window). Opening loads it again.
+      iframeReady = false;
+      iframeAppReady = false;
+      iframeSessionSignature = "";
+      window.clearTimeout(iframeLoadTimeout);
+      window.setTimeout(() => { if (!backdrop.classList.contains("open")) iframe.src = "about:blank"; }, 0);
       window.requestAnimationFrame(() => positionLauncher());
     }
   }
@@ -440,8 +447,150 @@
     return null;
   }
 
+  /* ── ODIN GO entry inside the Jarvis bottom navigation ──
+     The entry is a copy of an existing (inactive) Jarvis entry, so size, font, colours, hover and above all the
+     spacing come from the page itself: the bar distributes all entries evenly, ours included. If the bar cannot be
+     found (other Jarvis page) the floating button below is used instead. */
+  const NAV_ENTRY_ATTRIBUTE = "data-odin-go-entry";
+  let navEntry = null;
+
+  function firstTextElement(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (String(node.textContent || "").trim()) return node.parentElement;
+    }
+    return null;
+  }
+  function nodePath(root, node) {
+    const path = [];
+    let current = node;
+    while (current && current !== root) {
+      const parent = current.parentNode;
+      if (!parent) return null;
+      path.unshift(Array.prototype.indexOf.call(parent.childNodes, current));
+      current = parent;
+    }
+    return path;
+  }
+  function nodeAt(root, path) {
+    let current = root;
+    for (const index of path || []) current = current?.childNodes?.[index] || null;
+    return current;
+  }
+  function isGreenish(color) {
+    const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(String(color || ""));
+    if (!match) return false;
+    const [red, green, blue] = [Number(match[1]), Number(match[2]), Number(match[3])];
+    return green > red + 25 && green > blue + 25;
+  }
+  function removeNavEntry() {
+    if (navEntry) navEntry.remove();
+    navEntry = null;
+  }
+
+  function buildNavEntry(template) {
+    const label = firstTextElement(template);
+    if (!label) return null;
+    const labelStyle = window.getComputedStyle(label);
+    const labelRect = label.getBoundingClientRect();
+    // The icon is the largest element above the label (an img, svg or a wrapper around a font icon).
+    let icon = null;
+    let largest = 0;
+    for (const element of template.querySelectorAll("*")) {
+      if (element === label || label.contains(element) || element.contains(label)) continue;
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 10 || rect.height < 10 || rect.width > 90 || rect.height > 90 || rect.bottom > labelRect.top + 4) continue;
+      if (rect.width * rect.height > largest) { largest = rect.width * rect.height; icon = element; }
+    }
+    const iconRect = icon ? icon.getBoundingClientRect() : null;
+    const iconStyle = icon ? window.getComputedStyle(icon) : null;
+    const labelPath = nodePath(template, label);
+    const iconPath = icon ? nodePath(template, icon) : null;
+    if (!labelPath) return null;
+
+    const clone = template.cloneNode(true);
+    for (const element of [clone, ...clone.querySelectorAll("*")]) {
+      element.removeAttribute("id");
+      element.removeAttribute("href");
+      element.removeAttribute("aria-current");
+      element.removeAttribute("aria-selected");
+      for (const token of [...element.classList]) if (/active|selected|current/i.test(token)) element.classList.remove(token);
+    }
+    clone.setAttribute(NAV_ENTRY_ATTRIBUTE, "1");
+    clone.setAttribute("role", "button");
+    clone.setAttribute("tabindex", "0");
+    clone.setAttribute("title", "ODIN GO öffnen");
+    clone.setAttribute("aria-label", "ODIN GO öffnen");
+    clone.style.cursor = "pointer";
+
+    const cloneLabel = nodeAt(clone, labelPath);
+    if (!cloneLabel) return null;
+    cloneLabel.textContent = "ODIN GO";
+
+    const size = iconRect ? Math.round(Math.min(iconRect.width, iconRect.height)) : 24;
+    const holder = document.createElement("span");
+    holder.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.4"/><path d="M3 9.6h18M8 2.6v3.8M16 2.6v3.8"/><g fill="currentColor" stroke="none"><rect x="6.2" y="12.2" width="3" height="2.4" rx=".6"/><rect x="10.5" y="12.2" width="3" height="2.4" rx=".6"/><rect x="14.8" y="12.2" width="3" height="2.4" rx=".6"/><rect x="6.2" y="16.3" width="3" height="2.4" rx=".6"/><rect x="10.5" y="16.3" width="3" height="2.4" rx=".6"/></g></svg>`;
+    const svg = holder.firstElementChild;
+    svg.style.cssText = `display:block;flex:0 0 auto;color:${labelStyle.color};margin:${iconStyle ? iconStyle.margin : "0 auto"}`;
+    const cloneIcon = iconPath ? nodeAt(clone, iconPath) : null;
+    if (cloneIcon && ["img", "svg", "i", "canvas"].includes(cloneIcon.tagName.toLowerCase())) {
+      cloneIcon.replaceWith(svg);
+    } else if (cloneIcon) {
+      cloneIcon.replaceChildren(svg);
+      cloneIcon.style.backgroundImage = "none";
+      cloneIcon.style.webkitMaskImage = "none";
+      cloneIcon.style.maskImage = "none";
+      svg.style.margin = "auto";
+    } else {
+      cloneLabel.parentNode?.insertBefore(svg, cloneLabel);
+    }
+
+    const open = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void openWorkspace();
+    };
+    clone.addEventListener("click", open);
+    clone.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") open(event); });
+    return clone;
+  }
+
+  function injectNavEntry(anchor) {
+    const parent = anchor.parentElement;
+    // Only the real bar (it spans the page); an inner wrapper is not a place for a new entry.
+    if (!parent || parent.getBoundingClientRect().width < window.innerWidth * 0.5) return false;
+    if (navEntry && navEntry.isConnected && navEntry.parentElement === parent) return true;
+    removeNavEntry();
+    const siblings = [...parent.children].filter((child) => child.getBoundingClientRect().width > 0);
+    const plain = siblings.find((child) => {
+      const label = firstTextElement(child);
+      return label && !isGreenish(window.getComputedStyle(label).color);
+    });
+    const entry = buildNavEntry(plain || anchor);
+    if (!entry) return false;
+    parent.insertBefore(entry, siblings[0] || anchor);
+    navEntry = entry;
+    return true;
+  }
+
+  async function openWorkspace() {
+    setWorkspaceOpen(true);
+    await loadSettings();
+    await verifyJarvisIdentity({ showPrompt: false });
+    await restoreAdminAccess();
+    selectTab("shiftplan", remoteWorkspacePath);
+  }
   function positionLauncher() {
     const anchor = findBottomNavAnchor();
+    // Preferred: an entry inside the Jarvis navigation (identical look and spacing). The floating button is the fallback.
+    if (anchor && injectNavEntry(anchor)) {
+      launcher.style.setProperty('display', 'none', 'important');
+      lastLauncherPlacement = '';
+      return;
+    }
+    removeNavEntry();
+    launcher.style.removeProperty('display');
     let width = 96;
     let height = 56;
     let left = 8;
@@ -633,7 +782,7 @@
   }
 
   iframe.addEventListener("load", () => {
-    iframeReady = true;
+    iframeReady = iframe.getAttribute("src") !== "about:blank";
   });
   iframe.addEventListener("error", () => offlineFallback.classList.add("open"));
 
@@ -1086,13 +1235,9 @@
   launcher.addEventListener("pointerup", finishLauncherDrag);
   launcher.addEventListener("pointercancel", finishLauncherDrag);
 
-  launcher.addEventListener("click", async () => {
+  launcher.addEventListener("click", () => {
     if (suppressLauncherClick) return;
-    setWorkspaceOpen(true);
-    await loadSettings();
-    await verifyJarvisIdentity({ showPrompt: false });
-    await restoreAdminAccess();
-    selectTab("shiftplan", remoteWorkspacePath);
+    void openWorkspace();
   });
   closeButton.addEventListener("click", () => setWorkspaceOpen(false));
   offlineFallbackClose.addEventListener("click", () => setWorkspaceOpen(false));

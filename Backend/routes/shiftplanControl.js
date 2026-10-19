@@ -1312,6 +1312,17 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     code,
     respectWishes: planConfig.respect_employee_wishes,
   });
+  // Employees for whom every early shift is blocked by their wishes (unwanted / only late+night preferred).
+  // Late and night are the only places for their hours, so those slots go to them first (see candidate order).
+  const earlyShiftCodes = shiftDefs
+    .filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'early')
+    .map((definition) => String(definition.code || '').trim().toUpperCase());
+  const lateNightOnlyEmployees = new Set(activeEmployees.filter((employee) => {
+    if (earlyShiftCodes.length === 0) return false;
+    const prefs = preferencesForDate(employee, `-01`);
+    return earlyShiftCodes.every((code) => evaluateShiftWishForPrefs(prefs, code).hardBlocked);
+  }));
+  planReport.lateNightOnlyEmployees = [...lateNightOnlyEmployees];
   const totalWeekendBlocks = countWeekendBlocks(year, mon, numDays);
   // The former skills matrix is intentionally no longer part of planning.
   const featureFlags = { skillsEnabled: false };
@@ -2613,6 +2624,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             coloBoost,
             colleagueMatches,
             dbsRoster: isRosterDbsAssignment,
+            // Late/night slot and an employee who has no early alternative and still needs hours.
+            lateNightPriority: lateNightOnlyEmployees.has(employee)
+              && ['late', 'night'].includes(normalizePlanningShiftTypeKey(shiftDef.shift_type) || '')
+              && remainingToTarget > 0,
             targetHoursGap: Math.max(remainingToTarget, 0),
             // The candidate order is decided by the open target hours first. Variety moves a candidate
             // by up to about one shift (20 points = 1 hour), so repeating the same block no longer wins
@@ -2645,6 +2660,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           // Soft wishes (strength < 100 %): an employee is only used against a
           // wish when no candidate without (or with a weaker) violation is left.
           if (left.preferencePenalty !== right.preferencePenalty) return left.preferencePenalty - right.preferencePenalty;
+          // Late/night slots go to the people who can work nothing else first; everybody else has early
+          // as the overflow pool.
+          if (left.lateNightPriority !== right.lateNightPriority) return left.lateNightPriority ? -1 : 1;
           // Contractual hours remain the first fairness guard. Within one
           // shift's worth of open hours, honour the selected shift wish.
           const targetGapDifference = (right.targetHoursGap + right.varietyHours) - (left.targetHoursGap + left.varietyHours);
@@ -3038,6 +3056,149 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  // Reclaim pass (runs BEFORE the catch-up passes, so donors are refilled afterwards) for employees who cannot\n  // work early at all (see lateNightOnlyEmployees): when late is at its
+  // maximum on the days they are free, a flexible colleague gives away a complete weekday late run and works
+  // early instead (early is the overflow pool). Whole runs only, so nobody gets a late/early/late zigzag.
+  if (lateNightOnlyEmployees.size > 0) {
+    const lateWeekdayDefinitions = regularCatchupDefinitions.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'late');
+    const earlyWeekdayDefinitions = regularCatchupDefinitions.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'early');
+    const lateWeekdayCodes = new Set(lateWeekdayDefinitions.map((definition) => String(definition.code).trim().toUpperCase()));
+    const dbsMembers = new Set([...(specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.keys() || [])]);
+    const dateOf = (day) => `${month}-${String(day).padStart(2, '0')}`;
+
+    const dropAssignedShift = (employee, day) => {
+      const code = empDayAssignment[employee][day];
+      const definition = shiftDefinitionByCode.get(String(code || '').trim().toUpperCase());
+      if (!code || !definition) return;
+      const index = shifts.findIndex((entry) => entry.employee_name === employee && Number(entry.day) === Number(day));
+      if (index >= 0) shifts.splice(index, 1);
+      delete empDayAssignment[employee][day];
+      empHours[employee] -= getShiftHoursForDay(definition, day);
+      const stats = empStats[employee];
+      stats.total = Math.max(stats.total - 1, 0);
+      if (definition.shift_type === 'early') stats.earlyCount = Math.max(stats.earlyCount - 1, 0);
+      if (definition.shift_type === 'late') stats.lateCount = Math.max(stats.lateCount - 1, 0);
+      const normalized = String(code).trim().toUpperCase();
+      stats.specialShiftCounts[normalized] = Math.max(Number(stats.specialShiftCounts[normalized] || 0) - 1, 0);
+      stats.actualHours = Number(empHours[employee].toFixed(2));
+      planReport.totalShiftsPlanned = Math.max(planReport.totalShiftsPlanned - 1, 0);
+      delete explanations[`${employee}_${day}`];
+    };
+
+    // Complete weekday late runs (Mon-Fri only, 2+ days, no holiday) of one employee.
+    const lateRunsOf = (employee) => {
+      const runs = [];
+      let current = null;
+      for (let day = 1; day <= numDays + 1; day++) {
+        const code = day <= numDays ? String(empDayAssignment[employee][day] || '').trim().toUpperCase() : '';
+        const weekday = day <= numDays ? dayOfWeek(year, mon, day) : 0;
+        const usable = lateWeekdayCodes.has(code) && weekday >= 1 && weekday <= 5 && !holidayMap[dateOf(day)];
+        if (usable && current && current.code === code) current.days.push(day);
+        else {
+          if (current && current.days.length >= 2) runs.push(current);
+          current = usable ? { code, days: [day] } : null;
+        }
+      }
+      if (current && current.days.length >= 2) runs.push(current);
+      // A run that touches a weekend/other shift is part of a longer block: only complete weekday runs count.
+      return runs.filter((run) => {
+        const before = empDayAssignment[employee][run.days[0] - 1];
+        const after = empDayAssignment[employee][run.days[run.days.length - 1] + 1];
+        return !before && !after;
+      });
+    };
+
+    const needy = [...lateNightOnlyEmployees].sort((left, right) => (
+      (employeeTargetHours[right] - empHours[right]) - (employeeTargetHours[left] - empHours[left])
+    ));
+    const canTakeLateDays = (employee, definition, days) => days.every((day) => {
+      if (empDayAssignment[employee][day]) return false;
+      const dateStr = dateOf(day);
+      const weekday = dayOfWeek(year, mon, day);
+      return !isEmployeeAbsentOnDate(employee, dateStr)
+        && !isEmployeeBlockedByPreferenceOnDay(employee, weekday)
+        && !isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)
+        && !isRecoveryProtectedDay(employee, day)
+        && !wouldViolateAdjacentTransition(employee, day, definition)
+        && keepsEmployeeShiftCohesion(employee, day, definition)
+        && isOutsideDbsAllowed(employee, definition, 1);
+    });
+    for (const employee of needy) {
+      for (let round = 0; round < 10; round++) {
+        if (!(employeeTargetHours[employee] - empHours[employee] >= 8)) break;
+        let best = null;
+        for (const donor of activeEmployees) {
+          if (donor === employee || lateNightOnlyEmployees.has(donor) || dbsMembers.has(donor)) continue;
+          const donorPrefs = preferencesForDate(donor, `${month}-01`);
+          for (const run of lateRunsOf(donor)) {
+            const lateDefinition = lateWeekdayDefinitions.find((definition) => String(definition.code).trim().toUpperCase() === run.code);
+            if (!lateDefinition) continue;
+            // Segments of the run that move: the whole run, or its start / end (at least 2 days; the remaining
+            // part of the donor's run also stays at 2+ days).
+            const length = run.days.length;
+            const segments = [{ kind: 'whole', days: run.days }];
+            for (let size = 2; size <= length - 2; size++) {
+              segments.push({ kind: 'end', days: run.days.slice(length - size) });
+              segments.push({ kind: 'start', days: run.days.slice(0, size) });
+            }
+            for (const segment of segments) {
+              const segmentHours = segment.days.reduce((sum, day) => sum + getShiftHoursForDay(lateDefinition, day), 0);
+              if (empHours[employee] + segmentHours > employeeTargetHours[employee] + 8) continue;
+              if (!canTakeLateDays(employee, lateDefinition, segment.days)) continue;
+              let neighbours = 0;
+              for (let previous = segment.days[0] - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) neighbours++;
+              for (let next = segment.days[segment.days.length - 1] + 1; next <= numDays && empDayAssignment[employee][next]; next++) neighbours++;
+              if (neighbours + segment.days.length > Math.max(rotation.max_consecutive_workdays || 6, 5)) continue;
+
+              // (a) the donor works early on those days: allowed for the whole run and for its start (early -> late
+              //     is fine); the end of a run would turn late -> early on consecutive days (forbidden).
+              let earlyDefinition = null;
+              if (segment.kind !== 'end') {
+                earlyDefinition = earlyWeekdayDefinitions
+                  .filter((definition) => isOutsideDbsAllowed(donor, definition, 0))
+                  .find((definition) => segment.days.every((day) => !isEmployeeShiftBlockedOnDate(donor, dateOf(day), definition.code))
+                    && !wouldViolateAdjacentTransition(donor, segment.days[0], definition)) || null;
+              }
+              // (b) the donor simply gives the days away when that leaves them close to their own target.
+              // The donor is refilled (early is the overflow pool) by the catch-up passes that follow.
+              const donorKeepsHours = true;
+              if (!earlyDefinition && !donorKeepsHours) continue;
+
+              const donorLikesLate = isShiftPreferredByEmployeePreference(donorPrefs, run.code) ? 1 : 0;
+              const candidate = {
+                donor, run, segment, lateDefinition, earlyDefinition,
+                converts: Boolean(earlyDefinition), donorLikesLate,
+                length: segment.days.length, surplus: empHours[donor] - employeeTargetHours[donor],
+              };
+              const better = (a, b) => {
+                if (a.converts !== b.converts) return a.converts;
+                if (a.donorLikesLate !== b.donorLikesLate) return a.donorLikesLate < b.donorLikesLate;
+                if (a.length !== b.length) return a.length > b.length;
+                return a.surplus > b.surplus;
+              };
+              if (!best || better(candidate, best)) best = candidate;
+            }
+          }
+        }
+        if (!best) break;
+        for (const day of best.segment.days) {
+          dropAssignedShift(best.donor, day);
+          if (best.earlyDefinition) {
+            addEmployeeTargetCatchupShift(best.donor, day, best.earlyDefinition, [
+              `Tausch: ${best.lateDefinition.code} an ${employee} abgegeben, der keine Frühschicht übernehmen kann`,
+              'Frühschicht als Auffangbecken, Ruhezeiten und Wünsche geprüft',
+            ]);
+          }
+          addEmployeeTargetCatchupShift(employee, day, best.lateDefinition, [
+            'Spät-/Nacht-Priorität: Mitarbeiter ohne Frühschicht-Möglichkeit erhält die Spätschicht vorrangig',
+            best.earlyDefinition
+              ? `${best.donor} arbeitet an diesen Tagen stattdessen Frühschicht`
+              : `${best.donor} gibt diese Tage ab (Stunden über dem eigenen Soll)`,
+          ]);
+        }
+      }
+    }
+  }
   // Largest hour deficit first: the free capacity goes to those who need it most, not to whoever
   // comes first in the alphabet.
   const catchupOrder = [...activeEmployees].sort((left, right) => (
