@@ -1357,13 +1357,27 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // the shift types stored in the admin menu (default: early or late) and never
   // a seven-day block (E1WE/E2WE/L1WE/N). Without a stored choice early and late
   // are both allowed.
+  // Free days after a DBS block. Mon-Fri pattern: only pattern days count (the weekend is free anyway,
+  // "two days free" means Monday and Tuesday). Pattern with Saturday (Mon-Sat): Sunday is the weekly rest
+  // and counts as the first free day (Sunday + Monday free, back on Tuesday).
+  const countDbsRecoveryDays = (patternDays, freeDays, lastDay) => {
+    const countsSunday = Array.isArray(patternDays) && patternDays.includes(6);
+    let recovery = 0;
+    let counted = 0;
+    while (counted < freeDays && recovery < 14) {
+      recovery++;
+      const weekday = dayOfWeek(year, mon, lastDay + recovery);
+      if (patternDays.includes(weekday) || (countsSunday && weekday === 0)) counted++;
+    }
+    return recovery;
+  };
   const getDbsOutsideRule = (employee) => {
     if (!dbsPlanningConfig.enabled) return null;
     return specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.get(employee) || null;
   };
   const countDaysOutsideDbs = (employee) => Object.values(empDayAssignment[employee] || {})
     .filter((code) => code && String(code).trim().toUpperCase() !== dbsPlanningConfig.shiftCode).length;
-  const describeDbsOutsideRule = (rule) => `${rule.otherShiftCodes.length ? `nur ${rule.otherShiftCodes.join(', ')}` : 'nur Früh- oder Spätschicht'}, keine 7-Tage-Blöcke${rule.otherDaysPerMonth !== null ? `, höchstens ${rule.otherDaysPerMonth} Tage/Monat` : ''}`;
+  const describeDbsOutsideRule = (rule) => `${rule.otherShiftCodes.length ? `nur ${rule.otherShiftCodes.join(', ')}` : 'nur Früh- oder Spätschicht'}, keine 6-/7-Tage-Wochenendblöcke${rule.otherDaysPerMonth !== null ? `, höchstens ${rule.otherDaysPerMonth} Tage/Monat` : ''}`;
   const isOutsideDbsAllowed = (employee, definition, additionalDays = 1) => {
     const rule = getDbsOutsideRule(employee);
     if (!rule) return true;
@@ -1373,7 +1387,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const typeToken = typeKey === 'night' ? 'NIGHT' : typeKey === 'late' ? 'LATE' : typeKey === 'early' ? 'EARLY' : '';
     // Short night blocks (NK) are shorter than seven days; the long N block is not allowed outside DBS.
     const usesShortNight = typeKey === 'night' && getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT;
-    if (!usesShortNight && getShiftSeriesDays(definition) >= 7) return false;
+    // DBS members never run a Saturday/weekend block (6 or 7 days) outside DBS: only weekday blocks.
+    if (!usesShortNight && getShiftSeriesDays(definition) >= 6) return false;
+    if (/(SA|WE)$/.test(code) && code !== dbsPlanningConfig.shiftCode) return false;
     if (rule.otherShiftCodes.length > 0) {
       // Tokens EARLY/LATE/NIGHT (shift type) or legacy shift codes.
       const allowedByRule = rule.otherShiftCodes.some((allowed) => {
@@ -1478,7 +1494,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       : 0;
     const blockEndsToday = remainingAfter === 0;
     if (!continuingBlock) {
-      empBlockHistory[emp].push({ code: String(shiftDef.code || '').toUpperCase(), type: normalizePlanningShiftTypeKey(shiftDef.shift_type) });
+      empBlockHistory[emp].push({ code: String(shiftDef.code || '').toUpperCase(), type: normalizePlanningShiftTypeKey(shiftDef.shift_type), seriesDays: getShiftSeriesDays(shiftDef) });
     }
 
     if (remainingAfter > 0) {
@@ -1550,12 +1566,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       // Days outside the employee's DBS weekdays (e.g. Sunday for a Mon-Sat
       // pattern) are free anyway and must not consume the recovery days.
       const dbsWeekdays = dbsEntry?.workingWeekdays?.length ? dbsEntry.workingWeekdays : [0, 1, 2, 3, 4, 5, 6];
-      let dbsRecoveryDays = 0;
-      let countedFreeDays = 0;
-      while (countedFreeDays < freeDaysAfterBlock && dbsRecoveryDays < 14) {
-        dbsRecoveryDays++;
-        if (dbsWeekdays.includes(dayOfWeek(year, mon, day + dbsRecoveryDays))) countedFreeDays++;
-      }
+      const dbsRecoveryDays = countDbsRecoveryDays(dbsWeekdays, freeDaysAfterBlock, day);
       empRequiredFreeDays[emp] = Math.max(empRequiredFreeDays[emp], dbsRecoveryDays);
       empRecoveryReason[emp] = 'DBS-Block';
     }
@@ -1664,12 +1675,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const getDbsRecoveryDays = (name, lastDay) => {
       const entry = poolEntryByName.get(name);
       const patternDays = entry?.workingWeekdays?.length ? entry.workingWeekdays : [0, 1, 2, 3, 4, 5, 6];
-      let recovery = 0;
-      let counted = 0;
-      while (counted < (entry?.freeDaysAfterBlock ?? dbsPlanningConfig.freeDaysAfterBlock) && recovery < 14) {
-        recovery++;
-        if (patternDays.includes(dayOfWeek(year, mon, lastDay + recovery))) counted++;
-      }
+      const recovery = countDbsRecoveryDays(patternDays, entry?.freeDaysAfterBlock ?? dbsPlanningConfig.freeDaysAfterBlock, lastDay);
       const weekendRecovery = isWeekend(year, mon, lastDay) ? Number(rotation.free_days_after_weekend) || 0 : 0;
       return Math.max(recovery, weekendRecovery);
     };
@@ -2417,6 +2423,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             history: empBlockHistory[employee],
             nextCode: shiftDef.code,
             nextType: shiftDef.shift_type,
+            nextSeriesDays: getShiftSeriesDays(shiftDef),
             priority: varietyPriority,
           });
           score += variety.score;
@@ -2708,7 +2715,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     day,
     shiftType: definition?.shift_type,
     getShiftType: (code) => shiftDefinitionByCode.get(String(code || '').trim().toUpperCase())?.shift_type,
-    lookaroundDays: 3,
+    // 2 days: a Wednesday-Friday filler after a Sunday block and a Friday before a Monday block
+    // stay possible; the last-resort pass only looks at the adjacent days.
+    lookaroundDays: relaxedWishPass ? 1 : 2,
   });
   const isRecoveryProtectedDay = (employee, day) => {
     const reasons = explanations[`${employee}_${day}`]?.reasons || [];

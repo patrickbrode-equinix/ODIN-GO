@@ -70,7 +70,7 @@ test('40 generated employees: wishes, DBS rule and holiday credit hold in the re
   for (const [index, member] of dbsMembers.entries()) {
     for (const [, code] of byEmployee.get(member.name)) {
       if (code === 'DBS') continue;
-      assert.ok((seriesByCode.get(code) || 1) < 7, `${member.name} has seven-day block ${code} outside DBS`);
+      assert.ok((seriesByCode.get(code) || 1) < 6 && !/(SA|WE)$/.test(code), `${member.name} has seven-day block ${code} outside DBS`);
       const type = typeByCode.get(code);
       assert.ok(type === 'early' || type === 'late', `${member.name} has ${type} outside DBS`);
       if (index === 0) assert.equal(type, 'late');

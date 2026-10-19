@@ -863,7 +863,7 @@ export function normalizeVarietyPriority(value) {
  * - a type the employee has not had in the last blocks gets a bonus
  * `priority` 0..100 scales everything (0 = off, 60 = default).
  */
-export function getVarietyAdjustment({ history = [], nextCode, nextType, priority = DEFAULT_VARIETY_PRIORITY } = {}) {
+export function getVarietyAdjustment({ history = [], nextCode, nextType, nextSeriesDays = null, priority = DEFAULT_VARIETY_PRIORITY } = {}) {
   const scale = normalizeVarietyPriority(priority) / DEFAULT_VARIETY_PRIORITY;
   const recent = (Array.isArray(history) ? history : []).slice(-3);
   if (scale === 0 || recent.length === 0) return { score: 0, reason: null };
@@ -874,7 +874,16 @@ export function getVarietyAdjustment({ history = [], nextCode, nextType, priorit
   const sameType = recent.filter((entry) => normalizePlanningShiftTypeKey(entry?.type) === type).length;
   const typeIsNew = sameType === 0;
 
-  const raw = -(sameCode * 160) - (sameType * 90) + (typeIsNew ? 140 : 0);
+  let raw = -(sameCode * 220) - (sameType * 160) + (typeIsNew ? 200 : 0);
+  // Block shape: weekday block (Mon-Fri) vs. weekend block (6-7 days). Two weekend blocks in a row, or a strict
+  // weekday/weekend/weekday/weekend alternation, is the pattern employees find too monotonous.
+  const isLong = (days) => Number(days) >= 6;
+  const nextIsLong = Number.isFinite(Number(nextSeriesDays)) && nextSeriesDays !== null && isLong(nextSeriesDays);
+  const shapes = recent.map((entry) => (entry?.seriesDays === null || entry?.seriesDays === undefined ? null : isLong(entry.seriesDays)));
+  const last = shapes[shapes.length - 1];
+  const beforeLast = shapes[shapes.length - 2];
+  if (nextIsLong && last === true) raw -= 1400;
+  else if (nextIsLong && last === false && beforeLast === true) raw -= 700;
   const score = Math.round(raw * scale);
   if (score === 0) return { score: 0, reason: null };
   return {

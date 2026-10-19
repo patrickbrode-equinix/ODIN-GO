@@ -16,6 +16,15 @@ describe('getVarietyAdjustment', () => {
     assert.ok(other.score > repeat.score);
   });
 
+  it('penalises two weekend blocks in a row and a strict weekday/weekend alternation', () => {
+    const weekend = { code: 'E1WE', type: 'early', seriesDays: 7 };
+    const weekday = { code: 'E2', type: 'early', seriesDays: 5 };
+    const afterWeekend = getVarietyAdjustment({ history: [weekday, weekend], nextCode: 'L1WE', nextType: 'late', nextSeriesDays: 7 });
+    const afterWeekdayBlock = getVarietyAdjustment({ history: [weekend, weekday], nextCode: 'L1WE', nextType: 'late', nextSeriesDays: 7 });
+    const weekdayAfterWeekend = getVarietyAdjustment({ history: [weekday, weekend], nextCode: 'L1', nextType: 'late', nextSeriesDays: 5 });
+    assert.ok(afterWeekend.score < weekdayAfterWeekend.score, 'weekend after weekend is worse than a weekday block');
+    assert.ok(afterWeekdayBlock.score < weekdayAfterWeekend.score, 'W-S-W-S alternation is worse than a weekday block');
+  });
   it('does nothing without history or with priority 0', () => {
     assert.equal(getVarietyAdjustment({ history: [], nextCode: 'E1', nextType: 'early' }).score, 0);
     assert.equal(getVarietyAdjustment({ history, nextCode: 'E1', nextType: 'early', priority: 0 }).score, 0);

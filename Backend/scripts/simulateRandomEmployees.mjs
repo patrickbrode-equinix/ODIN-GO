@@ -214,7 +214,7 @@ function audit(result, year, month, carryIn) {
         if (isolatedDay) { isolated += 1; isolatedList.push(`${employee.name.slice(0, 12)}[${classify(employee)}] ${pad(month)}-${pad(day)} ${code}`); }
         if (!days.get(day - 1)) blocks += 1;
         const dbs = dbsByName.get(employee.name);
-        if (dbs && code !== 'DBS' && (seriesByCode.get(code) || 1) >= 7 && typeByCode.get(code) !== 'night') {
+        if (dbs && code !== 'DBS' && ((seriesByCode.get(code) || 1) >= 6 || /(SA|WE)$/.test(code))) {
           sevenOutsideDbs.push(`${employee.name} Tag ${day} ${code}`);
         }
         if (dbs && code !== 'DBS') {
@@ -396,5 +396,7 @@ if (!args.quiet) {
     }
   }
 }
+const tolerance = (predicate) => report.months.map((entry) => entry.perEmployee.filter(predicate).length).join('/');
+originalConsole.log(`Abweichung > 10h unter Soll: ${tolerance((row) => row.target - row.actual > 10)}  | > 10h über Soll: ${tolerance((row) => row.actual - row.target > 10)}`);
 originalConsole.log(`seed=${seed} Verstöße gesamt=${totalViolations} Mitarbeiter unter Soll=${report.months.map((entry) => entry.employeesBelowTarget).join('/')} isolierte Tage=${report.months.map((entry) => entry.isolatedWorkDays).join('/')}`);
 process.exit(0);
