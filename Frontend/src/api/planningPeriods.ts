@@ -46,6 +46,21 @@ export function isEditableGroupId(groupId: string) {
   return !groupId.startsWith('month:') && !groupId.startsWith('legacy-year:');
 }
 
+/** Deletes drafts one by one. Activated drafts cannot be deleted; the result lists what worked and what did not. */
+export async function deletePlanningDrafts(ids: number[]) {
+  const deleted: number[] = [];
+  const failed: { id: number; message: string }[] = [];
+  for (const id of ids) {
+    try {
+      await api.delete(`/shiftplan-control/drafts/${id}`);
+      deleted.push(id);
+    } catch (error: any) {
+      failed.push({ id, message: error?.response?.data?.error || error?.message || 'Fehler' });
+    }
+  }
+  return { deleted, failed };
+}
+
 export type ExcelExportVariant = 'team' | 'management';
 
 /** team = shifts only; management = hours (target/actual) and wish fulfilment (admins only). */

@@ -1,4 +1,4 @@
-﻿/* ================================================ */
+/* ================================================ */
 /* Shiftplan Control Center – Schichtplaner          */
 /* Draft generation, review, activation             */
 /* ================================================ */
@@ -801,7 +801,8 @@ export default function ShiftplanControlCenter() {
 
               <GroupedDraftList groups={draftGroups} activeId={activeDraft?.id}
                 onOpen={draft => { setSelectedMonth(draft.month); void loadDraft(draft.id); setTab('draft'); }}
-                onExportMonth={draft => void handleExport(draft.id)} onError={setError} onMetadataSaved={loadDrafts} />
+                onExportMonth={draft => void handleExport(draft.id)} onError={setError} onMetadataSaved={loadDrafts}
+                onDeleted={async (ids) => { if (activeDraft && ids.includes(activeDraft.id)) setActiveDraft(null); await loadDrafts(); }} />
               {!draftGroups.length && <p className="py-8 text-center text-sm text-muted-foreground">{isGerman ? 'Noch keine Drafts für dieses Jahr vorhanden.' : 'No drafts for this year yet.'}</p>}
             </div>
           )}

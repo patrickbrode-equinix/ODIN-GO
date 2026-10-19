@@ -58,7 +58,11 @@ test('40 generated employees: wishes, DBS rule and holiday credit hold in the re
       const dow = new Date(2027, 2, day).getDay();
       assert.ok(!employee.blocked.includes(dow), `${employee.name} works on a blocked weekday (day ${day})`);
       assert.ok(!employee.unwanted.includes(base(code)), `${employee.name} got unwanted ${code}`);
-      if (employee.preferred.length) assert.ok(employee.preferred.includes(base(code)), `${employee.name} got ${code} instead of ${employee.preferred}`);
+      // Wishes are honoured first; only when the wished shift is full (or the person would stay below
+      // the target hours) early is the overflow pool. Never late or night against the wish.
+      if (employee.preferred.length && !employee.preferred.includes(base(code))) {
+        assert.equal(typeByCode.get(code), 'early', `${employee.name} got ${code} instead of ${employee.preferred}`);
+      }
     }
   }
 

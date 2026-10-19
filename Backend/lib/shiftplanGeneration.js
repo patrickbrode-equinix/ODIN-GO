@@ -577,7 +577,8 @@ export function keepsShiftTypeCohesion({ assignmentsByDay = {}, day, shiftType, 
       const code = assignmentsByDay?.[candidateDay];
       if (!code) continue;
       const nearbyType = normalizePlanningShiftTypeKey(getShiftType(code));
-      if (!nearbyType) continue;
+      // DBS / special shifts have no early-late-night character: they never force a type.
+      if (!nearbyType || nearbyType === 'special') continue;
       if (nearbyType === normalizedType) nearbySameType = true;
       else nearbyDifferentType = true;
     }

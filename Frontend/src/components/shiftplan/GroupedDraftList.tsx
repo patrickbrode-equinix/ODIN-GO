@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { BarChart3, ChevronDown, FileSpreadsheet, Pencil } from 'lucide-react';
+import { BarChart3, ChevronDown, FileSpreadsheet, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
-import { exportPlanningGroup, isEditableGroupId, type ExcelExportVariant, updateGroupMetadata, type PlanningDraftGroup, type PlanningDraftSummary } from '../../api/planningPeriods';
+import { deletePlanningDrafts, exportPlanningGroup, isEditableGroupId, type ExcelExportVariant, updateGroupMetadata, type PlanningDraftGroup, type PlanningDraftSummary } from '../../api/planningPeriods';
 import { Button } from '../ui/button';
 
 interface Props<D extends PlanningDraftSummary> {
@@ -14,6 +14,8 @@ interface Props<D extends PlanningDraftSummary> {
   renderMonth?: (draft: D) => ReactNode;
   /** Called after group title/description were saved so the parent can reload. */
   onMetadataSaved?: () => void | Promise<void>;
+  /** Enables the delete buttons. Called after drafts were deleted so the parent can reload. */
+  onDeleted?: (deletedIds: number[]) => void | Promise<void>;
 }
 
 type Entry<D extends PlanningDraftSummary> =
@@ -22,7 +24,7 @@ type Entry<D extends PlanningDraftSummary> =
 
 const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' } as const;
 
-export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activeId, onOpen, onExportMonth, onError, renderMonth, onMetadataSaved }: Props<D>) {
+export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activeId, onOpen, onExportMonth, onError, renderMonth, onMetadataSaved, onDeleted }: Props<D>) {
   const { language, t } = useLanguage();
   const de = language === 'de';
   // The management workbook contains personal wishes and hours: administrators only.
@@ -35,6 +37,7 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const monthLabel = (month: string) => new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 1).toLocaleDateString(locale, { month: 'long', year: 'numeric' });
   const time = (value: string) => { const parsed = new Date(value).getTime(); return Number.isFinite(parsed) ? parsed : 0; };
 
@@ -43,6 +46,20 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
     try { await exportPlanningGroup(id, variant); }
     catch { onError(de ? 'Der Planungsexport ist fehlgeschlagen.' : 'Unable to export the plan.'); }
     finally { setExporting(null); }
+  }
+
+  async function removeDrafts(ids: number[], question: string) {
+    if (!ids.length || !window.confirm(question)) return;
+    setDeleting(ids.join(','));
+    try {
+      const { deleted, failed } = await deletePlanningDrafts(ids);
+      if (failed.length) {
+        onError(de
+          ? `${deleted.length} gelöscht, ${failed.length} nicht gelöscht: ${failed[0].message}`
+          : `${deleted.length} deleted, ${failed.length} not deleted: ${failed[0].message}`);
+      }
+      if (deleted.length) await onDeleted?.(deleted);
+    } finally { setDeleting(null); }
   }
 
   function startEdit(group: PlanningDraftGroup<D>, defaultTitle: string) {
@@ -91,6 +108,8 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
       </button>
       <Button type="button" size="icon" variant="ghost" title={de ? 'Excel für das Team (nur Schichten)' : 'Excel for the team (shifts only)'} aria-label={`${de ? 'Monat als Team-Excel exportieren' : 'Export month for the team'}: ${monthLabel(draft.month)}, v${draft.version}`} onClick={() => onExportMonth(draft, 'team')}><FileSpreadsheet className="h-4 w-4" /></Button>
       {canExportManagement && <Button type="button" size="icon" variant="ghost" title={de ? 'Excel für die Leitung (Stunden und Wünsche)' : 'Excel for management (hours and wishes)'} aria-label={`${de ? 'Monat als Leitungs-Excel exportieren' : 'Export month for management'}: ${monthLabel(draft.month)}, v${draft.version}`} onClick={() => onExportMonth(draft, 'management')}><BarChart3 className="h-4 w-4" /></Button>}
+      {onDeleted && draft.status !== 'activated' && <Button type="button" size="icon" variant="ghost" title={de ? 'Draft löschen' : 'Delete draft'} aria-label={`${de ? 'Draft löschen' : 'Delete draft'}: ${monthLabel(draft.month)}, v${draft.version}`} disabled={deleting !== null}
+        onClick={() => void removeDrafts([draft.id], de ? `Draft ${monthLabel(draft.month)} v${draft.version} wirklich löschen?` : `Delete draft ${monthLabel(draft.month)} v${draft.version}?`)}><Trash2 className="h-4 w-4 text-red-300" /></Button>}
     </div>
     {renderMonth?.(draft)}
   </div>;
@@ -135,6 +154,12 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
           {canExportManagement && <Button type="button" size="icon" variant="ghost" title={de ? 'Gesamte Planung als Leitungs-Excel (Stunden und Wünsche)' : 'Entire plan for management (hours and wishes)'} aria-label={de ? 'Gesamte Planung als Leitungs-Excel' : 'Export entire plan for management'} disabled={exporting !== null} onClick={() => void exportGroup(group.id, 'management')}>
             <BarChart3 className={`h-4 w-4 ${exporting === `${group.id}:management` ? 'animate-pulse' : ''}`} />
           </Button>}
+          {onDeleted && (() => {
+            const deletableIds = group.drafts.filter(draft => draft.status !== 'activated').map(draft => draft.id);
+            if (!deletableIds.length) return null;
+            return <Button type="button" size="icon" variant="ghost" title={de ? 'Gesamte Planung löschen (aktivierte Drafts bleiben)' : 'Delete the entire plan (activated drafts stay)'} aria-label={de ? 'Gesamte Planung löschen' : 'Delete entire plan'} disabled={deleting !== null}
+              onClick={() => void removeDrafts(deletableIds, de ? `${title}: ${deletableIds.length} Drafts wirklich löschen? Aktivierte Drafts bleiben erhalten.` : `${title}: delete ${deletableIds.length} drafts? Activated drafts are kept.`)}><Trash2 className="h-4 w-4 text-red-300" /></Button>;
+          })()}
         </div>
         {open && <div className="space-y-2 border-t border-border/20 p-3">
           {editingId === group.id && <div className="space-y-2 rounded-lg border border-border/30 p-2">

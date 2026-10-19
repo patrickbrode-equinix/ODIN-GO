@@ -1232,7 +1232,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     shiftType,
     nightCount: Number(empStats[employee]?.nights || 0),
   });
-  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => getShiftWishEvaluation(employee, dateStr, code).hardBlocked;
+  // Last-resort pass: employees who are still below their target hours may get a shift that is not on
+  // their preferred list (e.g. early when late/night are full). Unwanted shifts, blocked days,
+  // limits and absences stay absolute.
+  let relaxedWishPass = false;
+  const isHardBlockedForPass = (evaluation) => (relaxedWishPass
+    ? evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred')
+    : evaluation.hardBlocked);
+  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => isHardBlockedForPass(getShiftWishEvaluation(employee, dateStr, code));
   const getShiftWishPenaltyOnDate = (employee, dateStr, code) => getShiftWishEvaluation(employee, dateStr, code).penalty;
   // Month-level variant for the catch-up passes (no date / night count context).
   const evaluateShiftWishForPrefs = (prefs, code) => evaluateShiftWishViolations({
@@ -2954,12 +2961,20 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const catchupOrder = [...activeEmployees].sort((left, right) => (
     (employeeTargetHours[right] - empHours[right]) - (employeeTargetHours[left] - empHours[left])
   ));
-  for (const employee of catchupOrder) {
+  // Pass 1 honours every wish. Pass 2 only runs for employees who are still below target and
+  // may then leave their preferred-shift list (see relaxedWishPass).
+  const catchupRuns = [
+    ...catchupOrder.map((employee) => ({ employee, relaxedPass: false })),
+    ...catchupOrder.map((employee) => ({ employee, relaxedPass: true })),
+  ];
+  for (const { employee, relaxedPass } of catchupRuns) {
+    relaxedWishPass = relaxedPass;
+    if (relaxedPass && !(employeeTargetHours[employee] - empHours[employee] >= 1)) continue;
     const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
     const prefs = preferencesForDate(employee, `${month}-01`);
     const candidateDefinitions = regularCatchupDefinitions
       .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
-      .filter((definition) => !evaluateShiftWishForPrefs(prefs, definition.code).hardBlocked)
+      .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code)))
       .filter((definition) => isOutsideDbsAllowed(employee, definition, 1))
       .sort((left, right) => {
         // Soft wishes (< 100 %): prefer definitions that do not violate a wish.
@@ -2968,6 +2983,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const leftPreferred = isShiftPreferredByEmployeePreference(prefs, left.code) ? 1 : 0;
         const rightPreferred = isShiftPreferredByEmployeePreference(prefs, right.code) ? 1 : 0;
         if (rightPreferred !== leftPreferred) return rightPreferred - leftPreferred;
+        if (relaxedWishPass) {
+          // Fallback: early is the overflow pool.
+          const leftEarly = normalizePlanningShiftTypeKey(left.shift_type) === 'early' ? 1 : 0;
+          const rightEarly = normalizePlanningShiftTypeKey(right.shift_type) === 'early' ? 1 : 0;
+          if (rightEarly !== leftEarly) return rightEarly - leftEarly;
+        }
         const leftContinuity = left.code === empLastWorkedShiftCode[employee] ? 1 : 0;
         const rightContinuity = right.code === empLastWorkedShiftCode[employee] ? 1 : 0;
         if (rightContinuity !== leftContinuity) return rightContinuity - leftContinuity;
@@ -3375,14 +3396,17 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  relaxedWishPass = false;
   // Explain every employee who stays clearly below the target hours: count, per free day, which
   // rule or limit blocked the filler shift, so a "free for weeks" employee is never unexplained.
   for (const employee of activeEmployees) {
     const deficit = employeeTargetHours[employee] - empHours[employee];
     if (!(deficit >= 8)) continue;
     const fixedType = fixedShiftTypeByEmployee.get(employee);
+    relaxedWishPass = true;
     const options = regularCatchupDefinitions
-      .filter((definition) => !fixedType || fixedType === normalizePlanningShiftTypeKey(definition.shift_type));
+      .filter((definition) => !fixedType || fixedType === normalizePlanningShiftTypeKey(definition.shift_type))
+      .filter((definition) => isOutsideDbsAllowed(employee, definition, 1));
     const tally = new Map();
     const count = (reason) => tally.set(reason, (tally.get(reason) || 0) + 1);
     let freeDays = 0;
@@ -3395,14 +3419,24 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (isEmployeeBlockedByPreferenceOnDay(employee, dow)) { count('gesperrter Wochentag (Ausschluss/Wunsch)'); continue; }
       if (isRecoveryProtectedDay(employee, day)) { count('Erholungstag'); continue; }
       if (options.length === 0) { count('keine passende Schicht (feste Schichtart/Wunsch/DBS-Regel)'); continue; }
-      const free = options.find((definition) => !isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)
-        && normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow)
-        && !wouldViolateAdjacentTransition(employee, day, definition)
-        && keepsEmployeeShiftCohesion(employee, day, definition));
-      if (!free) { count('Schichtfolge-/Ruheregel'); continue; }
-      if (!options.some((definition) => hasDefinitionCapacityForEmployee(employee, day, definition))) { count('Tagesbesetzung bereits am Maximum'); continue; }
+      // Why does no allowed shift fit? Report the reason of the shift that got furthest.
+      const failureOf = (definition) => {
+        if (!normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow)) return 'Wochenende bzw. Schicht nicht an diesem Wochentag (nur Wochenendblöcke)';
+        if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) return 'Schicht durch Wunsch/Ausschluss gesperrt';
+        if (wouldViolateAdjacentTransition(employee, day, definition)) return 'Schichtfolge/Mindestruhezeit (z. B. Spät→Früh, Nacht→Früh)';
+        if (!keepsEmployeeShiftCohesion(employee, day, definition)) return 'Schichtart-Zusammenhalt (kein Wechsel innerhalb von 3 Tagen)';
+        if (!hasDefinitionCapacityForEmployee(employee, day, definition)) return 'Tagesbesetzung bereits am Maximum';
+        return null;
+      };
+      const failures = options.map(failureOf);
+      if (failures.every((failure) => failure !== null)) {
+        const priority = ['Tagesbesetzung bereits am Maximum', 'Schichtart-Zusammenhalt (kein Wechsel innerhalb von 3 Tagen)', 'Schichtfolge/Mindestruhezeit (z. B. Spät→Früh, Nacht→Früh)', 'Schicht durch Wunsch/Ausschluss gesperrt'];
+        count(priority.find((reason) => failures.includes(reason)) || failures[0]);
+        continue;
+      }
       count('Arbeitstage-am-Stück-Limit');
     }
+    relaxedWishPass = false;
     const detail = [...tally.entries()].sort((left, right) => right[1] - left[1]).map(([reason, days]) => `${reason}: ${days}`).join('; ');
     conflicts.push({
       day: 1,

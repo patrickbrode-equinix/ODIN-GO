@@ -1,4 +1,4 @@
-﻿import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   BarChart3,
   CalendarRange,
@@ -393,7 +393,7 @@ export default function ShiftplanDrafts() {
             <div className="space-y-2">
               <GroupedDraftList groups={visibleGroups} activeId={activeDraft?.id}
                 onOpen={draft => void loadDraft(draft.id)} onExportMonth={(draft, variant) => void exportDraft(draft, variant)} onError={setError}
-                onMetadataSaved={refreshList} />
+                onMetadataSaved={refreshList} onDeleted={async (ids) => { if (activeDraft && ids.includes(activeDraft.id)) setActiveDraft(null); await refreshList(); }} />
               {!visibleGroups.length && !loading && <p className="px-3 py-8 text-center text-sm text-muted-foreground">Für diesen Filter sind noch keine Drafts vorhanden.</p>}
             </div>
           </aside>
