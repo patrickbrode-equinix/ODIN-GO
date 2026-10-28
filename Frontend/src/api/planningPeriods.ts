@@ -1,5 +1,8 @@
 import { api } from './api';
 
+/** Years that can be planned (2026 is already planned). Keep in sync with PLANNING_YEARS in Backend/lib/planningPeriods.js. */
+export const PLANNING_YEARS: readonly number[] = [2027];
+
 export interface PlanningDraftSummary {
   id: number;
   month: string;

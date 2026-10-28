@@ -1,5 +1,14 @@
+// Years that can be planned. 2026 is already planned; extend this list when the next year is opened.
+export const PLANNING_YEARS = Object.freeze([2027]);
+
+export function assertPlanningYear(year) {
+  if (!Number.isInteger(year) || !PLANNING_YEARS.includes(year)) {
+    throw new Error(`Planungen sind nur für ${PLANNING_YEARS.join(', ')} möglich`);
+  }
+}
+
 export function getPlanningMonths(year, quarter = null) {
-  if (!Number.isInteger(year) || year < 2027 || year > 2040) throw new Error('Planungen sind nur für 2027–2040 möglich');
+  assertPlanningYear(year);
   if (quarter !== null && (!Number.isInteger(quarter) || quarter < 1 || quarter > 4)) throw new Error('Quartal muss zwischen 1 und 4 liegen');
   const start = quarter === null ? 1 : (quarter - 1) * 3 + 1;
   return Array.from({ length: quarter === null ? 12 : 3 }, (_, index) => `${year}-${String(start + index).padStart(2, '0')}`);

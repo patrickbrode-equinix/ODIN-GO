@@ -224,8 +224,50 @@
   let lastPageFocus = null;
   document.addEventListener("focusin", (event) => {
     const target = event.target;
-    if (target instanceof Element && target !== host && !host.contains(target)) lastPageFocus = target;
+    if (target instanceof Element && target !== host && !host.contains(target) && !target.closest(`[${NAV_ENTRY_ATTRIBUTE}]`)) lastPageFocus = target;
   }, { capture: true, passive: true });
+
+  // After closing: is the Jarvis page really free? Logs what lies on top of the page and repairs the one case we can
+  // influence (our own host element). The line in the browser console tells us the cause if buttons ever hang.
+  function verifyPageInteractive() {
+    try {
+      if (backdrop.classList.contains("open")) return;
+      const entryRect = navEntry && navEntry.isConnected ? navEntry.getBoundingClientRect() : null;
+      const points = [
+        [window.innerWidth / 2, 40],
+        [window.innerWidth / 2, window.innerHeight / 2],
+        entryRect ? [entryRect.left + entryRect.width / 2, entryRect.top + entryRect.height / 2] : [window.innerWidth / 2, window.innerHeight - 30],
+      ];
+      const probes = points.map(([x, y]) => {
+        const element = document.elementFromPoint(x, y);
+        return {
+          at: `${Math.round(x)},${Math.round(y)}`,
+          element: element ? `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}.${String(element.className || "").toString().slice(0, 40)}` : "none",
+          ours: Boolean(element) && (element === host || host.contains(element)),
+          pointerEvents: element ? window.getComputedStyle(element).pointerEvents : "",
+        };
+      });
+      const state = {
+        probes,
+        hasFocus: document.hasFocus(),
+        activeElement: document.activeElement ? document.activeElement.tagName.toLowerCase() : "none",
+        htmlInert: document.documentElement.inert === true,
+        bodyInert: document.body.inert === true,
+        bodyPointerEvents: window.getComputedStyle(document.body).pointerEvents,
+        htmlPointerEvents: window.getComputedStyle(document.documentElement).pointerEvents,
+      };
+      if (probes.some((probe) => probe.ours)) {
+        // Something of ours is on top although the workspace is closed: recreate the host element.
+        host.remove();
+        document.documentElement.appendChild(host);
+        log("Nachprüfung nach dem Schließen: ODIN GO lag noch über der Seite und wurde entfernt", state);
+      } else {
+        log("Nachprüfung nach dem Schließen: Seite ist frei", state);
+      }
+    } catch (error) {
+      log("Nachprüfung nach dem Schließen fehlgeschlagen", String(error));
+    }
+  }
 
   function setWorkspaceOpen(open) {
     if (open) {
@@ -245,11 +287,9 @@
     } else {
       // Hand the focus back to Jarvis so its buttons react at once after closing.
       try { iframe.blur(); } catch { /* cross-origin frames may refuse */ }
-      try {
-        const target = focusBeforeOpen && focusBeforeOpen.isConnected ? focusBeforeOpen : document.body;
-        if (typeof target.focus === "function") target.focus({ preventScroll: true });
-        window.focus();
-      } catch { /* focus is best effort */ }
+      // Deliberately no focus() on a Jarvis element: Mendix widgets run on-enter/on-leave microflows on focus changes,
+      // which re-render the page. Only the window itself gets the focus back.
+      try { window.focus(); } catch { /* focus is best effort */ }
       focusBeforeOpen = null;
       // Closed means closed: the embedded app is emptied, so it cannot keep focus, a mouse capture or timers
       // behind the Jarvis page (this was the problem after closing the full-screen window). Opening loads it again.
@@ -258,6 +298,7 @@
       iframeSessionSignature = "";
       window.clearTimeout(iframeLoadTimeout);
       window.setTimeout(() => { if (!backdrop.classList.contains("open")) iframe.src = "about:blank"; }, 0);
+      window.setTimeout(verifyPageInteractive, 600);
       window.requestAnimationFrame(() => positionLauncher());
     }
   }
@@ -424,29 +465,58 @@
   let cachedNavAnchorAt = 0;
   let cachedNavLabel = null;
   let lastLauncherPlacement = "";
+  const NAV_LABELS = ["Priority List", "Smart Hands", "Trouble Tickets", "CC Installs", "Installs", "Deinstalls", "Other Activities", "IBX Request Central", "Equinix Service Hub"];
+  let cachedNavBar = null;
+  let cachedNavItems = [];
+
+  /**
+   * Finds the real bottom navigation by its nine menu names: every name must sit in the lower part of the page,
+   * the closest common ancestor is the bar, and the bar's direct children that contain a name are the entries.
+   * Returns the first entry or null (then the floating button is used).
+   */
   function findBottomNavAnchor() {
-    // The text search walks the whole page: reuse the entry while it is still on the page and
-    // search again only when it is gone or after 30 seconds.
-    if (cachedNavAnchor && cachedNavAnchor.isConnected && Date.now() - cachedNavAnchorAt < 30_000) return cachedNavAnchor;
+    // The text search is cheap but not free: reuse the result while it is still on the page.
+    if (cachedNavAnchor && cachedNavAnchor.isConnected && cachedNavBar?.isConnected && Date.now() - cachedNavAnchorAt < 30_000) return cachedNavAnchor;
     cachedNavAnchor = null;
     cachedNavLabel = null;
+    cachedNavBar = null;
+    cachedNavItems = [];
     cachedNavAnchorAt = Date.now();
-    const result = document.evaluate("//*[normalize-space(text())='Priority List']", document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    const condition = NAV_LABELS.map((label) => `normalize-space(text())='${label}'`).join(" or ");
+    const result = document.evaluate(`//*[${condition}]`, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    const labels = [];
     for (let index = 0; index < result.snapshotLength; index++) {
       const label = result.snapshotItem(index);
-      if (!label || host.contains(label)) continue;
+      if (!label || host.contains(label) || label.closest(`[${NAV_ENTRY_ATTRIBUTE}]`)) continue;
       const rect = label.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0 || rect.top < window.innerHeight * 0.75) continue;
-      // The navigation entry: the widest ancestor that is still a single item (not the whole bar).
-      let item = label;
-      while (item.parentElement && item.parentElement.getBoundingClientRect().width < window.innerWidth * 0.3) item = item.parentElement;
-      cachedNavAnchor = item;
-      cachedNavLabel = label;
-      return item;
+      if (rect.width <= 0 || rect.height <= 0 || rect.top < window.innerHeight * 0.7) continue;
+      labels.push(label);
     }
-    return null;
-  }
+    if (labels.length < 3) return null;
 
+    // closest common ancestor of all names
+    let bar = labels[0].parentElement;
+    while (bar && !labels.every((label) => bar.contains(label))) bar = bar.parentElement;
+    if (!bar || bar.getBoundingClientRect().width < window.innerWidth * 0.5) return null;
+
+    // entries: the direct children of the bar that contain a name (the same level for every name)
+    const items = [];
+    for (const label of labels) {
+      let item = label;
+      while (item.parentElement && item.parentElement !== bar) item = item.parentElement;
+      if (item.parentElement === bar && !items.includes(item)) items.push(item);
+    }
+    items.sort((left, right) => left.getBoundingClientRect().left - right.getBoundingClientRect().left);
+    if (items.length < 3) return null;
+    const tops = items.map((item) => item.getBoundingClientRect().top);
+    if (Math.max(...tops) - Math.min(...tops) > 12) return null; // no single row: not the bar
+
+    cachedNavBar = bar;
+    cachedNavItems = items;
+    cachedNavAnchor = items[0];
+    cachedNavLabel = firstTextElement(items[0]);
+    return items[0];
+  }
   /* ── ODIN GO entry inside the Jarvis bottom navigation ──
      The entry is a copy of an existing (inactive) Jarvis entry, so size, font, colours, hover and above all the
      spacing come from the page itself: the bar distributes all entries evenly, ours included. If the bar cannot be
@@ -489,15 +559,20 @@
     navEntry = null;
   }
 
-  function buildNavEntry(template) {
+  function buildNavEntry(template, entries) {
     const label = firstTextElement(template);
     if (!label) return null;
     const labelStyle = window.getComputedStyle(label);
     const labelRect = label.getBoundingClientRect();
+    // Jarvis draws the footer icons as a ::before pseudo-element (30x30 background image), not as an element.
+    const pseudoStyle = window.getComputedStyle(template, "::before");
+    const pseudoIcon = Boolean(pseudoStyle.content) && !["none", "normal"].includes(pseudoStyle.content)
+      && parseFloat(pseudoStyle.width) >= 10 && parseFloat(pseudoStyle.height) >= 10;
+    const siblingEntries = (entries && entries.length ? entries : [template]).filter((child) => child !== navEntry);
     // The icon is the largest element above the label (an img, svg or a wrapper around a font icon).
     let icon = null;
     let largest = 0;
-    for (const element of template.querySelectorAll("*")) {
+    for (const element of (pseudoIcon ? [] : template.querySelectorAll("*"))) {
       if (element === label || label.contains(element) || element.contains(label)) continue;
       const rect = element.getBoundingClientRect();
       if (rect.width < 10 || rect.height < 10 || rect.width > 90 || rect.height > 90 || rect.bottom > labelRect.top + 4) continue;
@@ -510,12 +585,27 @@
     if (!labelPath) return null;
 
     const clone = template.cloneNode(true);
+    // The copy must never look like one of the page's own widgets. Mendix (Dojo/dijit) identifies widgets by the
+    // attribute widgetid and finds them by their unique names (mx-name-menuBar3-0): a duplicate confuses its widget
+    // registry, its focus tracking and its event handling. So every identifying attribute and every unique name is removed;
+    // the shared classes stay, so the copy still looks exactly like the other entries.
     for (const element of [clone, ...clone.querySelectorAll("*")]) {
-      element.removeAttribute("id");
-      element.removeAttribute("href");
-      element.removeAttribute("aria-current");
-      element.removeAttribute("aria-selected");
-      for (const token of [...element.classList]) if (/active|selected|current/i.test(token)) element.classList.remove(token);
+      for (const attribute of [...element.attributes]) {
+        const name = attribute.name.toLowerCase();
+        if (name === "widgetid" || name === "id" || name === "href" || name === "name" || name === "for" || name.startsWith("data-") || name.startsWith("aria-controls") || name === "aria-current" || name === "aria-selected" || name === "onclick") {
+          element.removeAttribute(attribute.name);
+        }
+      }
+      for (const token of [...element.classList]) {
+        if (/active|selected|current/i.test(token) || /^mx-name-.+-\d+$/.test(token) || /^mx-name-index-/.test(token)) element.classList.remove(token);
+      }
+    }
+    if (pseudoIcon) {
+      // Keep only the classes every entry shares (layout, font, hover colour); entry-specific ones (e.g. PL-link)
+      // select the icon image and the badge must not be copied.
+      const shared = [...template.classList].filter((token) => siblingEntries.every((entry) => entry.classList.contains(token)));
+      clone.className = shared.join(" ");
+      clone.querySelectorAll("[class*=badge i]").forEach((badge) => badge.remove());
     }
     clone.setAttribute(NAV_ENTRY_ATTRIBUTE, "1");
     clone.setAttribute("role", "button");
@@ -528,6 +618,17 @@
     if (!cloneLabel) return null;
     cloneLabel.textContent = "ODIN GO";
 
+    if (pseudoIcon) {
+      const activeSibling = siblingEntries.map((entry) => firstTextElement(entry)).find((element) => element && isGreenish(window.getComputedStyle(element).color));
+      applyNavEntryIconStyle({
+        width: parseFloat(pseudoStyle.width),
+        height: parseFloat(pseudoStyle.height),
+        color: labelStyle.color,
+        hoverColor: activeSibling ? window.getComputedStyle(activeSibling).color : "#7ac558",
+      });
+      attachNavEntryEvents(clone);
+      return clone;
+    }
     const size = iconRect ? Math.round(Math.min(iconRect.width, iconRect.height)) : 24;
     const holder = document.createElement("span");
     holder.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="16.5" rx="2.4"/><path d="M3 9.6h18M8 2.6v3.8M16 2.6v3.8"/><g fill="currentColor" stroke="none"><rect x="6.2" y="12.2" width="3" height="2.4" rx=".6"/><rect x="10.5" y="12.2" width="3" height="2.4" rx=".6"/><rect x="14.8" y="12.2" width="3" height="2.4" rx=".6"/><rect x="6.2" y="16.3" width="3" height="2.4" rx=".6"/><rect x="10.5" y="16.3" width="3" height="2.4" rx=".6"/></g></svg>`;
@@ -546,34 +647,74 @@
       cloneLabel.parentNode?.insertBefore(svg, cloneLabel);
     }
 
+    attachNavEntryEvents(clone);
+    return clone;
+  }
+
+  function attachNavEntryEvents(entry) {
     const open = (event) => {
       event.preventDefault();
       event.stopPropagation();
       void openWorkspace();
     };
-    clone.addEventListener("click", open);
-    clone.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") open(event); });
-    return clone;
+    entry.addEventListener("click", open);
+    entry.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") open(event); });
   }
+
+  // Icon of the entry as a ::before background image, exactly like the Jarvis entries (same box, same position).
+  function applyNavEntryIconStyle({ width, height, color, hoverColor }) {
+    const svg = (stroke) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16.5" rx="2.4"/><path d="M3 9.6h18M8 2.6v3.8M16 2.6v3.8"/><g fill="${stroke}" stroke="none"><rect x="6.2" y="12.2" width="3" height="2.4" rx=".6"/><rect x="10.5" y="12.2" width="3" height="2.4" rx=".6"/><rect x="14.8" y="12.2" width="3" height="2.4" rx=".6"/><rect x="6.2" y="16.3" width="3" height="2.4" rx=".6"/><rect x="10.5" y="16.3" width="3" height="2.4" rx=".6"/></g></svg>`;
+    const uri = (stroke) => `url("data:image/svg+xml,${encodeURIComponent(svg(stroke))}")`;
+    let style = document.getElementById("odin-go-nav-style");
+    if (!style) {
+      style = document.createElement("style");
+      style.id = "odin-go-nav-style";
+      document.head.appendChild(style);
+    }
+    style.textContent = `[${NAV_ENTRY_ATTRIBUTE}]::before{content:"";background:${uri(color)} no-repeat center / ${Math.round(width)}px ${Math.round(height)}px !important}
+[${NAV_ENTRY_ATTRIBUTE}]:hover::before{background-image:${uri(hoverColor)} !important}`;
+  }
+
+  // Off on purpose: every insert/remove inside the Mendix bar triggers Mendix's own resize detection, which re-runs
+  // _loadAndShowContent/_showPage and its microflows (seen in the console stack: removeNavEntry -> childList -> _showPage).
+  // That left Jarvis buttons "clickable but nothing loads". The floating button below never touches the page's DOM.
+  const INJECT_INTO_PAGE_NAV = false;
 
   function injectNavEntry(anchor) {
-    const parent = anchor.parentElement;
-    // Only the real bar (it spans the page); an inner wrapper is not a place for a new entry.
-    if (!parent || parent.getBoundingClientRect().width < window.innerWidth * 0.5) return false;
-    if (navEntry && navEntry.isConnected && navEntry.parentElement === parent) return true;
+    if (!INJECT_INTO_PAGE_NAV) return false;
+    const bar = cachedNavBar;
+    const items = cachedNavItems.filter((item) => item.isConnected && item !== navEntry);
+    if (!bar || items.length < 3 || !items.includes(anchor)) return false;
+    if (navEntry && navEntry.isConnected && navEntry.parentElement === bar) return true;
     removeNavEntry();
-    const siblings = [...parent.children].filter((child) => child.getBoundingClientRect().width > 0);
-    const plain = siblings.find((child) => {
-      const label = firstTextElement(child);
+    const plain = items.find((item) => {
+      const label = firstTextElement(item);
       return label && !isGreenish(window.getComputedStyle(label).color);
     });
-    const entry = buildNavEntry(plain || anchor);
+    const entry = buildNavEntry(plain || items[0], items);
     if (!entry) return false;
-    parent.insertBefore(entry, siblings[0] || anchor);
+    bar.insertBefore(entry, items[0]);
+    // The entry must sit in the same row as the others (same top, comparable height); otherwise take it out again.
+    const entryRect = entry.getBoundingClientRect();
+    const referenceRect = items[0].getBoundingClientRect();
+    const sameRow = entryRect.width > 0 && Math.abs(entryRect.top - referenceRect.top) <= 10 && Math.abs(entryRect.height - referenceRect.height) <= 14;
+    if (!sameRow) {
+      entry.remove();
+      log("ODIN-GO-Eintrag passt nicht in die Leiste und wurde nicht eingefügt", {
+        entry: { top: Math.round(entryRect.top), height: Math.round(entryRect.height), width: Math.round(entryRect.width) },
+        reference: { top: Math.round(referenceRect.top), height: Math.round(referenceRect.height) },
+        bar: `${bar.tagName.toLowerCase()}.${String(bar.className || "").slice(0, 60)}`,
+      });
+      return false;
+    }
     navEntry = entry;
+    log("ODIN-GO-Eintrag in die Leiste eingefügt", {
+      bar: `${bar.tagName.toLowerCase()}.${String(bar.className || "").slice(0, 60)}`,
+      entries: items.length,
+      template: `${(plain || items[0]).tagName.toLowerCase()}.${String((plain || items[0]).className || "").slice(0, 60)}`,
+    });
     return true;
   }
-
   async function openWorkspace() {
     setWorkspaceOpen(true);
     await loadSettings();

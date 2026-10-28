@@ -78,3 +78,12 @@ eine einzige Änderung der Richtlinie. Den Schlüssel nicht in das Repository sc
 Der Benutzer wird zuerst aus dem sichtbaren Jarvis-Profil gelesen. Ist es nicht geöffnet oder anders aufgebaut,
 liest die Erweiterung ihn aus der Mendix-Sitzung der Seite (`mx.session`). Dafür braucht sie die
 Berechtigung `scripting`.
+
+## Diagnose, wenn Jarvis-Buttons nicht reagieren
+
+Nach jedem Schließen des ODIN-GO-Fensters prüft die Erweiterung, ob die Jarvis-Seite wirklich frei ist, und schreibt eine Zeile in die Browser-Konsole (F12, Reiter „Konsole“, Filter „ODIN GO“):
+
+- `Nachprüfung nach dem Schließen: Seite ist frei` mit den Messwerten (welches Element liegt an drei Stellen oben, Fokus, `inert`, `pointer-events`).
+- Liegt noch etwas von ODIN GO über der Seite, wird es entfernt und die Zeile sagt es.
+
+Bitte bei einem Hänger diese Zeile (aufgeklappt) schicken. Der ODIN-GO-Eintrag in der unteren Leiste wird als Kopie eines vorhandenen Jarvis-Eintrags eingefügt (gleiche Klassen, Größe, Schrift, Abstand); das Symbol ist wie bei Jarvis ein `::before`-Hintergrundbild.

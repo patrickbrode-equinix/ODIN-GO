@@ -82,6 +82,24 @@ for (const employee of employees) {
   const options = employees.filter((other) => other !== employee);
   employee.colleagues = rng.shuffle(options).slice(0, rng.int(1, 2)).map((other) => other.userId);
 }
+// --mutual N: N groups of 2-3 employees who wish each other as colleagues (some with the same shift wish, some flexible).
+const mutualGroups = [];
+if (args.mutual) {
+  const pool = rng.shuffle(employees.filter((employee) => !employee.preferred.includes('N')));
+  let cursor = 0;
+  for (let index = 0; index < Number(args.mutual) && cursor + 3 <= pool.length; index++) {
+    const size = index % 2 === 0 ? 3 : 2;
+    const members = pool.slice(cursor, cursor + size);
+    cursor += size;
+    const shared = [['E1'], ['L1'], []][index % 3];
+    // every fourth group: different lists with one shift in common (L1)
+    const overlapping = index % 4 === 3 ? [['E1', 'L1'], ['L1', 'E2'], ['L1', 'E2']] : null;
+    for (const [memberIndex, member] of members.entries()) {
+      Object.assign(member, { preferred: overlapping ? [...overlapping[memberIndex]] : [...shared], unwanted: [], blocked: [], maxNights: member.maxNights, colleagues: members.filter((other) => other !== member).map((other) => other.userId) });
+    }
+    mutualGroups.push(members.map((member) => member.name));
+  }
+}
 const dbsPoolSize = Math.min(4, Math.floor(employeeCount / 8));
 const dbsPool = rng.shuffle(employees).slice(0, dbsPoolSize).map((employee, index) => ({
   employee,
@@ -356,13 +374,13 @@ function audit(result, year, month, carryIn) {
 
 /* ---------- run ---------- */
 
-const report = { seed, employees: employeeCount, months: [], dbsPool: dbsPool.map((entry) => ({ name: entry.employee.name, outside: entry.outside })), coloPool };
+const report = { seed, mutualGroups, employees: employeeCount, months: [], dbsPool: dbsPool.map((entry) => ({ name: entry.employee.name, outside: entry.outside })), coloPool };
 let year = startYear;
 let month = startMonth;
 for (let index = 0; index < monthCount; index++) {
   addAbsences(year, month);
   const numDays = new Date(year, month, 0).getDate();
-  const result = await generateShiftPlan(year, month, numDays, 'simulation');
+  const result = await generateShiftPlan(year, month, numDays, 'simulation', { varietySeed: Number(args.vseed ?? 0) });
   if (process.env.DEBUG_DAY) {
     const debug = JSON.parse(process.env.DEBUG_DAY);
     if (debug.year === year && debug.mon === month) {

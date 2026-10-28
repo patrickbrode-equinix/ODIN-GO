@@ -368,6 +368,8 @@ interface AdvancedPlanningSettings {
   adminFlagsEnabled: boolean;
   /** 0-100: how strongly the generator avoids repeating the same blocks (60 = default). */
   varietyPriority: number;
+  /** Late+night wishers may work Thursday/Friday late shifts above the weekday maximum (marked in the draft). */
+  lateOverflowThuFri: boolean;
 }
 
 type ColoShiftType = 'early' | 'late' | 'night';
@@ -421,6 +423,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   issuePriorityMode: 'balanced',
   adminFlagsEnabled: false,
   varietyPriority: 60,
+  lateOverflowThuFri: false,
 };
 
 const DEFAULT_DBS_CONFIG: DbsConfig = {
@@ -563,6 +566,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     issuePriorityMode: (settings['shiftplan.issue_priority_mode'] as AdvancedPlanningSettings['issuePriorityMode']) || DEFAULT_ADVANCED_SETTINGS.issuePriorityMode,
     adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
     varietyPriority: Math.min(100, Math.max(0, parseNumberSetting(settings['shiftplan.variety_priority'], DEFAULT_ADVANCED_SETTINGS.varietyPriority))),
+    lateOverflowThuFri: parseBooleanSetting(settings['shiftplan.late_overflow_thu_fri'], DEFAULT_ADVANCED_SETTINGS.lateOverflowThuFri),
   };
 }
 
@@ -1008,6 +1012,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
         'shiftplan.variety_priority': advancedSettings.varietyPriority,
+        'shiftplan.late_overflow_thu_fri': advancedSettings.lateOverflowThuFri,
         ...wishStrengthPayload(wishStrengths),
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
@@ -1257,6 +1262,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.issue_priority_mode': advancedSettings.issuePriorityMode,
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
         'shiftplan.variety_priority': advancedSettings.varietyPriority,
+        'shiftplan.late_overflow_thu_fri': advancedSettings.lateOverflowThuFri,
         ...wishStrengthPayload(wishStrengths),
         'shiftplan.dbs_enabled': dbsConfig.enabled,
         'shiftplan.dbs_weekdays': JSON.stringify([1, 2, 3, 4, 5, 6, 0]),
@@ -2114,6 +2120,14 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               </div>
               <p className="mt-2 text-xs leading-5 text-slate-400">{isGerman ? 'Ein Regler statt zwei gegensätzlicher Einstellungen (Stabilität und Abwechslung): niedrig = Mitarbeitende bleiben möglichst bei ihrer Schichtart, hoch = der Plan wechselt Früh, Spät und Nacht stärker durch. Wünsche und harte Regeln gehen immer vor.' : 'One slider instead of two opposite settings (stability and variety): low = employees stay with their shift type, high = the plan rotates early, late and night more. Wishes and hard rules always come first.'}</p>
             </div>
+
+            <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <input type="checkbox" checked={advancedSettings.lateOverflowThuFri} onChange={(event) => setAdvancedSettings({ ...advancedSettings, lateOverflowThuFri: event.target.checked })} className="mt-1 rounded border-white/20 bg-slate-950" />
+              <span>
+                <span className="block font-medium">{isGerman ? 'Spätschicht Do/Fr über der Obergrenze erlauben' : 'Allow Thursday/Friday late shifts above the maximum'}</span>
+                <span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Wer Nachtschicht und Spätschicht als Wunsch angegeben hat, darf donnerstags und freitags auch dann in die Spätschicht, wenn die maximale Besetzung dort schon erreicht ist. Diese Einsätze werden im Draft als „Überbesetzung" markiert.' : 'Employees who wished for both night and late shifts may work Thursday and Friday late shifts even when the maximum staffing is already reached. These shifts are marked as overstaffing in the draft.'}</span>
+              </span>
+            </label>
 
             <div>
               <label className="text-sm font-medium text-slate-200">{isGerman ? 'Stunden gleichmäßig verteilen' : 'Level hours between employees'}</label>

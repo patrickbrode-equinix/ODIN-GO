@@ -87,6 +87,8 @@ export function createFakePlanningDb(overrides = {}) {
     )),
     // month label -> [{ employee_name, day, shift_code }] (previous months feed the carry-over state)
     shiftHistory: new Map(),
+    // 'YYYY-MM' -> [{ employee_name, day, shift_code }]: drafts of previous months (fallback of the carry-over)
+    draftHistory: new Map(),
     queries: [],
     ...overrides,
   };
@@ -127,6 +129,10 @@ export function createFakePlanningDb(overrides = {}) {
       const [label, monthId, minDay] = params;
       const history = db.shiftHistory.get(label) || db.shiftHistory.get(monthId) || [];
       return rows(history.filter((row) => row.day >= minDay).map((row) => ({ month: label, ...row })));
+    }
+    if (/SELECT shifts_json FROM shiftplan_drafts WHERE month = \$1/.test(sql)) {
+      const draft = db.draftHistory.get(params[0]);
+      return rows(draft ? [{ shifts_json: draft }] : []);
     }
     if (/FROM app_settings/.test(sql)) {
       if (/key = ANY\(\$1::text\[\]\)/.test(sql)) return rows((params[0] || []).flatMap(setting));

@@ -9,9 +9,11 @@ export async function generatePeriodDrafts({ year, quarter = null, note, title, 
   const normalizedDescription = normalizeMetaText(description, MAX_DESCRIPTION_LENGTH) ?? null;
   const generatedPlans = [];
   let carryState = null;
+  // One seed per batch: the months of a batch differ from each other (different weeks) but the batch differs from the previous one.
+  const varietySeed = Math.floor(Math.random() * 1_000_000) + 1;
   for (const month of months) {
     const mon = Number(month.slice(5));
-    const result = await generateMonth(year, mon, new Date(year, mon, 0).getDate(), createdBy, { carryState });
+    const result = await generateMonth(year, mon, new Date(year, mon, 0).getDate(), createdBy, { carryState, varietySeed });
     carryState = result.carryState;
     generatedPlans.push({ month, result });
   }

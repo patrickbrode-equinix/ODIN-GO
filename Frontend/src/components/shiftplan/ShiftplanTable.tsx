@@ -71,6 +71,9 @@ interface ShiftplanTableProps {
 
   /** Cells planned for Colo; key `${employee}|${YYYY-MM-DD}` */
   coloMarks?: ColoMarkLookup;
+  /** Draft marks: late shifts above the weekday maximum (admin option) and manually changed cells; key `${employee}|${day}` */
+  overflowMarks?: Set<string>;
+  manualMarks?: Set<string>;
 }
 
 
@@ -147,6 +150,8 @@ export function ShiftplanTable({
 
   attendanceMap = {},
   coloMarks,
+  overflowMarks,
+  manualMarks,
 }: ShiftplanTableProps) {
   const tableRef = useRef<HTMLTableElement | null>(null);
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
@@ -699,6 +704,17 @@ export function ShiftplanTable({
                             {coloMark && (
                               <div className="absolute bottom-px left-1/2 z-20 -translate-x-1/2">
                                 <ColoBadge mark={coloMark} isGerman={isGerman} />
+                              </div>
+                            )}
+
+                            {overflowMarks?.has(`${name}|${day}`) && (
+                              <div className="absolute right-px top-px z-20" title={isGerman ? "Überbesetzung Spätschicht (Do/Fr): über der Obergrenze, vom Admin erlaubt" : "Late overstaffing (Thu/Fri): above the maximum, allowed by the admin"}>
+                                <span className="rounded border border-orange-400/70 bg-orange-500/30 px-0.5 text-[8px] font-black leading-[11px] text-orange-100">Ü</span>
+                              </div>
+                            )}
+                            {manualMarks?.has(`${name}|${day}`) && (
+                              <div className="absolute left-px top-px z-20" title={isGerman ? "Manuell geändert" : "Changed manually"}>
+                                <span className="rounded border border-sky-400/60 bg-sky-500/25 px-0.5 text-[8px] font-black leading-[11px] text-sky-100">✎</span>
                               </div>
                             )}
 

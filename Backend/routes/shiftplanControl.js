@@ -11,7 +11,7 @@ import pool from '../db.js';
 import { applyActiveShiftModes } from '../lib/shiftModes.js';
 import { config } from '../config/index.js';
 import ExcelJS from 'exceljs';
-import { getPlanningMonths, groupPlanningDrafts, normalizeMetaText, sanitizeCellText, buildDraftSheetHeaderText, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../lib/planningPeriods.js';
+import { assertPlanningYear, getPlanningMonths, groupPlanningDrafts, normalizeMetaText, sanitizeCellText, buildDraftSheetHeaderText, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../lib/planningPeriods.js';
 import { generatePeriodDrafts } from '../services/planningPeriodDrafts.js';
 import { recomputeConstraintsInternal } from './constraints.js';
 import { syncEmployeeContacts } from '../lib/employeeContactsSync.js';
@@ -75,6 +75,7 @@ import {
 } from '../lib/employeeNameResolution.js';
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
+import { buildCostControl, focusCostControl } from '../lib/costControl.js';
 import { buildColoRolePlan, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
@@ -273,6 +274,11 @@ async function loadYearToDateHourBalances({ year, month, employees, employeeName
   return balances;
 }
 
+// Seed that makes every generated draft look different when the variety slider is high (see getVarietyJitter).
+function newVarietySeed() {
+  return Math.floor(Math.random() * 1_000_000) + 1;
+}
+
 async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftDefinitions, employeeNameLookup }) {
   const previousYear = month === 1 ? year - 1 : year;
   const previousMonth = month === 1 ? 12 : month - 1;
@@ -285,14 +291,34 @@ async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftD
   );
   const employeeSet = new Set(employees);
 
-  const { rows } = await pool.query(
+  const lookbackFromDay = Math.max(previousMonthDays - 13, 1);
+  let { rows } = await pool.query(
     `SELECT month, employee_name, day, shift_code
        FROM shifts
       WHERE (month = $1 OR month = $2)
         AND day >= $3
       ORDER BY employee_name, day`,
-    [previousMonthLabel, previousMonthId, Math.max(previousMonthDays - 13, 1)]
+    [previousMonthLabel, previousMonthId, lookbackFromDay]
   );
+  // The previous month is not in the live plan yet (e.g. March while April is planned): use its draft
+  // (activated first, then the newest version) so the transition between the months is still respected.
+  if (rows.length === 0) {
+    try {
+      const { rows: draftRows } = await pool.query(
+        `SELECT shifts_json FROM shiftplan_drafts
+          WHERE month = $1 AND status <> 'failed'
+          ORDER BY (status = 'activated') DESC, version DESC
+          LIMIT 1`,
+        [previousMonthId]
+      );
+      const draftShifts = typeof draftRows[0]?.shifts_json === 'string' ? JSON.parse(draftRows[0].shifts_json) : draftRows[0]?.shifts_json;
+      rows = (Array.isArray(draftShifts) ? draftShifts : [])
+        .filter((entry) => Number(entry?.day) >= lookbackFromDay)
+        .map((entry) => ({ month: previousMonthId, employee_name: entry.employee_name, day: entry.day, shift_code: entry.shift_code }));
+    } catch (error) {
+      console.warn('Previous month draft unavailable for the carry-over:', error.message);
+    }
+  }
 
   const rowsByEmployee = new Map();
   for (const row of rows) {
@@ -1048,6 +1074,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // Admin setting "Abwechslung" (0-100): how strongly the plan avoids repeating the same blocks.
   const varietySetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.variety_priority' LIMIT 1");
   const varietyPriority = normalizeVarietyPriority(varietySetting.rows[0]?.value);
+  // Admin setting: employees who wished for late AND night may work Thursday/Friday late shifts above the weekday maximum.
+  const lateOverflowSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.late_overflow_thu_fri' LIMIT 1");
+  const lateOverflowEnabled = parseBooleanAppSetting(typeof lateOverflowSetting.rows[0]?.value === 'string'
+    ? lateOverflowSetting.rows[0].value.replace(/^"|"$/g, '')
+    : lateOverflowSetting.rows[0]?.value, false);
+  // Different pattern for every generated draft when the slider is high; stored in the plan report for reproduction.
+  const varietySeed = Number.isFinite(Number(options.varietySeed)) ? Math.trunc(Number(options.varietySeed)) : 0;
   // Admin setting "Überstunden": unlimited (default) or at most N hours above the target hours.
   const overtimeRows = (await pool.query(
     'SELECT key, value FROM app_settings WHERE key = ANY($1::text[])',
@@ -1084,6 +1117,18 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         addColleaguePair(employeeName, colleagueName);
         addColleaguePair(colleagueName, employeeName);
       }
+    }
+  }
+
+  // Colleagues who wish each other (A names B and B names A). Their shared preferred shift type is rewarded
+  // independent of the planning order, so a pair or trio ends up in the same shift (see getSharedPreferredTypes).
+  const mutualColleagueMap = new Map();
+  {
+    const wishKeys = new Set(preferredColleagueWishes.map((wish) => `${wish.employee}|${wish.colleague}`));
+    for (const wish of preferredColleagueWishes) {
+      if (!wishKeys.has(`${wish.colleague}|${wish.employee}`)) continue;
+      if (!mutualColleagueMap.has(wish.employee)) mutualColleagueMap.set(wish.employee, new Set());
+      mutualColleagueMap.get(wish.employee).add(wish.colleague);
     }
   }
 
@@ -1202,6 +1247,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     wishesDenied: 0,
     rulesApplied: [],
   };
+  planReport.varietySeed = varietyPriority > 60 ? varietySeed : 0;
 
   const empStats = {};
   const empDayAssignment = {};
@@ -1231,6 +1277,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       employeeNameLookup,
     });
   }
+  // Documented in the plan: the previous month (December of the year before for January) feeds the transition.
+  planReport.previousMonthCarry = {
+    month: mon === 1 ? `${year - 1}-12` : `${year}-${String(mon - 1).padStart(2, '0')}`,
+    employees: Object.keys(carryState || {}).length,
+  };
   const configuredMonthlyTargetHours = parseTargetHoursValue(planConfig.monthly_target_hours, 174);
   // Month target follows the Mon-Fri working days of the month (Ø = configured monthly target).
   const targetHours = getWorkdayBasedTargetHours({
@@ -1323,6 +1374,40 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return earlyShiftCodes.every((code) => evaluateShiftWishForPrefs(prefs, code).hardBlocked);
   }));
   planReport.lateNightOnlyEmployees = [...lateNightOnlyEmployees];
+  // Late+night wishers (Admin option): may exceed the weekday late maximum on Thursday and Friday.
+  const lateOverflowEligible = new Set();
+  if (lateOverflowEnabled) {
+    const lateCodes = shiftDefs.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'late').map((definition) => definition.code);
+    const nightCodes = shiftDefs.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'night').map((definition) => definition.code);
+    for (const employee of activeEmployees) {
+      const prefs = preferencesForDate(employee, `-01`);
+      if (lateCodes.some((code) => isShiftPreferredByEmployeePreference(prefs, code))
+        && nightCodes.some((code) => isShiftPreferredByEmployeePreference(prefs, code))) lateOverflowEligible.add(employee);
+    }
+  }
+  planReport.lateOverflowEnabled = lateOverflowEnabled;
+  planReport.lateOverflowEligible = [...lateOverflowEligible];
+  planReport.lateOverflow = [];
+  const isLateOverflowExempt = (employee, day, typeKey) => lateOverflowEligible.has(employee)
+    && typeKey === 'late'
+    && [4, 5].includes(dayOfWeek(year, mon, day));
+  const preferredTypesCache = new Map();
+  const getPreferredTypes = (employee) => {
+    if (!preferredTypesCache.has(employee)) {
+      const prefs = preferencesForDate(employee, `-01`);
+      preferredTypesCache.set(employee, new Set(shiftDefs
+        .filter((definition) => isShiftPreferredByEmployeePreference(prefs, definition.code))
+        .map((definition) => normalizePlanningShiftTypeKey(definition.shift_type))));
+    }
+    return preferredTypesCache.get(employee);
+  };
+  // Shift types two colleagues can share: the overlap of their wishes; if only one of them has a wish, that wish.
+  const getSharedPreferredTypes = (employee, colleague) => {
+    const own = getPreferredTypes(employee);
+    const other = getPreferredTypes(colleague);
+    if (own.size > 0 && other.size > 0) return new Set([...own].filter((type) => other.has(type)));
+    return own.size > 0 ? own : other;
+  };
   const totalWeekendBlocks = countWeekendBlocks(year, mon, numDays);
   // The former skills matrix is intentionally no longer part of planning.
   const featureFlags = { skillsEnabled: false };
@@ -2040,7 +2125,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (!Number.isFinite(typeMaximum)) continue;
       const running = availableForDay.filter((employee) => empSeriesRemaining[employee] > 0
         && availableShiftCodes.has(empSeriesCode[employee])
-        && normalizePlanningShiftTypeKey(shiftSlots.find((slot) => slot.code === empSeriesCode[employee])?.shift_type) === typeKey);
+        && normalizePlanningShiftTypeKey(shiftSlots.find((slot) => slot.code === empSeriesCode[employee])?.shift_type) === typeKey
+        && !isLateOverflowExempt(employee, day, typeKey));
       if (running.length <= typeMaximum) continue;
       const keepOrder = [...running].sort((left, right) => {
         const wantsOff = (employee) => (holidayName && (empPrefsMap.get(employee)?.preferred_holidays || []).includes(holidayName) ? 1 : 0);
@@ -2504,7 +2590,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           });
           score += variety.score;
           if (variety.reason) reasons.push(variety.reason);
-          const varietyJitter = getVarietyJitter({ employee, year, month: mon, weekKey: getWeekendBlockKey(year, mon, day), shiftCode: shiftDef.code, priority: varietyPriority });
+          const varietyJitter = getVarietyJitter({ employee, year, month: mon, weekKey: getWeekendBlockKey(year, mon, day), shiftCode: shiftDef.code, priority: varietyPriority, seed: varietySeed });
           score += varietyJitter;
 
           const previousWorkedType = empLastWorkedShiftType[employee];
@@ -2614,11 +2700,24 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             }
           }
 
+          // Mutual colleague wish: the shift type both prefer (or the one preferred by the one who has a wish) fits this shift.
+          let mutualShared = false;
+          const mutualColleagues = mutualColleagueMap.get(employee);
+          if (mutualColleagues && wishedColleagues && !hardBlocked) {
+            const currentType = normalizePlanningShiftTypeKey(shiftDef.shift_type);
+            mutualShared = [...mutualColleagues].some((colleague) => getSharedPreferredTypes(employee, colleague).has(currentType));
+            if (mutualShared) {
+              score += scaleBonus(prefStrength.colleagues, 250, 40);
+              reasons.push('Gegenseitiger Kollegenwunsch: gemeinsame bevorzugte Schichtart');
+            }
+          }
+
           return {
             emp: employee,
             score: hardBlocked ? Number.NEGATIVE_INFINITY : score,
             reasons,
             hardBlocked,
+            mutualShared,
             preferenceMatch: preferenceMatch && !preferredWishIgnored,
             preferencePenalty,
             coloBoost,
@@ -2632,7 +2731,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             // The candidate order is decided by the open target hours first. Variety moves a candidate
             // by up to about one shift (20 points = 1 hour), so repeating the same block no longer wins
             // against an equally suitable colleague.
-            varietyHours: (variety.score + varietyJitter) / 20,
+            varietyHours: (variety.score + Math.max(-100, Math.min(100, varietyJitter))) / 20,
           };
         });
 
@@ -2672,6 +2771,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           // A stated preferred shift is then the first tie-breaker after all
           // hard safety, recovery, absence and staffing rules have applied.
           if (left.preferenceMatch !== right.preferenceMatch) return left.preferenceMatch ? -1 : 1;
+          // Mutual colleague wishes with a shared preferred shift type: planned into the same shift.
+          if (left.mutualShared !== right.mutualShared) return left.mutualShared ? -1 : 1;
           // Preferred colleagues come right after the employee's own shift wish.
           if (left.colleagueMatches !== right.colleagueMatches) return right.colleagueMatches - left.colleagueMatches;
           if (right.score !== left.score) return right.score - left.score;
@@ -2968,6 +3069,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
     const typeMaximum = getShiftTypeMaximum(typeKey);
     if (!Number.isFinite(typeMaximum)) return true;
+    // Admin option: late+night wishers may work Thursday/Friday late above the maximum (marked as overstaffing).
+    if (isLateOverflowExempt(employee, day, typeKey)) return true;
     const assignedTypeElsewhere = shifts.filter((entry) => Number(entry.day) === Number(day)
       && entry.employee_name !== employee
       && normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type) === typeKey).length;
@@ -3933,9 +4036,23 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       }
     }
     for (const [typeKey, typeMaximum] of Object.entries(staffingMaximums)) {
-      const assignedType = assignmentsToday.filter((entry) => normalizePlanningShiftTypeKey(
+      const entriesOfType = assignmentsToday.filter((entry) => normalizePlanningShiftTypeKey(
         shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type
-      ) === typeKey).length;
+      ) === typeKey);
+      let assignedType = entriesOfType.length;
+      if (assignedType > typeMaximum && lateOverflowEligible.size > 0 && [4, 5].includes(dayOfWeek(year, mon, day)) && typeKey === 'late') {
+        // The exempt people who were added last are the overstaffing; it is marked, not reported as a conflict.
+        const exemptEntries = entriesOfType.filter((entry) => lateOverflowEligible.has(entry.employee_name));
+        const overflowCount = Math.min(exemptEntries.length, assignedType - typeMaximum);
+        for (const entry of exemptEntries.slice(exemptEntries.length - overflowCount)) {
+          planReport.lateOverflow.push({ employee: entry.employee_name, day, date: `${month}-${String(day).padStart(2, '0')}`, code: entry.shift_code });
+          const key = `${entry.employee_name}_${day}`;
+          const existing = explanations[key] || { employee: entry.employee_name, day, code: entry.shift_code, reasons: [] };
+          existing.reasons = [...(existing.reasons || []), 'Überbesetzung Spätschicht (Do/Fr): Nacht- und Spätschicht-Wunsch, Admin-Freigabe über die Obergrenze'];
+          explanations[key] = existing;
+        }
+        assignedType -= overflowCount;
+      }
       if (assignedType > typeMaximum) {
         conflicts.push({
           day,
@@ -4186,6 +4303,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         minStaff: definition.min_staff,
         maxStaff: definition.max_staff,
         durationHours: getShiftDurationHours(definition),
+        startTime: definition.start_time ? String(definition.start_time).slice(0, 5) : null,
+        endTime: definition.end_time ? String(definition.end_time).slice(0, 5) : null,
         dayOverrides: Array.isArray(definition.day_overrides) ? definition.day_overrides : [],
         seriesDays: getShiftSeriesDays(definition),
         startDayOffset: Number.parseInt(String(definition.start_day_offset ?? 0), 10) || 0,
@@ -4308,6 +4427,54 @@ router.get('/drafts/year/:year/full', async (req, res) => {
 /* GET SINGLE DRAFT (with full data)                */
 /* ------------------------------------------------ */
 
+// Shift times of the current definitions: fallback for drafts created before the snapshot contained the times.
+async function loadShiftTimesByCode() {
+  try {
+    const { rows } = await pool.query('SELECT code, start_time, end_time, start_day_offset, end_day_offset FROM shift_definitions');
+    return new Map(rows.map((row) => [String(row.code || '').trim().toUpperCase(), {
+      startTime: row.start_time ? String(row.start_time).slice(0, 5) : null,
+      endTime: row.end_time ? String(row.end_time).slice(0, 5) : null,
+      startDayOffset: row.start_day_offset,
+      endDayOffset: row.end_day_offset,
+    }]));
+  } catch (error) {
+    console.warn('Shift times unavailable for the cost control:', error.message);
+    return new Map();
+  }
+}
+
+// Night, Sunday and holiday supplement hours per week / month / quarter. The quarter (or the whole batch) provides the context.
+async function loadDraftCostControl(draft) {
+  let drafts = [draft];
+  try {
+    const batchId = draft.config_snapshot?.planningBatch?.id;
+    if (batchId) {
+      const { rows } = await pool.query(
+        `SELECT month, shifts_json, config_snapshot FROM shiftplan_drafts
+          WHERE config_snapshot->'planningBatch'->>'id' = $1 AND status <> 'failed'`,
+        [batchId]
+      );
+      if (rows.length) drafts = rows;
+    } else {
+      const [year, mon] = String(draft.month).split('-').map(Number);
+      const firstMonth = Math.floor((mon - 1) / 3) * 3 + 1;
+      const months = [0, 1, 2].map((offset) => `${year}-${String(firstMonth + offset).padStart(2, '0')}`);
+      const { rows } = await pool.query(
+        `SELECT DISTINCT ON (month) month, shifts_json, config_snapshot FROM shiftplan_drafts
+          WHERE month = ANY($1::text[]) AND status <> 'failed'
+          ORDER BY month, (id = $2) DESC, (status = 'activated') DESC, version DESC`,
+        [months, draft.id]
+      );
+      if (rows.length) drafts = rows;
+    }
+    // The shown draft itself always counts with its current (possibly manually edited) shifts.
+    drafts = [...drafts.filter((entry) => entry.month !== draft.month), draft];
+  } catch (error) {
+    console.warn('Cost control context unavailable:', error.message);
+  }
+  return focusCostControl(buildCostControl(drafts, { timesByCode: await loadShiftTimesByCode() }), draft.month);
+}
+
 router.get('/drafts/:id', requireReadableDraft, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM shiftplan_drafts WHERE id = $1', [parseInt(req.params.id)]);
@@ -4334,6 +4501,7 @@ router.get('/drafts/:id', requireReadableDraft, async (req, res) => {
         wish_summary: wishSummary,
         absences,
         manual_employees: manualEmployees,
+        cost_control: await loadDraftCostControl(draft),
       },
     });
   } catch (err) {
@@ -4361,10 +4529,11 @@ router.post('/drafts/generate', requirePageAccess('shiftplan_control', 'write'),
     const [yearStr, monthStr] = month.split('-');
     const year = parseInt(yearStr);
     const mon = parseInt(monthStr);
+    try { assertPlanningYear(year); } catch (error) { return res.status(400).json({ ok: false, error: error.message }); }
     const numDays = daysInMonth(year, mon);
     const createdBy = req.user?.displayName || req.user?.email || req.user?.loginName || 'system';
 
-    const result = await generateShiftPlan(year, mon, numDays, createdBy);
+    const result = await generateShiftPlan(year, mon, numDays, createdBy, { varietySeed: newVarietySeed() });
 
     // Compute next version number
     const verRes = await pool.query(
@@ -4424,6 +4593,9 @@ router.post('/drafts/generate-week', requirePageAccess('shiftplan_control', 'wri
       cursor = new Date(segmentEnd);
       cursor.setDate(cursor.getDate() + 1);
     }
+
+    try { for (const segment of segments) assertPlanningYear(segment.year); }
+    catch (error) { return res.status(400).json({ ok: false, error: error.message }); }
 
     const createdBy = req.user?.displayName || req.user?.email || req.user?.loginName || 'system';
 const generatedPlans = [];
@@ -4812,7 +4984,7 @@ router.patch('/drafts/:id/shifts', requirePageAccess('shiftplan_control', 'write
       [draftId, JSON.stringify(nextShifts), JSON.stringify(nextSnapshot), JSON.stringify(nextFairness)]
     );
 
-    res.json({ ok: true, draft: updatedRows[0], previousShiftCode: previous?.shift_code || '' });
+    res.json({ ok: true, draft: { ...updatedRows[0], cost_control: await loadDraftCostControl(updatedRows[0]) }, previousShiftCode: previous?.shift_code || '' });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -4875,7 +5047,7 @@ router.patch('/drafts/:id/swap', requirePageAccess('shiftplan_control', 'write')
         RETURNING *`,
       [draftId, JSON.stringify(nextShifts), JSON.stringify(nextSnapshot), JSON.stringify(nextFairness)]
     );
-    res.json({ ok: true, draft: updatedRows[0], swapped: { a: { ...a, before: codeA, after: codeB }, b: { ...b, before: codeB, after: codeA } } });
+    res.json({ ok: true, draft: { ...updatedRows[0], cost_control: await loadDraftCostControl(updatedRows[0]) }, swapped: { a: { ...a, before: codeA, after: codeB }, b: { ...b, before: codeB, after: codeA } } });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
@@ -5231,6 +5403,74 @@ function statusFill(status) {
   return { type: 'pattern', pattern: 'solid', fgColor: { argb } };
 }
 
+/** Management sheet "Kostenkontrolle": night and Sunday hours per calendar week, month, quarter and employee. */
+export function addCostControlSheet(workbook, drafts, { timesByCode = new Map() } = {}) {
+  const control = buildCostControl(drafts, { timesByCode });
+  const ws = workbook.addWorksheet('Kostenkontrolle');
+  ws.views = [{ state: 'frozen', ySplit: 3 }];
+  ws.getCell(1, 1).value = 'Kostenkontrolle: Nacht-, Sonntags- und Feiertagszuschläge';
+  ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+  ws.getCell(2, 1).value = 'Zuschlagsstunden aus den Schichtzeiten: Nacht 20-6 Uhr, Sonntag 0-24 Uhr, Feiertag 0-24 Uhr (24.12. und 31.12. ab 12 Uhr). Die unbezahlte Stunde Pause ist abgezogen. Nachtschichten am Sonntag erhalten Nacht- und Sonntagszuschlag; ein Sonntag, der Feiertag ist, steht in beiden Spalten (nicht addieren). Zuordnung zum Starttag der Schicht.';
+  ws.getCell(2, 1).alignment = { wrapText: false };
+  ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
+
+  let row = 4;
+  const writeTable = (title, headers, rows, { totalRow = null } = {}) => {
+    ws.getCell(row, 1).value = title;
+    ws.getCell(row, 1).font = { name: 'Calibri', size: 11, bold: true, color: { argb: '1E3A5F' } };
+    row += 1;
+    headers.forEach((header, index) => { ws.getCell(row, index + 1).value = header; });
+    styleExcelHeaderRow(ws, row, headers.length);
+    row += 1;
+    for (const values of [...rows, ...(totalRow ? [totalRow] : [])]) {
+      const isTotal = totalRow && values === totalRow;
+      values.forEach((value, index) => {
+        const cell = ws.getCell(row, index + 1);
+        cell.value = value;
+        cell.border = EXCEL_THIN_BORDER;
+        cell.font = { name: 'Calibri', size: 10, bold: Boolean(isTotal) };
+        cell.alignment = { horizontal: index === 0 ? 'left' : 'center' };
+        if (isTotal) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E5E7EB' } };
+        if (typeof value === 'number') cell.numFmt = '0.##';
+      });
+      row += 1;
+    }
+    row += 1;
+  };
+  const hoursRow = (label, entry, extra = []) => [label, entry.nightHours, entry.sundayHours, entry.holidayHours, entry.nightShifts, entry.sundayShifts, entry.holidayShifts, ...extra];
+  const header = ['Zeitraum', 'Nachtzuschlag (h)', 'Sonntagszuschlag (h)', 'Feiertagszuschlag (h)', 'Schichten mit Nacht', 'Schichten mit Sonntag', 'Schichten mit Feiertag'];
+  writeTable('Pro Kalenderwoche', [...header, 'Hinweis'], control.weeks.map((week) => hoursRow(
+    `KW ${week.week} (ab ${week.monday.slice(8, 10)}.${week.monday.slice(5, 7)}.${week.monday.slice(0, 4)})`,
+    week,
+    [week.partial ? 'Teilwoche: Tage außerhalb der geplanten Monate fehlen' : '']
+  )));
+  writeTable('Pro Monat', header, control.months.map((entry) => {
+    const [year, mon] = entry.month.split('-').map(Number);
+    return hoursRow(`${MONTH_NAMES_DE[mon]} ${year}`, entry);
+  }));
+  writeTable('Pro Quartal', header, control.quarters.map((entry) => hoursRow(entry.key.replace('-', ' '), entry)), {
+    totalRow: hoursRow('Gesamt', control.total),
+  });
+
+  const monthKeys = control.months.map((entry) => entry.month);
+  const employeeHeader = ['Mitarbeiter', ...monthKeys.flatMap((month) => {
+    const [year, mon] = month.split('-').map(Number);
+    return [`${MONTH_NAMES_DE[mon]} ${year} Nacht (h)`, `${MONTH_NAMES_DE[mon]} ${year} Sonntag (h)`, `${MONTH_NAMES_DE[mon]} ${year} Feiertag (h)`];
+  }), 'Gesamt Nacht (h)', 'Gesamt Sonntag (h)', 'Gesamt Feiertag (h)'];
+  writeTable('Pro Mitarbeiter', employeeHeader, control.employees.map((entry) => [
+    entry.employee,
+    ...monthKeys.flatMap((month) => [entry.months[month]?.nightHours ?? 0, entry.months[month]?.sundayHours ?? 0, entry.months[month]?.holidayHours ?? 0]),
+    entry.total.nightHours,
+    entry.total.sundayHours,
+    entry.total.holidayHours,
+  ]));
+
+  ws.getColumn(1).width = 30;
+  for (let column = 2; column <= Math.max(employeeHeader.length, 6); column++) ws.getColumn(column).width = 18;
+  ws.getColumn(8).width = Math.max(ws.getColumn(8).width || 0, 48);
+  return control;
+}
+
 // Colour for employees without submitted wishes (all management sheets).
 const MISSING_WISH_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FDE68A' } };
 const MISSING_WISH_FONT = { name: 'Calibri', size: 10, bold: true, color: { argb: '92400E' } };
@@ -5493,6 +5733,8 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   const missingWishEmployees = isManagement
     ? await addManagementSheets(workbook, drafts, absenceInfo, options)
     : new Set();
+  // Cost control (night and Sunday hours) is only for the management.
+  if (isManagement) addCostControlSheet(workbook, drafts, { timesByCode: await loadShiftTimesByCode() });
 
   for (const draft of drafts) {
     const shifts = draft.shifts_json;
@@ -5514,6 +5756,12 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     for (const name of Object.keys(draft.fairness || {})) if (!byEmployee[name]) byEmployee[name] = {};
     const monthMarks = absenceInfo.get(draft.month)?.marks || new Map();
     const empNames = Object.keys(byEmployee).sort((a, b) => a.localeCompare(b, 'de'));
+    // Colo cover (all variants) and late overstaffing on Thursday/Friday (not in the team sheet) are marked in the cell.
+    const coloCells = new Set((Array.isArray(draft.config_snapshot?.coloAssignments) ? draft.config_snapshot.coloAssignments : [])
+      .filter((entry) => entry?.employee_name && String(entry.date || '').startsWith(draft.month))
+      .map((entry) => `${entry.employee_name}|${Number(String(entry.date).slice(8, 10))}`));
+    const overflowCells = new Set(isTeam ? [] : (Array.isArray(draft.config_snapshot?.planReport?.lateOverflow) ? draft.config_snapshot.planReport.lateOverflow : [])
+      .map((entry) => `${entry.employee}|${Number(entry.day)}`));
 
     // Title row
     const lastColumn = showHours ? numDays + 2 : numDays + 1;
@@ -5617,6 +5865,15 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
         cell.font = { name: 'Calibri', size: 9 };
         cell.border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
 
+        const markNotes = [];
+        if (plannedCode && coloCells.has(`${emp}|${d}`)) markNotes.push('Colo');
+        if (plannedCode && overflowCells.has(`${emp}|${d}`)) markNotes.push('Überbesetzung Spätschicht (Do/Fr)');
+        if (markNotes.length > 0) {
+          cell.note = markNotes.join(' + ');
+          const markColor = markNotes[0] === 'Colo' ? '06B6D4' : 'F97316';
+          const thick = { style: 'medium', color: { argb: markColor } };
+          cell.border = { top: thick, bottom: thick, left: thick, right: thick };
+        }
         const colors = resolveExcelShiftColors(code);
         if (plannedCode) fallbackHours += durationByCode.get(String(code).trim().toUpperCase()) || 8;
         if (colors) {
@@ -5661,6 +5918,11 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       cell.font = { name: 'Calibri', size: 8, bold: true, color: { argb: colors.font } };
       cell.alignment = { horizontal: 'center' };
       col++;
+    }
+    if (coloCells.size > 0 || overflowCells.size > 0) {
+      const marks = [coloCells.size > 0 ? 'Cyan umrandet = Colo' : null, overflowCells.size > 0 ? 'Orange umrandet = Überbesetzung Spätschicht Do/Fr' : null].filter(Boolean);
+      ws.getCell(legendRow + 3, 1).value = marks.join('   |   ');
+      ws.getCell(legendRow + 3, 1).font = { name: 'Calibri', size: 8, bold: true, color: { argb: '0E7490' } };
     }
     if (includeWishStatus) {
       const legendCell = ws.getCell(legendRow + 1, 1);

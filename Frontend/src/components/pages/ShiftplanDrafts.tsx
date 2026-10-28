@@ -22,6 +22,7 @@ import { isColoEmployee } from "../../utils/colo";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 import { ColoBadge, ColoLegend } from "../shiftplan/ColoBadge";
+import { CostControlPanel, type CostControlData } from "../shiftplan/CostControlPanel";
 import { buildColoMarkLookup, getColoMark } from "../../utils/coloMarks";
 import { GroupedDraftList } from "../shiftplan/GroupedDraftList";
 import { ExcelExportDialog } from "../shiftplan/ExcelExportDialog";
@@ -42,7 +43,7 @@ type DraftSummary = {
   approve_votes: number;
   needs_changes_votes: number;
 };
-type DraftShift = { employee_name: string; day: number; shift_code: string };
+type DraftShift = { employee_name: string; day: number; shift_code: string; manual_override?: boolean };
 type DraftFairness = { targetHours?: number; actualHours?: number; deltaHours?: number };
 type Draft = DraftSummary & {
   shifts_json: DraftShift[];
@@ -51,7 +52,9 @@ type Draft = DraftSummary & {
     dispatcherConfig?: { enabled?: boolean; priorities?: string[] };
     planningConfig?: { monthly_target_hours?: number };
     coloAssignments?: unknown;
+    planReport?: { lateOverflow?: Array<{ employee: string; day: number }> };
   };
+  cost_control?: CostControlData;
 };
 type DraftFeedback = {
   id: number;
@@ -97,6 +100,9 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
     return { employees: employeeNames, days: monthDays, year, month, shiftsByEmployee: schedule, dispatcherPool };
   }, [draft]);
   const coloMarks = useMemo(() => buildColoMarkLookup(draft.config_snapshot?.coloAssignments), [draft.config_snapshot?.coloAssignments]);
+  // Late shifts above the weekday maximum (admin option) and manually changed cells.
+  const overflowMarks = useMemo(() => new Set((draft.config_snapshot?.planReport?.lateOverflow || []).map((entry) => `${entry.employee}|${Number(entry.day)}`)), [draft.config_snapshot?.planReport?.lateOverflow]);
+  const manualMarks = useMemo(() => new Set((draft.shifts_json || []).filter((shift) => shift.manual_override === true).map((shift) => `${shift.employee_name}|${Number(shift.day)}`)), [draft.shifts_json]);
 
   return (
     <div className="overflow-x-auto">
@@ -148,6 +154,8 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
                     <div className="flex flex-col items-center">
                       {code ? <span style={getShiftColorStyle(code)} className={`shift-badge shift-badge-${kind} inline-flex ${compact ? "min-h-5 min-w-6 px-1" : "min-h-7 min-w-8 px-1.5"} items-center justify-center rounded-md border font-bold`}>{code}</span> : null}
                       {coloMark ? <ColoBadge mark={coloMark} isGerman={isGerman} className="mt-0.5" /> : null}
+                      {overflowMarks.has(`${employee}|${value}`) ? <span title="Überbesetzung Spätschicht (Do/Fr): über der Obergrenze, vom Admin erlaubt" className="mt-0.5 rounded border border-orange-400/70 bg-orange-500/30 px-1 text-[9px] font-black leading-[13px] text-orange-100">Ü</span> : null}
+                      {manualMarks.has(`${employee}|${value}`) ? <span title="Manuell geändert" className="mt-0.5 rounded border border-sky-400/60 bg-sky-500/25 px-1 text-[9px] font-black leading-[13px] text-sky-100">✎</span> : null}
                     </div>
                   </td>
                 );
@@ -444,11 +452,12 @@ export default function ShiftplanDrafts() {
                       {user.isAdmin ? <Button type="button" variant="outline" onClick={() => setManagementExportOpen(true)} disabled={exportingId === activeDraft.id} className="border-slate-600 bg-slate-950/40"><BarChart3 className="mr-2 h-4 w-4" />Excel für die Leitung</Button> : null}
                     </div>
                   </div>
-                  <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman /></div>
+                  <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman /><span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100"><strong>Ü</strong>= Überbesetzung Spätschicht (Do/Fr)</span><span className="inline-flex items-center gap-2 rounded-md border border-sky-400/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-100"><strong>✎</strong>= manuell geändert</span></div>
                   <ShiftTimeLegend shiftTimes={shiftTimes} className="mt-2" />
                 </section>
 
                 <section className="liquid-panel overflow-hidden rounded-[26px]"><DraftScheduleTable draft={activeDraft} /></section>
+                <CostControlPanel costControl={activeDraft.cost_control} isGerman />
 
                 <section className="grid gap-5 lg:grid-cols-2">
                   <div className="liquid-panel rounded-[26px] p-5">

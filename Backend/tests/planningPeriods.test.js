@@ -8,9 +8,9 @@ import { buildExcelWorkbook } from '../routes/shiftplanControl.js';
 test('quarter periods select exactly three consecutive months, including Q4', () => {
   assert.deepEqual(getPlanningMonths(2027, 1), ['2027-01', '2027-02', '2027-03']);
   assert.deepEqual(getPlanningMonths(2027, 4), ['2027-10', '2027-11', '2027-12']);
-  assert.equal(getPlanningMonths(2028).length, 12);
+  assert.equal(getPlanningMonths(2027).length, 12);
   for (const quarter of [0, 5, 1.5, NaN]) assert.throws(() => getPlanningMonths(2027, quarter));
-  for (const year of [2026, 2041, 2027.5]) assert.throws(() => getPlanningMonths(year, 1));
+  for (const year of [2026, 2028, 2041, 2027.5]) assert.throws(() => getPlanningMonths(year, 1));
 });
 
 function summary(id, month, batch, version = 1) {
@@ -98,9 +98,9 @@ test('failed generation writes no partial period and a full year includes all tw
   const pool = fakePool();
   await assert.rejects(generatePeriodDrafts({ year: 2027, quarter: 1, pool, generateMonth: async (year, month) => { if (month === 2) throw new Error('generation failed'); return plan(month); } }), /generation failed/);
   assert.equal(pool.calls.length, 0);
-  const result = await generatePeriodDrafts({ year: 2028, createdBy: 'admin', ownerId: 7, pool, generateMonth: async (year, month, days) => { if (month === 2) assert.equal(days, 29); return plan(month); } });
+  const result = await generatePeriodDrafts({ year: 2027, createdBy: 'admin', ownerId: 7, pool, generateMonth: async (year, month, days) => { if (month === 2) assert.equal(days, 28); return plan(month); } });
   assert.equal(result.total, 12);
-  assert.equal(result.generated.at(-1).month, '2028-12');
+  assert.equal(result.generated.at(-1).month, '2027-12');
 });
 
 test('quarter and year Excel exports retain monthly versions in chronological worksheet tabs', async () => {
@@ -193,7 +193,7 @@ test('management Excel puts hours and wish sheets in front of the month sheets',
   const workbook = await buildExcelWorkbook(drafts, null, { variant: 'management' });
   const restored = new ExcelJS.Workbook();
   await restored.xlsx.load(await workbook.xlsx.writeBuffer());
-  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Stunden & Wünsche', 'Wunschdetails', 'Januar 2027']);
+  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Stunden & Wünsche', 'Wunschdetails', 'Kostenkontrolle', 'Januar 2027']);
   const overview = restored.worksheets[0];
   assert.equal(overview.getCell(5, 2).value, 'Jane Doe');
   assert.equal(overview.getCell(5, 3).value, 160);

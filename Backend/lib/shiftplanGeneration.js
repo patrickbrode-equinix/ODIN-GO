@@ -899,9 +899,15 @@ export function getVarietyAdjustment({ history = [], nextCode, nextType, nextSer
  * employee, month, week and shift code, so ties between similar candidates are broken
  * differently every week and month, but the same input always yields the same plan.
  */
-export function getVarietyJitter({ employee, year, month, weekKey, shiftCode, priority = DEFAULT_VARIETY_PRIORITY } = {}) {
-  const scale = normalizeVarietyPriority(priority) / DEFAULT_VARIETY_PRIORITY;
+export function getVarietyJitter({ employee, year, month, weekKey, shiftCode, priority = DEFAULT_VARIETY_PRIORITY, seed = 0 } = {}) {
+  const normalized = normalizeVarietyPriority(priority);
+  const scale = normalized / DEFAULT_VARIETY_PRIORITY;
   if (scale === 0) return 0;
-  const rank = getDeterministicRotationRank({ employee, year, month, weekKey, shiftCode });
-  return Math.round(((rank % 2001) / 1000 - 1) * 60 * scale);
+  // Above the default the slider gets a much stronger say: the jitter grows up to 2.5x at 100 %, and a generation seed
+  // (different for every generated draft) makes the same input produce a different, equally valid pattern. Without a
+  // seed (or at 60 % and below) the result stays reproducible.
+  const boost = normalized > DEFAULT_VARIETY_PRIORITY ? 1 + ((normalized - DEFAULT_VARIETY_PRIORITY) / 40) * 1.5 : 1;
+  const seeded = normalized > DEFAULT_VARIETY_PRIORITY && seed ? `${shiftCode}#${seed}` : shiftCode;
+  const rank = getDeterministicRotationRank({ employee, year, month, weekKey, shiftCode: seeded });
+  return Math.round(((rank % 2001) / 1000 - 1) * 60 * scale * boost);
 }

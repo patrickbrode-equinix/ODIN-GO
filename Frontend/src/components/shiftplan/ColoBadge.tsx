@@ -6,7 +6,7 @@ interface ColoBadgeProps {
   className?: string;
 }
 
-/** Small "CO" marker shown next to the shift code of a cell that is planned for Colo. */
+/** Small "Colo" marker shown next to the shift code of a cell that is planned for Colo. */
 export function ColoBadge({ mark, isGerman, className = "" }: ColoBadgeProps) {
   return (
     <span
@@ -14,16 +14,16 @@ export function ColoBadge({ mark, isGerman, className = "" }: ColoBadgeProps) {
       aria-label={coloMarkTitle(mark, isGerman)}
       className={`inline-flex items-center justify-center rounded border border-cyan-400/60 bg-cyan-500/25 px-1 text-[9px] font-black leading-[13px] text-cyan-100 ${className}`}
     >
-      CO
+      Colo
     </span>
   );
 }
 
-/** Legend chip "CO = Colo". */
+/** Legend chip "Colo = Colo-Einsatz". */
 export function ColoLegend({ isGerman }: { isGerman: boolean }) {
   return (
     <span className="inline-flex items-center gap-2 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-bold text-cyan-100">
-      <strong>CO</strong>
+      <strong>Colo</strong>
       {isGerman ? "= Colo-Einsatz" : "= Colo assignment"}
     </span>
   );

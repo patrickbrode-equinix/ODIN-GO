@@ -21,6 +21,8 @@ import {
   ArrowRight, Users, Calendar, ShieldAlert, BarChart3, List, Info, ArrowLeftRight, Undo2
 } from 'lucide-react';
 import { describeCellIssues, type DraftIssueContext } from '../shiftplan/draftCellIssues';
+import { PLANNING_YEARS } from '../../api/planningPeriods';
+import { CostControlPanel, type CostControlData } from '../shiftplan/CostControlPanel';
 
 /* ------------------------------------------------ */
 /* TYPES                                            */
@@ -49,6 +51,7 @@ interface Draft {
   wish_summary?: { submitted: number; missing: number };
   absences?: Absence[];
   manual_employees?: ManualShiftplanEmployee[];
+  cost_control?: CostControlData;
 }
 
 interface ManualShiftplanEmployee {
@@ -141,18 +144,14 @@ export default function ShiftplanControlCenter() {
   const isGerman = language === 'de';
   const statusLabels = getStatusLabels(t);
   const [tab, setTab] = useState<TabKey>('overview');
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const now = new Date();
-    const next = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-    return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [selectedMonth, setSelectedMonth] = useState(() => `${PLANNING_YEARS[0]}-01`);
   const [draftGroups, setDraftGroups] = useState<PlanningDraftGroup<DraftSummary>[]>([]);
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [planningMode, setPlanningMode] = useState<'month' | 'quarter' | 'year'>('month');
   const [selectedQuarter, setSelectedQuarter] = useState(1);
-  const [selectedPlanningYear, setSelectedPlanningYear] = useState(2027);
+  const [selectedPlanningYear, setSelectedPlanningYear] = useState<number>(PLANNING_YEARS[0]);
   const [genTitle, setGenTitle] = useState('');
   const [genDescription, setGenDescription] = useState('');
   const [confirmGenerate, setConfirmGenerate] = useState(false);
@@ -174,19 +173,9 @@ export default function ShiftplanControlCenter() {
   const selectedMonthYear = parseInt(selectedMonth.split('-')[0]);
   const draftListYear = planningMode === 'quarter' || planningMode === 'year' ? selectedPlanningYear : selectedMonthYear;
 
-  // Generate month options (full year: current month -2 to +13 → ~15 months)
-  const monthOptions = (() => {
-    const opts: string[] = [];
-    const now = new Date();
-    for (let i = -2; i <= 13; i++) {
-      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-      opts.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
-    }
-    return opts;
-  })();
-
-  // Quarter/year planning is allowed for 2027–2040 (matches the backend).
-  const yearOptions = Array.from({ length: 14 }, (_, index) => 2027 + index);
+  // Only the open planning years can be generated (2026 is already planned; matches the backend, PLANNING_YEARS).
+  const monthOptions = PLANNING_YEARS.flatMap((year) => Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`));
+  const yearOptions: number[] = [...PLANNING_YEARS];
 
   const loadDrafts = useCallback(async () => {
     try {
@@ -865,6 +854,7 @@ export default function ShiftplanControlCenter() {
                       </button>
                     </div>
                   </div>
+                  <CostControlPanel costControl={activeDraft.cost_control} isGerman={isGerman} />
                   <DraftShiftTable
                     draft={activeDraft}
                     manualOnly={showManualEmployeesOnly}
@@ -927,6 +917,14 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onCo
     return Array.from(new Set(['', ...fromConfig, 'E1', 'E1SA', 'E1WE', 'E2SA', 'E2WE', 'L1', 'L1WE', 'N', 'DBS', 'FS', 'ABW', 'S']));
   }, [draft.config_snapshot?.shiftDefinitions]);
   const coloMarks = useMemo(() => buildColoMarkLookup(draft.config_snapshot?.coloAssignments), [draft.config_snapshot?.coloAssignments]);
+  // Late shifts above the weekday maximum (admin option) and cells changed by hand.
+  const overflowMarks = useMemo(() => new Set<string>(
+    (Array.isArray(draft.config_snapshot?.planReport?.lateOverflow) ? draft.config_snapshot.planReport.lateOverflow : [])
+      .map((entry: any) => `${entry.employee}|${Number(entry.day)}`)
+  ), [draft.config_snapshot?.planReport?.lateOverflow]);
+  const manualMarks = useMemo(() => new Set<string>(
+    (draft.shifts_json || []).filter((shift: any) => shift?.manual_override === true).map((shift: any) => `${shift.employee_name}|${Number(shift.day)}`)
+  ), [draft.shifts_json]);
   const manualEmployeeNameSet = useMemo(
     () => new Set((Array.isArray(draft.manual_employees) ? draft.manual_employees : []).map((entry) => String(entry.employee_name || '').trim()).filter(Boolean)),
     [draft.manual_employees]
@@ -1103,6 +1101,16 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onCo
           </span>
         )}
         <ColoLegend isGerman={isGerman} />
+        {overflowMarks.size > 0 && (
+          <span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100" title={isGerman ? 'Spätschicht Do/Fr über der Obergrenze, vom Admin für Nacht-/Spät-Wünsche erlaubt' : 'Thu/Fri late shift above the maximum, allowed by the admin for night/late wishers'}>
+            <strong>Ü</strong>{isGerman ? '= Überbesetzung Spätschicht' : '= late overstaffing'}
+          </span>
+        )}
+        {manualMarks.size > 0 && (
+          <span className="inline-flex items-center gap-2 rounded-md border border-sky-400/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-100">
+            <strong>✎</strong>{isGerman ? '= manuell geändert' : '= changed manually'}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => setEditMode((current) => !current)}
@@ -1190,6 +1198,8 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onCo
             absences={draft.absences || []}
             employeeBadges={employeeBadges}
             coloMarks={coloMarks}
+            overflowMarks={overflowMarks}
+            manualMarks={manualMarks}
           />
         </div>      ) : (
         <ShiftplanTable
@@ -1204,6 +1214,8 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onCo
           absences={draft.absences || []}
           employeeBadges={employeeBadges}
           coloMarks={coloMarks}
+          overflowMarks={overflowMarks}
+          manualMarks={manualMarks}
         />
       )}
 
