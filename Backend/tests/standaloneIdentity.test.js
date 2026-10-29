@@ -66,3 +66,12 @@ test('not mapped and ambiguous names are refused', async () => {
   const twins = await verify({ email: 'eva.zwilling@equinix.com' });
   assert.equal(twins.status, 409);
 });
+
+test('Mendix login name = first initial + last name finds the employee without an e-mail', async () => {
+  const result = await verify({ jarvisUserName: 'pbrode' });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.user.id, 1);
+  assert.equal((await verify({ jarvisUserName: 'mmustermann' })).body.user.id, 3);
+  assert.equal((await verify({ jarvisUserName: 'ezwilling' })).status, 409, 'two employees with the same initial and name stay ambiguous');
+  assert.equal((await verify({ jarvisUserName: 'xyz' })).status, 404);
+});

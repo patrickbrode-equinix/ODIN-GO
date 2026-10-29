@@ -6,7 +6,12 @@ const ADMIN_SESSION_KEY = "odinGoAdminSession";
 const NOTIFICATION_CLAIM_TTL_MS = 90_000;
 const notificationClaims = new Map();
 
-function logConnection(event, details = {}) { console.info("[ODIN GO]", event, details); }
+// Details as text, so a copied console line is readable ("Object" otherwise hides everything).
+function logConnection(event, details = {}) {
+  let text = "";
+  try { text = JSON.stringify(details); } catch { text = String(details); }
+  console.info("[ODIN GO]", event, text);
+}
 
 function validatePlannerUrl(value) {
   try {
@@ -176,6 +181,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }),
       });
       const data = await response.json().catch(() => ({}));
+      logConnection("Jarvis-Identität Antwort", {
+        status: response.status,
+        ok: response.ok,
+        code: data.code || "",
+        message: data.message || "",
+        sentEmail: Boolean(message.identity?.email),
+        sentUserName: Boolean(message.identity?.jarvisUserName),
+        user: data.user?.displayName || "",
+      });
       sendResponse({
         ok: response.ok,
         token: data.token || null,

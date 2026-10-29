@@ -2,7 +2,11 @@
   if (document.getElementById("shiftplanner-jarvis-host")) return;
 
   const DEFAULTS = { plannerUrl: "https://eqx-portal.corp.equinix.com", apiKey: "", employeeName: "" };
-  const log = (...args) => console.info("[ODIN GO]", ...args);
+  // Objects as text, so a copied console line is readable ("Object" otherwise hides everything).
+  const log = (...args) => console.info("[ODIN GO]", ...args.map((arg) => {
+    if (!arg || typeof arg !== "object") return arg;
+    try { return JSON.stringify(arg); } catch { return String(arg); }
+  }));
   log("Content-Script gestartet", { page: location.href });
   const host = document.createElement("div");
   host.id = "shiftplanner-jarvis-host";

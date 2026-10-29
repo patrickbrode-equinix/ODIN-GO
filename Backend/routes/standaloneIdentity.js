@@ -68,14 +68,23 @@ async function verifyIdentity(req, res) {
       reportedName,
       EQUINIX_EMAIL.test(email) ? email.split("@")[0].replace(/[._-]+/g, " ") : "",
     ].map(normalizeName).filter((key) => key.includes(" ")));
-    if (nameKeys.size > 0) {
+    // Login names are the first initial plus the last name ("pbrode" = Patrick Brode); a name or an e-mail is not needed.
+    const loginKeys = new Set([jarvisUserName, email.split("@")[0]]
+      .map((value) => normalizeName(value).replace(/ /g, ""))
+      .filter((key) => key.length >= 3));
+    if (nameKeys.size > 0 || loginKeys.size > 0) {
       const candidates = await db.query(
         `SELECT id, first_name, last_name, login_name, email, upn, approved, is_admin, is_root
            FROM users
           WHERE approved = TRUE
           ORDER BY id ASC`,
       );
-      rows = candidates.rows.filter((candidate) => nameKeys.has(normalizeName(`${candidate.first_name || ""} ${candidate.last_name || ""}`)));
+      rows = candidates.rows.filter((candidate) => {
+        const first = normalizeName(candidate.first_name);
+        const last = normalizeName(candidate.last_name);
+        if (nameKeys.has(normalizeName(`${candidate.first_name || ""} ${candidate.last_name || ""}`))) return true;
+        return Boolean(first && last) && loginKeys.has(`${first[0]}${last.replace(/ /g, "")}`);
+      });
     }
   }
   if (rows.length > 1) {
