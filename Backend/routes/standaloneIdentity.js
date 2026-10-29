@@ -47,27 +47,36 @@ async function verifyIdentity(req, res) {
     return res.status(400).json({ message: "Jarvis hat keine Benutzerkennung bereitgestellt." });
   }
 
+  // The Mendix user name (e.g. "nschauer") and the e-mail shown in the Jarvis profile menu are both accepted:
+  // every identifier is compared with e-mail, UPN and login name.
+  const identifiers = [...new Set([email, jarvisUserName.toLowerCase()].filter(Boolean))];
   let { rows } = await db.query(
     `SELECT id, first_name, last_name, login_name, email, upn, approved, is_admin, is_root
      FROM users
-     WHERE LOWER(email) = $1
-        OR LOWER(COALESCE(upn, '')) = $1
-        OR LOWER(COALESCE(login_name, '')) = $1
+     WHERE LOWER(email) = ANY($1::text[])
+        OR LOWER(COALESCE(upn, '')) = ANY($1::text[])
+        OR LOWER(COALESCE(login_name, '')) = ANY($1::text[])
      ORDER BY approved DESC, id ASC
      LIMIT 2`,
-    [email || jarvisUserName.toLowerCase()],
+    [identifiers],
   );
-  // Mendix may expose a full display name rather than an e-mail address. It
-  // is accepted only when it maps to exactly one imported employee.
-  if (!rows.length && jarvisUserName) {
-    const nameKey = normalizeName(jarvisUserName);
-    const candidates = await db.query(
-      `SELECT id, first_name, last_name, login_name, email, upn, approved
-         FROM users
-        WHERE approved = TRUE
-        ORDER BY id ASC`,
-    );
-    rows = candidates.rows.filter((candidate) => normalizeName(`${candidate.first_name || ""} ${candidate.last_name || ""}`) === nameKey);
+  // Fallback by name, accepted only when it maps to exactly one approved employee: a full display name from
+  // Mendix, the name reported by the profile menu, or "first.last" taken from the e-mail address.
+  if (!rows.length) {
+    const nameKeys = new Set([
+      jarvisUserName,
+      reportedName,
+      EQUINIX_EMAIL.test(email) ? email.split("@")[0].replace(/[._-]+/g, " ") : "",
+    ].map(normalizeName).filter((key) => key.includes(" ")));
+    if (nameKeys.size > 0) {
+      const candidates = await db.query(
+        `SELECT id, first_name, last_name, login_name, email, upn, approved, is_admin, is_root
+           FROM users
+          WHERE approved = TRUE
+          ORDER BY id ASC`,
+      );
+      rows = candidates.rows.filter((candidate) => nameKeys.has(normalizeName(`${candidate.first_name || ""} ${candidate.last_name || ""}`)));
+    }
   }
   if (rows.length > 1) {
     return res.status(409).json({

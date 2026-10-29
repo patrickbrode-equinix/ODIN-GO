@@ -1077,6 +1077,34 @@
     return { email: String(email || "").toLowerCase(), displayName: displayName || "", jarvisUserName: userName || email || "" };
   }
 
+  /**
+   * The Mendix session often only knows the user name ("nschauer"). The e-mail shown in the Jarvis profile menu
+   * is a second, reliable identifier, so it is read as well (open menu, or the menu is opened once and closed again).
+   */
+  let emailProbeAttempted = false;
+  async function enrichIdentityWithEmail(identity) {
+    if (!identity || identity.email) return identity;
+    const merge = (found) => ({
+      email: found.email,
+      displayName: found.displayName || identity.displayName || "",
+      jarvisUserName: identity.jarvisUserName || "",
+    });
+    const live = readJarvisIdentity({ preferLive: true });
+    if (live?.email) return merge(live);
+    if (emailProbeAttempted) return identity;
+    const active = document.activeElement;
+    if (document.visibilityState !== "visible" || (active instanceof HTMLElement && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)))) return identity;
+    const profileButton = findJarvisProfileButton();
+    if (!profileButton) return identity;
+    emailProbeAttempted = true;
+    const wasOpen = profileButton.getAttribute("aria-expanded") === "true";
+    if (!wasOpen) profileButton.click();
+    await new Promise((resolve) => window.setTimeout(resolve, 600));
+    const found = readJarvisIdentity({ preferLive: true });
+    if (!wasOpen && profileButton.isConnected && profileButton.getAttribute("aria-expanded") !== "false") profileButton.click();
+    return found?.email ? merge(found) : identity;
+  }
+
   // Without a recognised Jarvis user the scans must not run forever: back off 15 s, 30 s ... up to 5 min.
   let identityFailures = 0;
   let identityBackoffUntil = 0;
@@ -1109,6 +1137,7 @@
     if ((identity.email || identity.jarvisUserName) === lastRejectedEmail && Date.now() - lastRejectedAt < 30_000 && !showPrompt) return false;
 
     identityVerificationPending = true;
+    identity = await enrichIdentityWithEmail(identity).catch(() => identity);
     const response = await chrome.runtime.sendMessage({ type: "VERIFY_JARVIS_IDENTITY", identity })
       .catch(() => null)
       .finally(() => { identityVerificationPending = false; });
