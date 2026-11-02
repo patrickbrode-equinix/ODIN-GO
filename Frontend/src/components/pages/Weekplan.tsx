@@ -11,7 +11,9 @@ import { ArrowLeft, ArrowRight, Calendar, Plus, RefreshCw, UserPlus, X } from "l
 import { useAuth } from "../../context/AuthContext";
 import { fetchSchedule } from "../shiftplan/shiftplan.api";
 import { ShiftplanUploadStatus } from "../shiftplan/ShiftplanUploadStatus";
-import { getShiftColorStyle } from "../shiftplan/shiftColors";
+import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
+import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
+import { getShiftColorKind } from "../shiftplan/shiftColors";
 import { formatMonthLabel } from "../../utils/dateFormat";
 import { getGermanHolidaysNationwide } from "../../utils/deHolidays";
 import { api } from "../../api/api";
@@ -23,6 +25,7 @@ import {
   getRoleVisualStyle,
   type WeekplanRoleKey,
 } from "../../store/weekplanRoleStore";
+import { getPlanningDate, usePlanningDateStore } from "../../store/planningDateStore";
 import { useLanguage, getLanguageLocale } from "../../context/LanguageContext";
 
 type Schedule = Record<string, Record<number, string>>;
@@ -103,7 +106,10 @@ export default function Weekplan() {
   const weekdayAbbrev = (date: Date) => new Intl.DateTimeFormat(locale, { weekday: "short" }).format(date).replace(".", "");
 
   /* NAVIGATION STATE */
-  const [currentDate, setCurrentDate] = useState(new Date());
+  // The shown week travels along between the planning views (see planningDateStore).
+  const [currentDate, setCurrentDate] = useState(() => getPlanningDate());
+  const setSharedPlanningDate = usePlanningDateStore((state) => state.setDate);
+  useEffect(() => { setSharedPlanningDate(currentDate); }, [currentDate, setSharedPlanningDate]);
 
   const traverseWeek = (delta: number) => {
     const next = new Date(currentDate);
@@ -347,7 +353,7 @@ export default function Weekplan() {
     return (
       <span className="inline-flex max-w-full items-center gap-1" title={comment ? `${def.label}: ${comment}` : def.shortText}>
         <span
-          className="inline-flex shrink-0 rounded border px-1 text-[10px] font-bold leading-[1.4]"
+          className="wk-role"
           style={visual ? { color: visual.accent, borderColor: visual.border, background: visual.badge } : undefined}
         >
           {def.label}
@@ -359,10 +365,7 @@ export default function Weekplan() {
     );
   };
 
-  const weekRangeLabel = `${weekdayAbbrev(weekDays[0])} ${weekDays[0].getDate()}.${pad2(weekDays[0].getMonth() + 1)}.${weekDays[0].getFullYear()} – ${weekdayAbbrev(weekDays[6])} ${weekDays[6].getDate()}.${pad2(weekDays[6].getMonth() + 1)}.${weekDays[6].getFullYear()}`;
-
-  const navBtn =
-    "inline-flex items-center gap-1 rounded-md border border-white/10 bg-white/5 px-2 py-1 text-[11px] font-medium text-slate-200 transition hover:bg-white/10 disabled:opacity-40";
+  const weekRangeLabel = `${weekDays[0].getDate()}.${pad2(weekDays[0].getMonth() + 1)}. – ${weekDays[6].getDate()}.${pad2(weekDays[6].getMonth() + 1)}.${weekDays[6].getFullYear()}`;
 
   /* Popover content */
   const popEmployee = popover?.employee || "";
@@ -371,43 +374,60 @@ export default function Weekplan() {
   const popHasRole = popTargets.some((d) => getRole(popEmployee, d));
   const popAllNewcomer = popTargets.length > 0 && popTargets.every((d) => isNewcomer(popEmployee, d));
 
+  /* Staffing per day and shift type (all employees), shown in the group rows */
+  const dayCounts = useMemo(() => {
+    const counts: Record<ShiftKind, number[]> = { early: Array(7).fill(0), late: Array(7).fill(0), night: Array(7).fill(0) };
+    for (const group of groups) {
+      for (const name of group.employees) {
+        weekDays.forEach((d, i) => {
+          const kind = shiftKindOf(getCode(name, d));
+          if (kind) counts[kind][i] += 1;
+        });
+      }
+    }
+    return counts;
+  }, [groups, weekDays, getCode]);
+
+  const [shiftTimes, setShiftTimes] = useState<ShiftTimeMap>({});
+  useEffect(() => {
+    api.get("/shift-config/definitions")
+      .then(({ data }) => setShiftTimes(buildShiftTimeMap(data?.definitions)))
+      .catch(() => setShiftTimes({}));
+  }, []);
+
+  const groupLabel = (kind: ShiftKind) => (kind === "early" ? (de ? "Frühschicht" : "Early shift") : kind === "late" ? (de ? "Spätschicht" : "Late shift") : de ? "Nachtschicht" : "Night shift");
+
   return (
-    <div
-      className={`relative flex min-h-0 flex-col overflow-hidden ${isEmbedded ? "h-full" : "h-[calc(100vh-64px)]"}`}
-      style={{ background: "#0b1220" }}
-    >
-      {/* Header */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-2">
-        <div className="flex min-w-0 items-center gap-3">
-          <Calendar className="h-4 w-4 shrink-0 text-sky-400" />
-          <h1 className="text-sm font-semibold text-white">{t("weekplan.title")}</h1>
-          <span className="rounded bg-sky-400/10 px-2 py-0.5 text-[11px] font-bold text-sky-200">KW {weekNo}</span>
-          <span className="hidden text-[11px] text-slate-400 sm:inline">{weekRangeLabel}</span>
-          <span className="text-[11px] text-slate-500">
-            {presentCount} {de ? "im Dienst" : "on duty"}
-          </span>
+    <div className={`weekplan-v2 relative flex min-h-0 flex-col overflow-hidden ${isEmbedded ? "h-full" : "h-[calc(100vh-64px)]"}`}>
+      {/* Header: what am I looking at, and how do I move */}
+      <header className="wk-header">
+        <div className="min-w-0">
+          <div className="wk-eyebrow">{de ? "Wochenplan" : "Week plan"}</div>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 className="wk-title">{de ? "Kalenderwoche" : "Week"} {weekNo}</h1>
+            <span className="wk-range">{weekRangeLabel}</span>
+            <span className="wk-count">{presentCount} {de ? "Mitarbeitende im Dienst" : "employees on duty"}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-1.5">
-          <button type="button" className={navBtn} onClick={() => traverseWeek(-1)} aria-label={de ? "Vorherige Woche" : "Previous week"}>
-            <ArrowLeft className="h-3.5 w-3.5" />
-          </button>
-          <button type="button" className={navBtn} onClick={jumpToToday}>
-            {t("weekplan.today")}
-          </button>
-          <button type="button" className={navBtn} onClick={() => traverseWeek(1)} aria-label={de ? "Nächste Woche" : "Next week"}>
-            <ArrowRight className="h-3.5 w-3.5" />
-          </button>
-          <button type="button" className={navBtn} onClick={() => void handleRefresh()} disabled={refreshing || loading} title="Refresh">
-            <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+        <div className="wk-actions">
+          <div className="wk-seg" role="group" aria-label={de ? "Woche wechseln" : "Change week"}>
+            <button type="button" onClick={() => traverseWeek(-1)} aria-label={de ? "Vorherige Woche" : "Previous week"}><ArrowLeft className="h-4 w-4" /></button>
+            <button type="button" onClick={jumpToToday}>{t("weekplan.today")}</button>
+            <button type="button" onClick={() => traverseWeek(1)} aria-label={de ? "Nächste Woche" : "Next week"}><ArrowRight className="h-4 w-4" /></button>
+          </div>
+          <button type="button" className="wk-icon-btn" onClick={() => void handleRefresh()} disabled={refreshing || loading} title={de ? "Aktualisieren" : "Refresh"} aria-label={de ? "Aktualisieren" : "Refresh"}>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
           </button>
         </div>
-      </div>
-      <div className="shrink-0 px-4 pt-1">
+      </header>
+
+      <div className="wk-subbar">
+        <ShiftTimeLegend shiftTimes={shiftTimes} compact />
         <ShiftplanUploadStatus />
       </div>
 
       {loadError ? (
-        <div role="alert" className="mx-4 mt-2 flex shrink-0 items-center justify-between gap-3 rounded-md border border-red-500/35 bg-red-950/40 px-3 py-2 text-xs text-red-100">
+        <div role="alert" className="mx-5 mt-3 flex shrink-0 items-center justify-between gap-3 rounded-md border border-red-500/35 bg-red-950/40 px-3 py-2 text-sm text-red-100">
           <span>{loadError}</span>
           <button type="button" onClick={() => void handleRefresh()} className="rounded border border-red-300/30 px-2 py-1 font-semibold hover:bg-red-500/15">
             {de ? "Erneut laden" : "Retry"}
@@ -416,94 +436,81 @@ export default function Weekplan() {
       ) : null}
 
       {/* Body */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-2">
-        {canEdit ? (
-          <p className="mb-2 text-[11px] text-slate-500">
-            {de
-              ? "Zeile anklicken, um Rolle oder Neueinsteiger zu setzen. Rollen gelten nur für diese KW."
-              : "Click a row to set a role or newcomer. Roles only apply to this calendar week."}
-          </p>
-        ) : null}
-
-        {loading && groups.length === 0 ? (
-          <div className="py-10 text-center text-xs text-slate-400">{t("weekplan.loading")}</div>
-        ) : null}
-
+      <div className="wk-body">
+        {loading && groups.length === 0 ? <div className="py-12 text-center text-sm text-slate-400">{t("weekplan.loading")}</div> : null}
         {!loading && groups.length === 0 && !loadError ? (
-          <div className="py-10 text-center text-xs text-slate-400">
-            {de ? "Keine Mitarbeitenden mit Schicht in dieser Woche." : "No employees with a shift this week."}
-          </div>
+          <div className="py-12 text-center text-sm text-slate-400">{de ? "Keine Mitarbeitenden mit Schicht in dieser Woche." : "No employees with a shift this week."}</div>
         ) : null}
 
-        {groups.map((group) => (
-          <section key={group.kind} className="mb-5">
-            <div className="mb-1 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider" style={{ color: group.color }}>
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: group.color }} />
-              {group.label}
-              <span className="font-normal text-slate-500">{group.employees.length}</span>
-            </div>
-            <table className="w-full table-fixed border-collapse text-left">
-              <thead>
-                <tr className="text-[10px] uppercase tracking-wide text-slate-500">
-                  <th className="w-[17%] py-1 pr-2 font-medium">{t("common.employee")}</th>
-                  {weekDays.map((d, i) => {
-                    const holiday = holidays[weekKeys[i]];
-                    const isToday = weekKeys[i] === todayKey;
-                    return (
-                      <th
-                        key={weekKeys[i]}
-                        className={`px-1 py-1 text-center font-medium ${isToday ? "text-sky-300" : ""}`}
-                        title={holiday ? `${t("weekplan.holiday")}: ${holiday}` : undefined}
-                      >
-                        {weekdayAbbrev(d)} {d.getDate()}.{pad2(d.getMonth() + 1)}.{holiday ? <span className="ml-0.5 text-rose-400">*</span> : null}
-                      </th>
-                    );
-                  })}
+        {groups.length > 0 ? (
+          <table className="wk-table">
+            <colgroup>
+              <col className="wk-col-name" />
+              {weekDays.map((d, i) => <col key={weekKeys[i]} />)}
+            </colgroup>
+            <thead>
+              <tr>
+                <th className="wk-th-name">{canEdit ? (de ? "Zeile anklicken: Rolle setzen" : "Click a row to set a role") : t("common.employee")}</th>
+                {weekDays.map((d, i) => {
+                  const key = weekKeys[i];
+                  const holiday = holidays[key];
+                  const weekend = d.getDay() === 0 || d.getDay() === 6;
+                  const isToday = key === todayKey;
+                  return (
+                    <th key={key} className={`wk-th-day ${weekend ? "is-weekend" : ""} ${isToday ? "is-today" : ""}`} title={holiday ? `${t("weekplan.holiday")}: ${holiday}` : undefined}>
+                      <span className="wk-dow">{weekdayAbbrev(d)}</span>
+                      <span className="wk-date">{d.getDate()}.{pad2(d.getMonth() + 1)}.</span>
+                      {holiday ? <span className="wk-holiday">{de ? "Feiertag" : "Holiday"}</span> : null}
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            {groups.map((group) => (
+              <tbody key={group.kind} className="wk-group" style={{ ["--kind" as string]: group.color }}>
+                <tr className="wk-group-row">
+                  <th scope="rowgroup" className="wk-group-name">
+                    <span className="wk-dot" />
+                    {groupLabel(group.kind)}
+                    <span className="wk-group-total">{group.employees.length}</span>
+                  </th>
+                  {weekDays.map((d, i) => (
+                    <td key={weekKeys[i]} className={`wk-group-count ${weekKeys[i] === todayKey ? "is-today" : ""}`} title={`${groupLabel(group.kind)}: ${dayCounts[group.kind][i]}`}>
+                      {dayCounts[group.kind][i] || ""}
+                    </td>
+                  ))}
                 </tr>
-              </thead>
-              <tbody>
                 {group.employees.map((name) => {
                   const hasNewcomer = weekKeys.some((k) => isNewcomer(name, k));
                   return (
                     <tr
                       key={name}
-                      className={`border-t border-white/5 transition-colors ${canEdit ? "cursor-pointer hover:bg-white/[0.04]" : ""} ${popover?.employee === name ? "bg-white/[0.06]" : ""}`}
+                      className={`wk-row ${canEdit ? "is-clickable" : ""} ${popover?.employee === name ? "is-open" : ""}`}
                       data-weekplan-employee={name}
                       onClick={canEdit ? (e) => openPopover(name, e.currentTarget) : undefined}
                     >
-                      <td className="py-1.5 pr-2 align-middle">
-                        <div className="flex items-center gap-1.5">
-                          <span className="truncate text-xs font-medium text-slate-100" title={name}>
-                            {name}
-                          </span>
-                          {hasNewcomer ? (
-                            <span className="shrink-0 rounded bg-fuchsia-500/15 px-1 text-[9px] font-bold text-fuchsia-200" title="Neueinsteiger">
-                              NEU
-                            </span>
-                          ) : null}
-                          {canEdit ? <Plus className="h-3 w-3 shrink-0 text-slate-600" aria-hidden /> : null}
-                        </div>
-                      </td>
+                      <th scope="row" className="wk-name">
+                        <span className="truncate" title={name}>{name}</span>
+                        {hasNewcomer ? <span className="wk-new" title={de ? "Neueinsteiger" : "Newcomer"}>NEU</span> : null}
+                      </th>
                       {weekDays.map((d, i) => {
                         const key = weekKeys[i];
                         const code = getCode(name, d);
                         const role = getRole(name, key);
                         const comment = getRoleComment(name, key);
                         const newcomer = isNewcomer(name, key);
+                        const weekend = d.getDay() === 0 || d.getDay() === 6;
                         return (
-                          <td key={key} className={`px-1 py-1.5 text-center align-middle ${key === todayKey ? "bg-sky-400/[0.05]" : ""}`}>
-                            <div className="flex min-h-[22px] flex-col items-center justify-center gap-0.5">
-                              {code ? (
-                                <span
-                                  className="inline-flex min-w-[26px] items-center justify-center rounded border px-1.5 text-[10px] font-bold leading-[1.5]"
-                                  style={getShiftColorStyle(code)}
-                                >
-                                  {code}
-                                </span>
-                              ) : null}
-                              {role ? renderRoleBadge(role, comment) : null}
-                              {newcomer ? <span className="text-[9px] font-semibold text-fuchsia-300">NEU</span> : null}
-                            </div>
+                          <td key={key} className={`wk-cell ${weekend ? "is-weekend" : ""} ${key === todayKey ? "is-today" : ""}`}>
+                            {code ? (
+                              <div className="wk-cell-inner">
+                                <span className="wk-shift" data-kind={getShiftColorKind(code)}>{code}</span>
+                                {role ? renderRoleBadge(role, comment) : null}
+                                {newcomer && !hasNewcomer ? <span className="wk-new">NEU</span> : null}
+                              </div>
+                            ) : (
+                              <span className="wk-free" aria-hidden="true">–</span>
+                            )}
                           </td>
                         );
                       })}
@@ -511,9 +518,9 @@ export default function Weekplan() {
                   );
                 })}
               </tbody>
-            </table>
-          </section>
-        ))}
+            ))}
+          </table>
+        ) : null}
       </div>
 
       {/* Assignment popover */}

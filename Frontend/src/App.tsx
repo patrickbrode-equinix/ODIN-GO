@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import StandaloneWebLogin from "./components/StandaloneWebLogin";
 import { useAuth } from "./context/AuthContext";
+import IntroSplash from "./components/IntroSplash";
 
 /* Public – small, always needed immediately */
 const OdinGoWorkspace = lazy(() => import("./components/pages/OdinGoWorkspace"));
@@ -79,6 +80,7 @@ function ExtensionNavigationBridge() {
 export default function App() {
   return (
     <Router>
+      <IntroSplash />
       <ExtensionNavigationBridge />
       <Suspense fallback={<PageLoader />}>
         <Routes>

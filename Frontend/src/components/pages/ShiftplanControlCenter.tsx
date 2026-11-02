@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { describeCellIssues, type DraftIssueContext } from '../shiftplan/draftCellIssues';
 import { PLANNING_YEARS } from '../../api/planningPeriods';
+import { getPlanningMonth, usePlanningDateStore } from '../../store/planningDateStore';
 import { CostControlPanel, type CostControlData } from '../shiftplan/CostControlPanel';
 
 /* ------------------------------------------------ */
@@ -144,7 +145,13 @@ export default function ShiftplanControlCenter() {
   const isGerman = language === 'de';
   const statusLabels = getStatusLabels(t);
   const [tab, setTab] = useState<TabKey>('overview');
-  const [selectedMonth, setSelectedMonth] = useState(() => `${PLANNING_YEARS[0]}-01`);
+  // The month travels along from the other planning views; the generator only offers the open planning years.
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const shared = getPlanningMonth();
+    return PLANNING_YEARS.includes(shared.year) ? `${shared.year}-${String(shared.month).padStart(2, '0')}` : `${PLANNING_YEARS[0]}-01`;
+  });
+  const setSharedPlanningMonth = usePlanningDateStore((state) => state.setMonth);
+  useEffect(() => { setSharedPlanningMonth(Number(selectedMonth.slice(0, 4)), Number(selectedMonth.slice(5))); }, [selectedMonth, setSharedPlanningMonth]);
   const [draftGroups, setDraftGroups] = useState<PlanningDraftGroup<DraftSummary>[]>([]);
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
   const [loading, setLoading] = useState(false);
@@ -902,7 +909,7 @@ type DraftEditAction =
   | { kind: 'swap'; a: DraftCell; b: DraftCell }
   | { kind: 'set'; cell: DraftCell; previous: string };
 
-function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onColoChange }: { draft: Draft; manualOnly?: boolean; onCellChange?: (employeeName: string, day: number, shiftCode: string) => Promise<void>; onSwap?: (a: DraftCell, b: DraftCell) => Promise<void>; onColoChange?: (employeeName: string, day: number, assigned: boolean) => Promise<void> }) {
+export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onColoChange }: { draft: Draft; manualOnly?: boolean; onCellChange?: (employeeName: string, day: number, shiftCode: string) => Promise<void>; onSwap?: (a: DraftCell, b: DraftCell) => Promise<void>; onColoChange?: (employeeName: string, day: number, assigned: boolean) => Promise<void> }) {
   const { language, t } = useLanguage();
   const locale = getLanguageLocale(language);
   const isGerman = language === 'de';
@@ -1101,6 +1108,11 @@ function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwap, onCo
           </span>
         )}
         <ColoLegend isGerman={isGerman} />
+        {draft.config_snapshot?.planReport?.colo?.enabled && (
+          <span className="inline-flex items-center gap-2 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-bold text-cyan-100" title={isGerman ? 'Colo-Aufgaben, die mit Pool-Mitarbeitenden besetzt wurden (Admin: Colo-Kompetenz)' : 'Colo duties covered by pool employees (admin: Colo competence)'}>
+            <strong>Colo</strong>{draft.config_snapshot.planReport.colo.assigned}/{draft.config_snapshot.planReport.colo.requiredAssignments} {isGerman ? 'besetzt' : 'covered'}
+          </span>
+        )}
         {overflowMarks.size > 0 && (
           <span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100" title={isGerman ? 'Spätschicht Do/Fr über der Obergrenze, vom Admin für Nacht-/Spät-Wünsche erlaubt' : 'Thu/Fri late shift above the maximum, allowed by the admin for night/late wishers'}>
             <strong>Ü</strong>{isGerman ? '= Überbesetzung Spätschicht' : '= late overstaffing'}

@@ -3,7 +3,6 @@
 /* ─────────────────────────────────────────────────────────────────────────── */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
 import {
   Calendar,
   ChevronRight,
@@ -247,483 +246,108 @@ function getBandStateLabel(status: ShiftStatus, isGerman: boolean): string {
   return isGerman ? "BEENDET" : "ENDED";
 }
 
-/* ── RoleBadge ──────────────────────────────────────────────────────────────── */
+/* ── Role chip ──────────────────────────────────────────────────────────────── */
 
-function RoleBadge({ roleKey, comment }: { roleKey: string; comment?: string | null }) {
+function RoleChip({ roleKey, comment }: { roleKey: string; comment?: string | null }) {
   const def = getRoleDef(roleKey);
   const visual = getRoleVisualStyle(roleKey);
   const label = def?.label ?? roleKey;
   const text = (comment ?? "").trim();
   const showText = roleKey === "projekt" && text.length > 0;
-  const full = showText ? `${label}: ${text}` : label;
   return (
     <span
-      title={full}
-      className="inline-flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em]"
-      style={
-        visual
-          ? { color: visual.accent, background: visual.badge, borderColor: visual.border }
-          : { color: "#cbd5e1", background: "rgba(148,163,184,0.12)", borderColor: "rgba(148,163,184,0.35)" }
-      }
+      title={showText ? `${label}: ${text}` : label}
+      className="dp-chip"
+      style={visual ? { color: visual.accent, background: visual.badge, borderColor: visual.border } : undefined}
     >
-      <span className="shrink-0">{label}</span>
-      {showText ? (
-        <span className="min-w-0 max-w-[110px] truncate normal-case tracking-normal font-semibold opacity-90">{text}</span>
-      ) : null}
+      {label}
+      {showText ? <span className="dp-chip-text">{text}</span> : null}
     </span>
   );
 }
 
-/* ── EmployeeCard ───────────────────────────────────────────────────────────── */
+/* ── One person ─────────────────────────────────────────────────────────────── */
 
-function EmployeeCard({
-  employee,
-  hex,
-  delay,
-}: {
-  employee: EmployeeRow;
-  hex:      string;
-  delay:    number;
-}) {
+function PersonRow({ employee }: { employee: EmployeeRow }) {
   const { user } = useAuth();
   const { language } = useLanguage();
   const isGerman = language === "de";
   const isOwnShift = Boolean(user.displayName) && normName(employee.name) === normName(user.displayName);
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      whileHover={{ scale: 1.022, y: -1 }}
-      transition={{ duration: 0.3, delay, ease: [0.22, 1, 0.36, 1] }}
-      className="daily-employee-card cursor-default overflow-hidden rounded-xl"
-      style={{
-        background: "rgba(255,255,255,0.025)",
-        border:     `1px solid ${isOwnShift ? `${hex}cc` : "rgba(255,255,255,0.08)"}`,
-        backdropFilter: "blur(10px)",
-        boxShadow: `inset 0 1px 0 rgba(255,255,255,0.07), 0 2px 8px rgba(0,0,0,0.3)`,
-      }}
-    >
-      {/* colored left accent strip */}
-      <div className="flex">
-        <div
-          className="w-0.75 shrink-0 rounded-l-xl"
-          style={{
-            background: `linear-gradient(180deg, ${hex} 0%, ${hex}90 40%, ${hex}20 100%)`,
-            boxShadow: `2px 0 10px ${hex}30`,
-          }}
-        />
-        <div className="flex-1 p-2.5">
-          {/* employee row */}
-          <div className="flex items-center gap-2.5">
-            {/* circle avatar */}
-            <div
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-black"
-              style={{
-                background: `conic-gradient(from 135deg, ${hex}50, ${hex}18, ${hex}40)`,
-                color: hex,
-                border: `1.5px solid ${hex}50`,
-                boxShadow: `0 0 14px ${hex}35, inset 0 1px 0 ${hex}50`,
-                textShadow: `0 0 8px ${hex}80`,
-              }}
-            >
-              {employee.name.trim().charAt(0).toUpperCase()}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[14px] font-bold leading-tight text-slate-100">
-                {employee.name}
-                {employee.isDispatcher ? <span className="ml-1.5 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1 py-px text-[9px] font-black text-pink-200">DP</span> : null}
-              </div>
-              <div className="mt-1 text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: `${hex}70` }}>
-                {employee.shiftCode}
-              </div>
-              {(employee.roleKey || employee.isNewcomer) && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                  {employee.roleKey ? <RoleBadge roleKey={employee.roleKey} comment={employee.roleComment} /> : null}
-                  {employee.isNewcomer ? (
-                    <span className="inline-flex items-center rounded-md border border-teal-400/45 bg-teal-500/15 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] text-teal-200">
-                      {isGerman ? "Neueinsteiger" : "Newcomer"}
-                    </span>
-                  ) : null}
-                </div>
-              )}
-              {isOwnShift && <div className="mt-1 text-[10px] font-black uppercase tracking-[0.16em]" style={{ color: hex }}>{isGerman ? "Deine Schicht" : "Your shift"}</div>}
-            </div>
-          </div>
-        </div>
-      </div>
-    </motion.div>
+    <li className={`dp-person ${isOwnShift ? "is-own" : ""}`}>
+      <span className="dp-name">{employee.name}</span>
+      <span className="dp-person-tags">
+        {isOwnShift ? <span className="dp-chip dp-chip-own">{isGerman ? "Du" : "You"}</span> : null}
+        {employee.isDispatcher ? <span className="dp-chip dp-chip-dp" title="Dispatcher">DP</span> : null}
+        {employee.roleKey ? <RoleChip roleKey={employee.roleKey} comment={employee.roleComment} /> : null}
+        {employee.isNewcomer ? <span className="dp-chip dp-chip-new">{isGerman ? "Neu" : "New"}</span> : null}
+        <span className="dp-code">{employee.shiftCode}</span>
+      </span>
+    </li>
   );
 }
 
-/* ── SubGroupSection (for Frühschicht E1/E2) ────────────────────────────────── */
+/* ── Sub group (E1 / E2 / L1 ...) ───────────────────────────────────────────── */
 
-function SubGroupSection({
-  subGroup,
-  employees,
-  hex,
-  now,
-  baseDelay,
-}: {
-  subGroup:  SubGroup;
-  employees: EmployeeRow[];
-  hex:       string;
-  now:       number;
-  baseDelay: number;
-}) {
+function SubGroupSection({ subGroup, employees, now }: { subGroup: SubGroup; employees: EmployeeRow[]; now: number }) {
   const { language } = useLanguage();
   const isGerman = language === "de";
   const { status, remainingMs } = computeStatus(subGroup.window, now);
   const statusStr = getShiftStatusLabel(status, remainingMs, isGerman);
-
   if (employees.length === 0) return null;
-
   return (
-    <div>
-      {/* sub-group label row */}
-      <div className="mb-1.5 flex items-center gap-2 px-1">
-        <div className="h-px flex-1" style={{ background: `linear-gradient(90deg, ${hex}50, transparent)` }} />
-        <div
-          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1"
-          style={{
-            background: `linear-gradient(135deg, ${hex}22, ${hex}0c)`,
-            border: `1px solid ${hex}45`,
-            boxShadow: status === "active" ? `0 0 18px ${hex}35, inset 0 1px 0 ${hex}30` : `0 0 0 1px ${hex}15`,
-          }}
-        >
-          {status === "active" && (
-            <span className="relative flex h-1.5 w-1.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: hex }} />
-              <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ background: hex, boxShadow: `0 0 5px ${hex}` }} />
-            </span>
-          )}
-          <span
-            className="text-[10px] font-black uppercase tracking-[0.22em]"
-            style={{ color: hex, textShadow: status === "active" ? `0 0 10px ${hex}90` : "none" }}
-          >
-            {getSubGroupLabel(subGroup.label, isGerman)}
-          </span>
-          <span className="text-[9px] text-slate-700">·</span>
-          <span className="text-[9px] text-slate-500">{subGroup.time}</span>
-          {statusStr && (
-            <span
-              className="ml-0.5 rounded-full px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.16em]"
-              style={{
-                color: status === "active" ? hex : "rgba(148,163,184,0.45)",
-                background: status === "active" ? `${hex}14` : "transparent",
-              }}
-            >
-              {statusStr}
-            </span>
-          )}
-        </div>
-        <div className="h-px flex-1" style={{ background: `linear-gradient(90deg, transparent, ${hex}20)` }} />
+    <div className="dp-sub">
+      <div className="dp-sub-head">
+        <span className="dp-sub-title">{getSubGroupLabel(subGroup.label, isGerman)}</span>
+        <span className="dp-sub-time">{subGroup.time}</span>
+        <span className="dp-sub-count">{employees.length}</span>
+        {statusStr && status === "active" ? <span className="dp-sub-status">{statusStr}</span> : null}
       </div>
-
-      <div className="flex flex-col gap-1.5">
-        {employees.map((emp, i) => (
-          <EmployeeCard
-            key={emp.name}
-            employee={emp}
-            hex={hex}
-            delay={baseDelay + i * 0.04}
-          />
-        ))}
-      </div>
+      <ul className="dp-list">{employees.map((emp) => <PersonRow key={emp.name} employee={emp} />)}</ul>
     </div>
   );
 }
 
-/* ── ShiftBand ──────────────────────────────────────────────────────────────── */
+/* ── Shift panel (Früh / Spät / Nacht / DBS) ────────────────────────────────── */
 
-function ShiftBand({
-  cat,
-  employees,
-  now,
-  bandIndex,
-  totalBands,
-  nightCarryover,
-}: {
-  cat:        ShiftCat;
-  employees:  EmployeeRow[];
-  now:        number;
-  bandIndex:  number;
-  totalBands: number;
-  nightCarryover: boolean;
-}) {
+function ShiftBand({ cat, employees, now, nightCarryover }: { cat: ShiftCat; employees: EmployeeRow[]; now: number; nightCarryover: boolean }) {
   const { language } = useLanguage();
   const isGerman = language === "de";
   const meta = CAT_META[cat];
   const { status, remainingMs, elapsedMs, totalMs } = computeStatus(meta.window, now);
   const progress = totalMs > 0 ? Math.min(100, (elapsedMs / totalMs) * 100) : 0;
-
-  const isActive   = status === "active";
-  const isUpcoming = status === "upcoming";
-
-  const statusLabel = getShiftStatusLabel(status, remainingMs, isGerman) ?? "—";
-
-  const statusHex = isActive ? meta.hex : isUpcoming ? "rgba(148,163,184,0.7)" : "rgba(71,85,105,0.7)";
-
-  // Sub-group support for Früh + Spät
+  const statusLabel = getShiftStatusLabel(status, remainingMs, isGerman);
   const catSubGroups = SHIFT_SUB_GROUPS[cat] ?? null;
-  const isSubGrouped = catSubGroups !== null;
-
   const activeSubGroups = useMemo(() => {
     if (!catSubGroups) return [];
     return catSubGroups
-      .map((sg) => ({
-        subGroup:  sg,
-        employees: employees.filter((e) => e.shiftCode === sg.code),
-      }))
-      .filter(({ employees: emps }) => emps.length > 0);
+      .map((subGroup) => ({ subGroup, employees: employees.filter((e) => e.shiftCode === subGroup.code) }))
+      .filter(({ employees: list }) => list.length > 0);
   }, [catSubGroups, employees]);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.96, y: 12 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      whileHover={{ scale: 1.008, y: -2 }}
-      transition={{ duration: 0.5, delay: bandIndex * 0.09, ease: [0.22, 1, 0.36, 1] }}
-      className="daily-shift-band relative flex flex-col overflow-hidden rounded-2xl"
-      style={{
-        background: isActive ? meta.bgGrad : "rgba(4,10,26,0.96)",
-        border:     `1px solid ${isActive ? meta.hex + "50" : "rgba(255,255,255,0.08)"}`,
-        boxShadow:  isActive
-          ? `0 0 0 1px ${meta.hex}25, 0 0 80px ${meta.hex}35, 0 20px 60px ${meta.hex}20, 0 4px 16px ${meta.hex}18, inset 0 1px 0 ${meta.hex}30`
-          : "0 4px 24px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)",
-      }}
-    >
-      {/* neon top-edge glow line */}
-      <div
-        className="pointer-events-none absolute inset-x-0 top-0"
-        style={{
-          height: isActive ? "2px" : "1px",
-          background: isActive
-            ? `linear-gradient(90deg, transparent 3%, ${meta.hex}70 25%, ${meta.hex} 50%, ${meta.hex}70 75%, transparent 97%)`
-            : `linear-gradient(90deg, transparent 10%, rgba(255,255,255,0.08) 50%, transparent 90%)`,
-          boxShadow: isActive ? `0 0 16px 2px ${meta.hex}60` : "none",
-        }}
-      />
-
-      {/* animated scan beam — active bands only */}
-      {isActive && (
-        <motion.div
-          className="pointer-events-none absolute inset-x-0 top-0 h-full"
-          style={{
-            background: `linear-gradient(180deg, ${meta.hex}08 0%, transparent 30%)`,
-            maskImage: "linear-gradient(180deg, black 0%, transparent 100%)",
-          }}
-          animate={{ opacity: [0.5, 1, 0.5] }}
-          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-        />
-      )}
-
-      {/* 4-corner bracket accents */}
-      {isActive && (
-        <>
-          <svg className="pointer-events-none absolute top-0 left-0 h-5 w-5" style={{ opacity: 0.7 }} viewBox="0 0 20 20" fill="none" aria-hidden>
-            <path d="M0 8V0H8" stroke={meta.hex} strokeWidth="1.5" />
-          </svg>
-          <svg className="pointer-events-none absolute top-0 right-0 h-5 w-5" style={{ opacity: 0.7 }} viewBox="0 0 20 20" fill="none" aria-hidden>
-            <path d="M20 8V0H12" stroke={meta.hex} strokeWidth="1.5" />
-          </svg>
-          <svg className="pointer-events-none absolute bottom-0 left-0 h-5 w-5" style={{ opacity: 0.4 }} viewBox="0 0 20 20" fill="none" aria-hidden>
-            <path d="M0 12V20H8" stroke={meta.hex} strokeWidth="1.5" />
-          </svg>
-          <svg className="pointer-events-none absolute bottom-0 right-0 h-5 w-5" style={{ opacity: 0.4 }} viewBox="0 0 20 20" fill="none" aria-hidden>
-            <path d="M20 12V20H12" stroke={meta.hex} strokeWidth="1.5" />
-          </svg>
-        </>
-      )}
-
-      {/* ─── Band Header ─── */}
-      <div
-        className="relative shrink-0 px-4 pt-4 pb-3"
-        style={{ borderBottom: `1px solid ${isActive ? meta.hex + "22" : "rgba(255,255,255,0.05)"}` }}
-      >
-        {/* title + pulse */}
-        <div className="mb-2.5 flex items-center gap-2.5">
-          {isActive ? (
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60"
-                style={{ background: meta.hex }} />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full"
-                style={{ background: meta.hex, boxShadow: `0 0 12px 3px ${meta.hex}90` }} />
-            </span>
-          ) : (
-            <span className="h-2 w-2 rounded-full" style={{ background: "rgba(71,85,105,0.5)" }} />
-          )}
-          <span
-            className="text-[14px] font-black uppercase tracking-[0.28em]"
-            style={{
-              color: isActive ? meta.hex : "rgba(148,163,184,0.6)",
-              textShadow: isActive
-                ? `0 0 30px ${meta.hex}90, 0 0 12px ${meta.hex}60, 0 0 4px ${meta.hex}40`
-                : "none",
-            }}
-          >
-            {getCategoryLabel(cat, isGerman)}
-          </span>
-          {/* premium employee count stat */}
-          <div
-            className="ml-auto flex flex-col items-end"
-          >
-            <span
-              className="font-mono text-[24px] font-black leading-none"
-              style={{
-                color: isActive ? meta.hex : "rgba(148,163,184,0.5)",
-                textShadow: isActive ? `0 0 20px ${meta.hex}80, 0 0 6px ${meta.hex}50` : "none",
-              }}
-            >
-              {employees.length}
-            </span>
-            <span
-              className="mt-0.5 text-[9px] font-black uppercase tracking-[0.25em]"
-              style={{ color: isActive ? `${meta.hex}70` : "rgba(71,85,105,0.6)" }}
-            >
-              {isGerman ? "Besetzt" : "Staffed"}
-            </span>
-          </div>
+    <section className={`dp-panel is-${status}`} style={{ ["--kind" as string]: meta.hex }}>
+      <header className="dp-panel-head">
+        <div className="dp-panel-title">
+          <span className="dp-dot" />
+          <h2>{getCategoryLabel(cat, isGerman)}</h2>
+          <span className="dp-panel-count">{employees.length}</span>
         </div>
-
-        {/* time range + status badge */}
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] font-medium" style={{ color: isActive ? `${meta.hex}99` : "rgba(100,116,139,0.7)" }}>{meta.timeLabel}</span>
-          {cat === "night" && nightCarryover && (
-            <span className="rounded-full border border-sky-400/25 bg-sky-400/10 px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] text-sky-200">
-              {isGerman ? "Vorwoche bis 06:45" : "Previous week until 06:45"}
-            </span>
-          )}
-          {status !== "unknown" && (
-            <motion.span
-              className="ml-auto rounded-full px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em]"
-              animate={isActive ? { opacity: [1, 0.75, 1] } : {}}
-              transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
-              style={{
-                color:      statusHex,
-                background: isActive ? `${meta.hex}16` : "rgba(255,255,255,0.04)",
-                border:     `1px solid ${isActive ? meta.hex + "35" : "rgba(255,255,255,0.07)"}`,
-                textShadow: isActive ? `0 0 12px ${meta.hex}80` : "none",
-                boxShadow:  isActive ? `0 0 16px ${meta.hex}20, inset 0 1px 0 ${meta.hex}20` : "none",
-              }}
-            >
-              {statusLabel}
-            </motion.span>
-          )}
+        <div className="dp-panel-meta">
+          <span className="dp-time">{meta.timeLabel}</span>
+          {statusLabel ? <span className={`dp-status is-${status}`}>{statusLabel}</span> : null}
+          {cat === "night" && nightCarryover ? <span className="dp-status">{isGerman ? "Nacht von gestern" : "Night from yesterday"}</span> : null}
         </div>
-
-        {/* progress bar */}
-        {isActive && totalMs > 0 && (
-          <div className="mt-3.5">
-            <div className="mb-1.5 flex items-center justify-between">
-              <span
-                className="text-[9px] font-black uppercase tracking-[0.24em]"
-                style={{ color: `${meta.hex}60` }}
-              >
-                {isGerman ? "Schichtfortschritt" : "Shift progress"}
-              </span>
-              <span
-                className="font-mono text-[13px] font-black"
-                style={{ color: meta.hex, textShadow: `0 0 14px ${meta.hex}90` }}
-              >
-                {Math.round(progress)}<span className="text-[8px]" style={{ color: `${meta.hex}80` }}>%</span>
-              </span>
-            </div>
-            <div
-              className="relative h-1.5 overflow-visible rounded-full"
-              style={{ background: "rgba(255,255,255,0.04)", boxShadow: `inset 0 1px 3px rgba(0,0,0,0.4), inset 0 0 0 1px rgba(255,255,255,0.05)` }}
-            >
-              {/* tick marks at 25 / 50 / 75 */}
-              {[25, 50, 75].map((pct) => (
-                <div
-                  key={pct}
-                  className="absolute top-0 z-10 h-full w-px"
-                  style={{ left: `${pct}%`, background: "rgba(255,255,255,0.10)" }}
-                />
-              ))}
-              <motion.div
-                className="relative h-full overflow-hidden rounded-full"
-                style={{
-                  background: `linear-gradient(90deg, ${meta.hex}30, ${meta.hex}90, ${meta.hex})`,
-                  boxShadow: `0 0 20px 3px ${meta.hex}99, 0 0 8px ${meta.hex}`,
-                }}
-                initial={{ width: "0%" }}
-                animate={{ width: `${progress}%` }}
-                transition={{ duration: 1.8, ease: "easeOut" }}
-              >
-                <motion.div
-                  className="absolute inset-0"
-                  style={{ background: "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.7) 50%, transparent 100%)", width: "38%" }}
-                  animate={{ x: ["-115%", "320%"] }}
-                  transition={{ duration: 1.9, repeat: Infinity, repeatDelay: 2.4, ease: "easeInOut" }}
-                />
-              </motion.div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ─── Employee List ─── */}
-      {/* thin stats strip */}
-      <div
-        className="flex shrink-0 items-center gap-3 px-4 py-1.5"
-        style={{ borderBottom: `1px solid rgba(255,255,255,0.04)`, background: "rgba(0,0,0,0.15)" }}
-      >
-        <span className="text-[9px] font-black uppercase tracking-[0.25em]" style={{ color: `${meta.hex}55` }}>
-          {getBandStateLabel(status, isGerman)}
-        </span>
-        <div className="h-3 w-px" style={{ background: "rgba(255,255,255,0.08)" }} />
-        <span className="text-[9px] text-slate-700">{meta.timeLabel}</span>
-        <div className="ml-auto flex items-center gap-1.5">
-          {isSubGrouped && activeSubGroups.length > 0 && (
-            <>
-              {activeSubGroups.map(({ subGroup: sg }) => (
-                <span
-                  key={sg.code}
-                  className="rounded px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.2em]"
-                  style={{ color: `${meta.hex}90`, background: `${meta.hex}0f`, border: `1px solid ${meta.hex}22` }}
-                >
-                  {getSubGroupBadgeLabel(sg.label)}
-                </span>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {employees.length === 0 ? (
-          <div className="flex flex-col items-center justify-center gap-2 py-10">
-            <Users className="h-6 w-6 text-slate-700" />
-            <span className="text-[10px] text-slate-600">{isGerman ? "Keine Mitarbeiter" : "No employees"}</span>
-          </div>
-        ) : isSubGrouped ? (
-          /* Sub-grouped Früh / Spät */
-          <div className="flex flex-col gap-3">
-            {activeSubGroups.map(({ subGroup, employees: subEmps }, si) => (
-              <SubGroupSection
-                key={subGroup.code}
-                subGroup={subGroup}
-                employees={subEmps}
-                hex={meta.hex}
-                now={now}
-                baseDelay={bandIndex * 0.08 + si * 0.06}
-              />
-            ))}
-          </div>
+        {status === "active" ? <div className="dp-progress" role="progressbar" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}><span style={{ width: `${progress}%` }} /></div> : null}
+      </header>
+      <div className="dp-panel-body">
+        {activeSubGroups.length > 0 ? (
+          activeSubGroups.map(({ subGroup, employees: list }) => <SubGroupSection key={subGroup.code} subGroup={subGroup} employees={list} now={now} />)
         ) : (
-          /* Flat list for all other shifts */
-          <div className="flex flex-col gap-1.5">
-            {employees.map((emp, i) => (
-              <EmployeeCard
-                key={emp.name}
-                employee={emp}
-                hex={meta.hex}
-                delay={bandIndex * 0.08 + i * 0.04}
-              />
-            ))}
-          </div>
+          <ul className="dp-list">{employees.map((emp) => <PersonRow key={emp.name} employee={emp} />)}</ul>
         )}
       </div>
-    </motion.div>
+    </section>
   );
 }
 
@@ -859,263 +483,52 @@ export default function TagesplanungPage() {
   }, [allEmployees]);
 
   const nowDate = today;
-  const n = groups.length;
-
-  // grid-template-columns as inline style based on band count
-  const gridCols = n === 0 ? "1fr" : Array(n).fill("1fr").join(" ");
+  const livePanels = groups.filter(({ cat }) => computeStatus(CAT_META[cat].window, now).status === "active");
+  const onDutyNow = livePanels.reduce((sum, { employees }) => sum + employees.length, 0);
 
   return (
-    <div
-      className={`daily-enterprise relative flex min-h-0 flex-col overflow-hidden ${isEmbedded ? "h-full" : "h-[calc(100vh-64px)]"}`}
-      style={{ background: "#0b1220" }}
-    >
-      {/* ambient background orbs */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-        <motion.div
-          className="absolute rounded-full blur-[120px]"
-          style={{ width: 500, height: 300, background: "radial-gradient(ellipse, rgba(56,189,248,0.07), transparent 70%)", top: "10%", left: "15%" }}
-          animate={{ x: [0, 30, 0], y: [0, -15, 0] }}
-          transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <motion.div
-          className="absolute rounded-full blur-[100px]"
-          style={{ width: 400, height: 250, background: "radial-gradient(ellipse, rgba(251,146,60,0.05), transparent 70%)", top: "30%", right: "10%" }}
-          animate={{ x: [0, -20, 0], y: [0, 20, 0] }}
-          transition={{ duration: 22, repeat: Infinity, ease: "easeInOut", delay: 4 }}
-        />
-        <motion.div
-          className="absolute rounded-full blur-[140px]"
-          style={{ width: 300, height: 200, background: "radial-gradient(ellipse, rgba(250,204,21,0.04), transparent 70%)", bottom: "15%", left: "40%" }}
-          animate={{ x: [0, 15, 0], y: [0, -10, 0] }}
-          transition={{ duration: 26, repeat: Infinity, ease: "easeInOut", delay: 9 }}
-        />
-      </div>
-      {/* ══ HEADER ══════════════════════════════════════════════════════════ */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-        className="daily-plan-header relative shrink-0 overflow-hidden"
-        style={{
-          background: "linear-gradient(180deg, #010d28 0%, #020b1e 100%)",
-          borderBottom: "1px solid rgba(56,189,248,0.18)",
-          boxShadow: "0 1px 0 rgba(56,189,248,0.08), 0 4px 32px rgba(0,0,0,0.5)",
-        }}
-      >
-        {/* scan-line grid bg */}
-        <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
-          <defs>
-            <radialGradient id="tpGridFade" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="white" stopOpacity="0.6" />
-              <stop offset="100%" stopColor="white" stopOpacity="0" />
-            </radialGradient>
-            <mask id="tpGridMask">
-              <rect width="100%" height="100%" fill="url(#tpGridFade)" />
-            </mask>
-          </defs>
-          <g mask="url(#tpGridMask)" opacity="0.07">
-            {Array.from({ length: 24 }, (_, i) => (
-              <line key={i}
-                x1={`${(i / 23) * 100}%`} y1="0"
-                x2={`${(i / 23) * 100}%`} y2="100%"
-                stroke="#38bdf8" strokeWidth="0.5" />
-            ))}
-            {Array.from({ length: 4 }, (_, i) => (
-              <line key={`h${i}`}
-                x1="0" y1={`${((i + 1) / 5) * 100}%`}
-                x2="100%" y2={`${((i + 1) / 5) * 100}%`}
-                stroke="#38bdf8" strokeWidth="0.4" />
-            ))}
-          </g>
-        </svg>
-
-        {/* strong center bloom */}
-        <div className="pointer-events-none absolute inset-0">
-          <div className="absolute left-1/2 top-0 -translate-x-1/2 blur-[80px]"
-            style={{ width: 500, height: 120, background: "radial-gradient(ellipse, rgba(56,189,248,0.22), transparent 70%)" }} />
-        </div>
-        {/* bottom edge neon line */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-px"
-          style={{ background: "linear-gradient(90deg, transparent 5%, rgba(56,189,248,0.5) 30%, rgba(56,189,248,0.9) 50%, rgba(56,189,248,0.5) 70%, transparent 95%)", boxShadow: "0 0 12px 2px rgba(56,189,248,0.3)" }}
-        />
-
-        <div className="relative px-5 py-3.5">
-          <div className="flex items-center justify-between gap-4">
-            {/* LEFT: icon + title */}
-            <div className="flex items-center gap-3.5">
-              <div
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-                style={{
-                  background: "linear-gradient(135deg, rgba(56,189,248,0.2), rgba(56,189,248,0.06))",
-                  border: "1px solid rgba(56,189,248,0.45)",
-                  boxShadow: "0 0 32px rgba(56,189,248,0.35), inset 0 1px 0 rgba(56,189,248,0.4)",
-                }}
-              >
-                <Calendar className="h-5 w-5" style={{ color: "#38bdf8", filter: "drop-shadow(0 0 6px #38bdf8)" }} />
-              </div>
-              <div>
-                <div className="text-[9px] font-black uppercase tracking-[0.45em]" style={{ color: "rgba(56,189,248,0.38)" }}>
-                  {isGerman ? "Schichtplanung · ODIN" : "Shift planning · ODIN"}
-                </div>
-                <h1
-                  className="text-[21px] font-black uppercase tracking-[0.22em] text-white"
-                  style={{ textShadow: "0 0 40px rgba(56,189,248,0.7), 0 0 14px rgba(56,189,248,0.5), 0 0 4px rgba(56,189,248,0.4)" }}
-                >
-                  {isGerman ? "Tagesplanung" : "Day planning"}
-                </h1>
-                <div className="mt-1 flex items-center gap-1.5">
-                  {nowDate.toLocaleDateString(locale, { weekday: "long" }).toUpperCase().split("").map((char, i) => (
-                    <span key={i} className="text-[9px] font-black tracking-[0.2em]" style={{ color: "rgba(148,163,184,0.45)" }}>{char}</span>
-                  ))}
-                  <span className="h-3 w-px" style={{ background: "rgba(56,189,248,0.3)" }} />
-                  <span className="font-mono text-[10px] font-bold" style={{ color: "rgba(56,189,248,0.55)" }}>
-                    {nowDate.toLocaleDateString(locale, { day: "2-digit", month: "2-digit", year: "numeric" })}
-                  </span>
-                </div>
-                <ShiftplanUploadStatus className="mt-2" />
-                <ShiftTimeLegend shiftTimes={shiftTimes} compact className="mt-2" />
-              </div>
-            </div>
-
-            {/* RIGHT: stats + clock */}
-            <div className="flex items-center gap-2.5">
-              {/* LIVE badge */}
-              {groups.some(({ cat }) => computeStatus(CAT_META[cat].window, now).status === "active") && (
-                <motion.div
-                  animate={{ opacity: [1, 0.55, 1] }}
-                  transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
-                  className="hidden items-center gap-1.5 rounded-full px-3 py-1 xl:flex"
-                  style={{
-                    background: "rgba(244,63,94,0.1)",
-                    border: "1px solid rgba(244,63,94,0.35)",
-                    boxShadow: "0 0 14px rgba(244,63,94,0.2)",
-                  }}
-                >
-                  <span className="h-1.5 w-1.5 rounded-full" style={{ background: "#f43f5e", boxShadow: "0 0 5px #f43f5e" }} />
-                  <span className="text-[10px] font-black uppercase tracking-[0.22em]" style={{ color: "#f87171" }}>Live</span>
-                </motion.div>
-              )}
-              {/* band status pills */}
-              <div className="hidden items-center gap-2 xl:flex">
-                {groups.map(({ cat, employees: catEmps }) => {
-                  const meta = CAT_META[cat];
-                  const { status } = computeStatus(meta.window, now);
-                  const active = status === "active";
-                  return (
-                    <div
-                      key={cat}
-                      className="flex items-center gap-1.5 rounded-full px-3 py-1.5"
-                      style={{
-                        background: active ? `${meta.hex}14` : `${meta.hex}07`,
-                        border: `1px solid ${active ? meta.hex + "40" : meta.hex + "18"}`,
-                        boxShadow: active ? `0 0 16px ${meta.hex}25` : "none",
-                      }}
-                    >
-                      {active ? (
-                        <span className="relative flex h-1.5 w-1.5 shrink-0">
-                          <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-60" style={{ background: meta.hex }} />
-                          <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ background: meta.hex, boxShadow: `0 0 5px ${meta.hex}` }} />
-                        </span>
-                      ) : (
-                        <span className="h-1.5 w-1.5 rounded-full" style={{ background: `${meta.hex}40` }} />
-                      )}
-                      <span
-                        className="text-[10px] font-black uppercase tracking-[0.18em]"
-                        style={{ color: active ? meta.hex : `${meta.hex}80`, textShadow: active ? `0 0 8px ${meta.hex}70` : "none" }}
-                      >{getCategoryLabel(cat, isGerman)}</span>
-                      <span
-                        className="rounded-full px-1.5 text-[10px] font-black"
-                        style={{ color: active ? meta.hex : "rgba(100,116,139,0.7)", background: `${meta.hex}15` }}
-                      >{catEmps.length}</span>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* refresh */}
-              <button
-                type="button"
-                onClick={handleRefresh}
-                className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] transition-all hover:bg-cyan-400/10 active:scale-95"
-                style={{ color: "#38bdf8", border: "1px solid rgba(56,189,248,0.22)" }}
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
-                {refreshing ? (isGerman ? "Lädt…" : "Loading…") : "Refresh"}
-              </button>
-            </div>
+    <div className={`daily-plan-v2 daily-enterprise flex min-h-0 flex-col overflow-hidden ${isEmbedded ? "h-full" : "h-[calc(100vh-64px)]"}`}>
+      <header className="dp-header">
+        <div className="min-w-0">
+          <div className="dp-eyebrow">{isGerman ? "Tagesplan" : "Day plan"}</div>
+          <h1 className="dp-title">{nowDate.toLocaleDateString(locale, { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</h1>
+          <div className="dp-header-meta">
+            <span className="dp-clock">{nowDate.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })} {isGerman ? "Uhr" : ""}</span>
+            {livePanels.length > 0 ? <span className="dp-live">{isGerman ? `${onDutyNow} Personen im Dienst` : `${onDutyNow} people on duty`}</span> : null}
+            <ShiftplanUploadStatus />
           </div>
         </div>
-      </motion.div>
+        <div className="dp-header-actions">
+          <ShiftTimeLegend shiftTimes={shiftTimes} compact />
+          <button type="button" onClick={handleRefresh} className="dp-btn" disabled={refreshing}>
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? (isGerman ? "Lädt…" : "Loading…") : (isGerman ? "Aktualisieren" : "Refresh")}
+          </button>
+        </div>
+      </header>
 
-      {/* ══ BAND GRID ════════════════════════════════════════════════════════ */}
-      <div className="min-h-0 flex-1">
-        <AnimatePresence>
-          {scheduleLoading ? (
-            <motion.div
-              key="loading"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex h-full flex-col items-center justify-center gap-3 text-slate-400"
-            >
-              <RefreshCw className="h-8 w-8 animate-spin" />
-              <p className="text-sm font-semibold">{isGerman ? "Tagesplanung wird geladen..." : "Loading daily plan..."}</p>
-            </motion.div>
-          ) : scheduleError ? (
-            <motion.div
-              key="error"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              role="alert"
-              className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
-            >
-              <p className="text-sm font-semibold text-red-300">{scheduleError}</p>
-              <button type="button" onClick={() => void handleRefresh()} className="rounded-md border border-red-400/35 bg-red-500/10 px-4 py-2 text-xs font-bold text-red-100 hover:bg-red-500/20">
-                {isGerman ? "Erneut laden" : "Retry"}
-              </button>
-            </motion.div>
-          ) : groups.length === 0 ? (
-            <motion.div
-              key="empty"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex h-full flex-col items-center justify-center gap-3"
-            >
-              <Calendar className="h-10 w-10 text-slate-700" />
-              <p className="text-[13px] font-semibold text-slate-500">{isGerman ? "Keine Schichtdaten für heute" : "No shift data for today"}</p>
-              <p className="text-[10px] text-slate-600">{isGerman ? "Bitte lade zunächst den Schichtplan für diesen Monat." : "Please load the shift plan for this month first."}</p>
-              <a
-                href={`/odin-go/shiftplan${window.location.search}`}
-                className="flex items-center gap-1 text-[10px] font-bold text-cyan-400 hover:underline"
-              >
-                {isGerman ? "Zum Schichtplan" : "Open shift plan"} <ChevronRight className="h-3 w-3" />
-              </a>
-            </motion.div>
-          ) : (
-            <motion.div
-              key="bands"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="h-full p-4"
-              style={{
-                display: "grid",
-                gridTemplateColumns: gridCols,
-                gap: "12px",
-              }}
-            >
-              {groups.map(({ cat, employees }, i) => (
-                <ShiftBand
-                  key={cat}
-                  cat={cat}
-                  employees={employees}
-                  now={now}
-                  bandIndex={i}
-                  totalBands={n}
-                  nightCarryover={cat === "night" && nightCarryover}
-                />
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
+      <div className="dp-body">
+        {scheduleLoading ? (
+          <div className="dp-state"><RefreshCw className="h-6 w-6 animate-spin" /><p>{isGerman ? "Tagesplan wird geladen…" : "Loading daily plan…"}</p></div>
+        ) : scheduleError ? (
+          <div className="dp-state" role="alert">
+            <p className="text-red-300">{scheduleError}</p>
+            <button type="button" onClick={() => void handleRefresh()} className="dp-btn">{isGerman ? "Erneut laden" : "Retry"}</button>
+          </div>
+        ) : groups.length === 0 ? (
+          <div className="dp-state">
+            <Calendar className="h-8 w-8" />
+            <p>{isGerman ? "Keine Schichtdaten für heute" : "No shift data for today"}</p>
+            <p className="dp-muted">{isGerman ? "Bitte lade zunächst den Schichtplan für diesen Monat." : "Please load the shift plan for this month first."}</p>
+            <a href={`/odin-go/shiftplan${window.location.search}`} className="dp-link">{isGerman ? "Zum Schichtplan" : "Open shift plan"} <ChevronRight className="inline h-3 w-3" /></a>
+          </div>
+        ) : (
+          <div className="dp-grid" style={{ gridTemplateColumns: `repeat(${Math.min(groups.length, 3)}, minmax(0, 1fr))` }}>
+            {groups.map(({ cat, employees }) => (
+              <ShiftBand key={cat} cat={cat} employees={employees} now={now} nightCarryover={cat === "night" && nightCarryover} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

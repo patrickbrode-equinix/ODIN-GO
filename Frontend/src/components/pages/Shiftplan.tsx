@@ -28,6 +28,7 @@ import { useLanguage } from "../../context/LanguageContext";
 import { isColoEmployee, parseColoPool } from "../../utils/colo";
 import { buildColoMarkLookupFromRoles, coloMarkKey, isColoMarked } from "../../utils/coloMarks";
 import { ColoLegend } from "../shiftplan/ColoBadge";
+import { getPlanningMonth, usePlanningDateStore } from "../../store/planningDateStore";
 import { useWeekplanRoleStore } from "../../store/weekplanRoleStore";
 
 import {
@@ -202,10 +203,11 @@ export default function Shiftplan() {
   /* monthsWithData + API mutations provided by hook */
   const { monthsWithData, refreshMonths } = useShiftplanActions();
 
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
-  const [selectedMonthIndex, setSelectedMonthIndex] = useState(
-    new Date().getMonth()
-  );
+  // The shown month travels along between the planning views (see planningDateStore).
+  const [selectedYear, setSelectedYear] = useState(() => getPlanningMonth().year);
+  const [selectedMonthIndex, setSelectedMonthIndex] = useState(() => getPlanningMonth().month - 1);
+  const setSharedPlanningMonth = usePlanningDateStore((state) => state.setMonth);
+  useEffect(() => { setSharedPlanningMonth(selectedYear, selectedMonthIndex + 1); }, [selectedYear, selectedMonthIndex, setSharedPlanningMonth]);
 
   // View mode: month (default) or full-year overview
   const [viewMode, setViewMode] = useState<"month" | "year">("month");

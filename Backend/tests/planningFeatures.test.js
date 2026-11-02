@@ -130,3 +130,38 @@ test('colleagues who wish each other and share a preferred shift end up in the s
   assert.ok(workedTogether > 0);
   assert.ok(together / workedTogether >= 0.8, `only ${together}/${workedTogether} days in the same shift type`);
 });
+
+test('continuity: no employee changes between early and late within a calendar week', async () => {
+  buildTeam(36);
+  const result = await generate(2027, 3);
+  const byEmployee = new Map();
+  for (const shift of result.shifts) {
+    if (!byEmployee.has(shift.employee_name)) byEmployee.set(shift.employee_name, new Map());
+    byEmployee.get(shift.employee_name).set(shift.day, typeOf(shift.shift_code));
+  }
+  let mixed = 0;
+  let weeks = 0;
+  for (const [, days] of byEmployee) {
+    // Mon-Sun weeks completely inside March 2027 (1.3. is a Monday)
+    for (let monday = 1; monday + 6 <= 31; monday += 7) {
+      const types = new Set([...Array(7).keys()].map((offset) => days.get(monday + offset)).filter((type) => type === 'early' || type === 'late'));
+      weeks += 1;
+      if (types.size > 1) mixed += 1;
+    }
+  }
+  assert.ok(weeks > 100);
+  assert.ok(mixed / weeks <= 0.02, `${mixed} of ${weeks} weeks mix early and late`);
+});
+
+test('Armin Hadzic is never planned on weekends, even without any wish', async () => {
+  buildTeam(30, (index) => (index === 0 ? { name: 'Armin Hadzic' } : {}));
+  for (const [year, month] of [[2027, 1], [2027, 2], [2027, 3]]) {
+    const result = await generate(year, month);
+    const own = result.shifts.filter((shift) => shift.employee_name === 'Armin Hadzic');
+    assert.ok(own.length > 10, 'he is planned on weekdays');
+    for (const shift of own) {
+      const weekday = new Date(year, month - 1, shift.day).getDay();
+      assert.ok(weekday >= 1 && weekday <= 5, `${year}-${month}-${shift.day} is a weekend`);
+    }
+  }
+});

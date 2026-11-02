@@ -109,7 +109,7 @@ const PRIMARY_TABS: WorkspaceTab[] = [
 
 const SUPPORT_TABS: WorkspaceTab[] = [
   { id: "drafts", label: { de: "Entwürfe", en: "Drafts" }, path: "/drafts", icon: FileText, group: "support" },
-  { id: "preferences", label: { de: "Einstellungen", en: "Settings" }, path: "/preferences", icon: SlidersHorizontal, group: "support" },
+  { id: "preferences", label: { de: "Schichtwünsche", en: "Shift wishes" }, path: "/preferences", icon: SlidersHorizontal, group: "support" },
 ];
 
 const ADMIN_TABS: WorkspaceTab[] = [

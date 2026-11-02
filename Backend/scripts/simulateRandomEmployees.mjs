@@ -369,6 +369,7 @@ function audit(result, year, month, carryIn) {
     byProfile: Object.fromEntries([...new Set(perEmployee.map((entry) => entry.profile))].map((profile) => { const rows = perEmployee.filter((entry) => entry.profile === profile); return [profile, { n: rows.length, avgMissing: Number((rows.reduce((sum, row) => sum + Math.max(row.target - row.actual, 0), 0) / rows.length).toFixed(1)) }]; })),
     conflictMessages: result.conflicts.map((conflict) => conflict.message),
     shiftsRaw: result.shifts,
+    reasonsRaw: args.explain ? Object.fromEntries(Object.entries(result.explanations).map(([key, value]) => [key, (value.reasons || []).slice(0, 3)])) : undefined,
   };
 }
 

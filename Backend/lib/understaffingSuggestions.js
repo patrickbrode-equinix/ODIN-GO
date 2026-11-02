@@ -247,8 +247,12 @@ export function getTypeMinimum({ definitions = [], staffingRules = [], shiftType
 /* ------------------------------------------------ */
 
 /**
- * Same merge as the generator's preferencesForDate closure: a month entry
- * (YYYY-MM) overrides preferred_shifts and extends unwanted_shifts.
+ * Month wishes (YYYY-MM) and the general wishes:
+ *  - a month with at least one selection REPLACES the general preferred AND unwanted shifts for that month
+ *    (what the employee sees: "ersetzt dort die Ganzjahresauswahl"); a general taboo is therefore not carried
+ *    into a month in which the employee deliberately chose something else,
+ *  - a month without any selection (empty lists) is no wish: the general wishes apply.
+ * Used by the generator and by the evaluations, so both always see the same wishes.
  */
 export function mergeMonthlyPreferences(base, monthKey) {
   if (!base || typeof base !== 'object') return base;
@@ -256,13 +260,15 @@ export function mergeMonthlyPreferences(base, monthKey) {
     ? base.monthly_preferences[monthKey]
     : null;
   if (!monthly || typeof monthly !== 'object') return base;
+  const preferred = Array.isArray(monthly.preferred_shifts) ? monthly.preferred_shifts : [];
+  const unwanted = Array.isArray(monthly.unwanted_shifts) ? monthly.unwanted_shifts : [];
+  if (preferred.length === 0 && unwanted.length === 0) return base;
+  // A shift can not be wanted and unwanted at once; the taboo wins.
+  const unwantedSet = new Set(unwanted.map((code) => String(code || '').trim().toUpperCase()));
   return {
     ...base,
-    preferred_shifts: Array.isArray(monthly.preferred_shifts) ? monthly.preferred_shifts : base.preferred_shifts,
-    unwanted_shifts: [...new Set([
-      ...(Array.isArray(base.unwanted_shifts) ? base.unwanted_shifts : []),
-      ...(Array.isArray(monthly.unwanted_shifts) ? monthly.unwanted_shifts : []),
-    ])],
+    preferred_shifts: preferred.filter((code) => !unwantedSet.has(String(code || '').trim().toUpperCase())),
+    unwanted_shifts: [...unwantedSet].filter(Boolean),
   };
 }
 

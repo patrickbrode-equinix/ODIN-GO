@@ -12,6 +12,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Textarea } from "../ui/textarea";
+import { matchesSearch } from "../ui/SearchableSelect";
 import { Plus, Pencil, Check, X, FolderKanban, Calendar, User } from "lucide-react";
 
 /* ---------------------------------------------------- */
@@ -90,6 +91,7 @@ function CreateProjectForm({
   const [progress, setProgress] = useState(0);
   const [saving, setSaving] = useState(false);
   const [participants, setParticipants] = useState<string[]>([]);
+  const [participantSearch, setParticipantSearch] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -182,8 +184,20 @@ function CreateProjectForm({
 
       <div className="space-y-1">
         <Label className="text-xs text-slate-400">{t("projects.participantsLabel")}</Label>
-        <select multiple value={participants} onChange={(event) => setParticipants([...event.currentTarget.selectedOptions].map((option) => option.value))} className="min-h-32 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
-          {employees.map((employee) => <option key={employee} value={employee}>{employee}</option>)}
+        <input
+          value={participantSearch}
+          onChange={(event) => setParticipantSearch(event.target.value)}
+          placeholder="Mitarbeiter suchen…"
+          aria-label="Mitarbeiter suchen"
+          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100 placeholder:text-slate-500"
+        />
+        <select multiple value={participants} onChange={(event) => {
+          // Only the visible (filtered) options change; selected people that are filtered out stay selected.
+          const visible = new Set([...event.currentTarget.options].map((option) => option.value));
+          const chosen = [...event.currentTarget.selectedOptions].map((option) => option.value);
+          setParticipants([...participants.filter((name) => !visible.has(name)), ...chosen]);
+        }} className="min-h-32 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">
+          {employees.filter((employee) => matchesSearch(employee, participantSearch)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}
         </select>
         <p className="text-[11px] text-slate-500">{t("projects.participantsHint")}</p>
       </div>

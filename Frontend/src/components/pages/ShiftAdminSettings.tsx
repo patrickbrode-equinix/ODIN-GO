@@ -35,6 +35,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import { useAuth } from '../../context/AuthContext';
 import { dedupeEmployeeNames } from '../../utils/employeeNames';
 import { PreferenceWeightSettings } from './PreferenceWeightSettings';
+import { SearchableSelect } from '../ui/SearchableSelect';
 
 /* ── locale helpers ── */
 
@@ -2239,10 +2240,15 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         </div>
 
         <div className="mb-4 flex flex-col gap-3 xl:flex-row">
-          <select value={newDbsEmployee} onChange={(event) => setNewDbsEmployee(event.target.value)} className="flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-            <option value="">{t("shiftAdmin.dbsSelectEmployee")}</option>
-            {employees.filter((employee) => !dbsPool.some((entry) => entry.employee_name === employee)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}
-          </select>
+          <SearchableSelect
+            className="flex-1"
+            value={newDbsEmployee}
+            onChange={setNewDbsEmployee}
+            emptyLabel={t("shiftAdmin.dbsSelectEmployee")}
+            searchPlaceholder={isGerman ? 'Mitarbeiter suchen…' : 'Search employees…'}
+            noResultsLabel={isGerman ? 'Keine Treffer' : 'No matches'}
+            options={employees.filter((employee) => !dbsPool.some((entry) => entry.employee_name === employee)).map((employee) => ({ value: employee, label: employee }))}
+          />
           <button onClick={addDbsEmployee} disabled={!newDbsEmployee} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-fuchsia-300/30 bg-fuchsia-400/15 px-4 py-2 text-sm font-medium text-fuchsia-100 transition hover:bg-fuchsia-400/25 disabled:opacity-50">
             <Plus className="h-4 w-4" />
             {t("shiftAdmin.dbsAddEmployee")}
@@ -2520,10 +2526,15 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
           {isGerman ? 'Schicht wählen (Früh, Spät oder Nacht) und die Tage Mo–So markieren: Der Mitarbeiter wird nur an diesen Tagen und nur in dieser Schicht eingeplant. Ohne Schicht wird er an den markierten Tagen gar nicht eingeplant.' : 'Leave empty to exclude the employee on the selected weekdays. Early, late, or night plans the employee only on the selected weekdays and only with that shift type.'}
         </div>
         <div className="mb-4 grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_auto]">
-          <select value={newExclusionName} onChange={(event) => setNewExclusionName(event.target.value)} className="flex-1 rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
-            <option value="">{t("shiftAdmin.exclSelectEmployee")}</option>
-            {employees.filter((employee) => !exclusions.some((exclusion) => exclusion.employee_name === employee)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}
-          </select>
+          <SearchableSelect
+            className="flex-1"
+            value={newExclusionName}
+            onChange={setNewExclusionName}
+            emptyLabel={t("shiftAdmin.exclSelectEmployee")}
+            searchPlaceholder={isGerman ? 'Mitarbeiter suchen…' : 'Search employees…'}
+            noResultsLabel={isGerman ? 'Keine Treffer' : 'No matches'}
+            options={employees.filter((employee) => !exclusions.some((exclusion) => exclusion.employee_name === employee)).map((employee) => ({ value: employee, label: employee }))}
+          />
           <select value={newExclusionFixedShiftType} onChange={(event) => setNewExclusionFixedShiftType(event.target.value as FixedShiftTypeValue)} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">
             {FIXED_SHIFT_TYPE_OPTIONS.map((option) => (
               <option key={option.value || 'exclude'} value={option.value}>{isGerman ? option.labelDe : option.labelEn}</option>
@@ -2650,7 +2661,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               <span>{isGerman ? 'Hervorhebung in dieser Admin-Liste aktivieren' : 'Enable highlighting in this admin list'}</span>
             </label>
             <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto]">
-              <select value={newAdminFlagName} onChange={(event) => setNewAdminFlagName(event.target.value)} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"><option value="">{isGerman ? 'Mitarbeiter auswählen' : 'Select employee'}</option>{employees.filter((employee) => !adminFlags.some((flag) => flag.employee_name === employee)).map((employee) => <option key={employee} value={employee}>{employee}</option>)}</select>
+              <SearchableSelect value={newAdminFlagName} onChange={setNewAdminFlagName} emptyLabel={isGerman ? 'Mitarbeiter auswählen' : 'Select employee'} searchPlaceholder={isGerman ? 'Mitarbeiter suchen…' : 'Search employees…'} noResultsLabel={isGerman ? 'Keine Treffer' : 'No matches'} options={employees.filter((employee) => !adminFlags.some((flag) => flag.employee_name === employee)).map((employee) => ({ value: employee, label: employee }))} />
               <input value={newAdminFlagNote} onChange={(event) => setNewAdminFlagNote(event.target.value)} placeholder={isGerman ? 'Interne Notiz (optional)' : 'Internal note (optional)'} className="rounded-2xl border border-white/10 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500" />
               <button type="button" onClick={() => void saveAdminFlag()} disabled={!newAdminFlagName || saving === 'admin-flag'} className="inline-flex items-center justify-center gap-2 rounded-2xl bg-red-400 px-4 py-2 text-sm font-medium text-slate-950 disabled:opacity-50"><Save className="h-4 w-4" />{saving === 'admin-flag' ? '…' : (isGerman ? 'Hinweis speichern' : 'Save note')}</button>
             </div>

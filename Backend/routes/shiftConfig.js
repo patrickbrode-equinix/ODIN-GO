@@ -936,7 +936,7 @@ router.put('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
       ? Object.fromEntries(Object.entries(req.body.monthly_preferences).filter(([key, value]) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key) && value && typeof value === 'object').map(([key, value]) => [key, {
           preferred_shifts: sanitizeShiftCodes(value.preferred_shifts).slice(0, 20),
           unwanted_shifts: sanitizeShiftCodes(value.unwanted_shifts).slice(0, 20),
-        }]))
+        }]).filter(([, entry]) => entry.preferred_shifts.length > 0 || entry.unwanted_shifts.length > 0))
       : {};
 
     const requestedColleagueIds = Array.isArray(req.body.preferred_colleagues)

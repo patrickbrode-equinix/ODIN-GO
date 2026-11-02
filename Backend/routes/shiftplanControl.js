@@ -76,6 +76,7 @@ import {
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, focusCostControl } from '../lib/costControl.js';
+import { isWeekdayOnlyEmployee, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
 import { buildColoRolePlan, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
@@ -1032,6 +1033,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     fixedShiftTypeByEmployee.delete(row.employee_name);
     exclusionBlockedWeekdaysByEmployee.delete(row.employee_name);
   }
+  // Fixed rule in code: some employees never work on weekends (absolute, like an admin exclusion).
+  for (const name of employees) {
+    if (!isWeekdayOnlyEmployee(name) || shiftExcludedSet.has(name)) continue;
+    exclusionBlockedWeekdaysByEmployee.set(name, new Set([...(exclusionBlockedWeekdaysByEmployee.get(name) || []), ...WEEKEND_WEEKDAYS]));
+  }
 
   const assignExclRes = await pool.query(
     `SELECT employee_name FROM assignment_employee_exclusions WHERE is_active = TRUE AND (valid_from IS NULL OR valid_from <= $1) AND (valid_to IS NULL OR valid_to >= $2)`,
@@ -1135,19 +1141,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const preferencesForDate = (employeeName, dateStr) => {
     const base = empPrefsMap.get(employeeName);
     if (!base) return base;
-    const monthKey = String(dateStr || '').slice(0, 7);
-    const monthly = base.monthly_preferences && typeof base.monthly_preferences === 'object'
-      ? base.monthly_preferences[monthKey]
-      : null;
-    if (!monthly || typeof monthly !== 'object') return base;
-    return {
-      ...base,
-      preferred_shifts: Array.isArray(monthly.preferred_shifts) ? monthly.preferred_shifts : base.preferred_shifts,
-      unwanted_shifts: [...new Set([
-        ...(Array.isArray(base.unwanted_shifts) ? base.unwanted_shifts : []),
-        ...(Array.isArray(monthly.unwanted_shifts) ? monthly.unwanted_shifts : []),
-      ])],
-    };
+    return mergeMonthlyPreferences(base, String(dateStr || '').slice(0, 7));
   };
 
   const staffRes = await pool.query('SELECT * FROM staffing_rules');
@@ -1391,6 +1385,23 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const isLateOverflowExempt = (employee, day, typeKey) => lateOverflowEligible.has(employee)
     && typeKey === 'late'
     && [4, 5].includes(dayOfWeek(year, mon, day));
+  // One shift type per calendar week (Mon-Sun): an employee who already has a shift of another type in the same
+  // week must not get a second type (e.g. late Mon-Wed, free, early Fri).
+  const shiftTypeByCodeForWeeks = new Map([...shiftDefs, ...(shortNightDefinition ? [shortNightDefinition] : [])]
+    .map((definition) => [String(definition.code || '').trim().toUpperCase(), normalizePlanningShiftTypeKey(definition.shift_type)]));
+  const isDbsPoolMember = (employee) => Boolean(specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.has(employee));
+  const hasOtherTypeInWeek = (employee, day, shiftType) => {
+    if (!shiftType || shiftType === 'special') return false;
+    // DBS members have their own rotation and limits outside DBS; they are not held to one type per week.
+    if (isDbsPoolMember(employee)) return false;
+    const weekStart = day - ((dayOfWeek(year, mon, day) + 6) % 7);
+    for (let weekDay = Math.max(weekStart, 1); weekDay <= Math.min(weekStart + 6, numDays); weekDay++) {
+      if (weekDay === day) continue;
+      const assignedType = shiftTypeByCodeForWeeks.get(String(empDayAssignment[employee]?.[weekDay] || '').trim().toUpperCase());
+      if (assignedType && assignedType !== 'special' && assignedType !== shiftType) return true;
+    }
+    return false;
+  };
   const preferredTypesCache = new Map();
   const getPreferredTypes = (employee) => {
     if (!preferredTypesCache.has(employee)) {
@@ -2712,11 +2723,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             }
           }
 
+          const weekTypeConflict = !hardBlocked && hasOtherTypeInWeek(employee, day, normalizePlanningShiftTypeKey(shiftDef.shift_type));
+          if (weekTypeConflict) reasons.push('Schichtartwechsel innerhalb der Woche (nur wenn kein anderer Kandidat passt)');
           return {
             emp: employee,
             score: hardBlocked ? Number.NEGATIVE_INFINITY : score,
             reasons,
             hardBlocked,
+            weekTypeConflict,
             mutualShared,
             preferenceMatch: preferenceMatch && !preferredWishIgnored,
             preferencePenalty,
@@ -2759,15 +2773,17 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           // Soft wishes (strength < 100 %): an employee is only used against a
           // wish when no candidate without (or with a weaker) violation is left.
           if (left.preferencePenalty !== right.preferencePenalty) return left.preferencePenalty - right.preferencePenalty;
+          // Continuity: nobody gets a second shift type within the same week while another candidate is available.
+          if (left.weekTypeConflict !== right.weekTypeConflict) return left.weekTypeConflict ? 1 : -1;
           // Late/night slots go to the people who can work nothing else first; everybody else has early
           // as the overflow pool.
           if (left.lateNightPriority !== right.lateNightPriority) return left.lateNightPriority ? -1 : 1;
+          // Open Colo cover is filled by a pool member whose wishes fit (before the hour balance: the Colo demand is a fixed requirement).
+          if (left.coloBoost !== right.coloBoost) return left.coloBoost ? -1 : 1;
           // Contractual hours remain the first fairness guard. Within one
           // shift's worth of open hours, honour the selected shift wish.
           const targetGapDifference = (right.targetHoursGap + right.varietyHours) - (left.targetHoursGap + left.varietyHours);
           if (Math.abs(targetGapDifference) > getShiftHoursForDay(shiftDef, day)) return targetGapDifference;
-          // Open Colo cover is filled by a pool member whose wishes fit.
-          if (left.coloBoost !== right.coloBoost) return left.coloBoost ? -1 : 1;
           // A stated preferred shift is then the first tie-breaker after all
           // hard safety, recovery, absence and staffing rules have applied.
           if (left.preferenceMatch !== right.preferenceMatch) return left.preferenceMatch ? -1 : 1;
@@ -3402,6 +3418,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           weekTypeBonus = assignedType === catchupType ? 120 : -200;
           break;
         }
+        // Continuity (hard): one shift type per week, no isolated days and no two-day fragments. A new run
+        // starts Monday to Wednesday at the earliest (at least three days until Friday) or extends an existing block.
+        if (weekTypeBonus === -200 && !isDbsPoolMember(employee)) continue;
+        if (!touchesWorkDay && !guaranteePass && !([1, 2, 3].includes(dow))) continue;
         availableDays.push({
           day,
           definition: catchupDefinition,
@@ -3611,6 +3631,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (!hasDefinitionCapacityForEmployee(employee, day, definition)) continue;
 
           if (violatesWeekendRecoveryForAddedDay(employee, day)) continue;
+          // Continuity: never a second shift type within the same calendar week.
+          if (hasOtherTypeInWeek(employee, day, normalizePlanningShiftTypeKey(definition.shift_type))) continue;
 
           let previousStreak = 0;
           for (let previous = day - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) previousStreak++;
@@ -3654,7 +3676,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       });
       const selected = mandatoryCandidates[0];
       // Up to one shift of missing hours is accepted instead of a day that does not fit the plan.
-      if (!selected.cohesive && missingHours <= MAX_UNCOHESIVE_FILLER_HOURS) break;
+      // Continuity before hours: a day that does not continue a block is only added when the employee would
+      // otherwise be more than MAX_HOURS_BELOW_TARGET under the official target.
+      if (!selected.cohesive && empHours[employee] >= employeeOfficialTargetHours[employee] - MAX_HOURS_BELOW_TARGET) break;
       addEmployeeTargetCatchupShift(employee, selected.day, selected.definition, [
         `Verbindlicher letzter Sollzeitausgleich auf mindestens ${employeeTargetHours[employee]} Stunden`,
         `Zusatzdienst ${selected.definition.code} wurde gewählt, weil noch ${missingHours.toFixed(1)}h fehlen`,
@@ -4242,7 +4266,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       }),
   };
   const fulfilledColleagueWishes = planReport.preferredColleagues.wishes.filter((wish) => wish.sharedDays > 0).length;
+  // Seamless transition: say clearly which previous month was used (or that none was found).
+  const carryMonthLabel = `${MONTH_NAMES_DE[Number(planReport.previousMonthCarry.month.slice(5))]} ${planReport.previousMonthCarry.month.slice(0, 4)}`;
+  const carryRule = planReport.previousMonthCarry.employees > 0
+    ? `Übergang aus dem Vormonat ${carryMonthLabel}: laufende Blöcke, Erholungstage und Arbeitsserien von ${planReport.previousMonthCarry.employees} Mitarbeitenden fortgesetzt`
+    : `Vormonat ${carryMonthLabel} nicht gefunden: der Plan beginnt ohne Übergang (Dienstplan des Vormonats im Schichtplan hinterlegen oder zuerst als Draft erzeugen)`;
+  if (planReport.previousMonthCarry.employees === 0 && !isPartialPeriod) {
+    conflicts.push({ day: 1, date: `${month}-01`, shift: '', severity: 'warning', type: 'previous_month_missing', message: carryRule });
+  }
   planReport.rulesApplied = [
+    carryRule,
     `Rotationsregeln: Max ${rotation.max_consecutive_workdays} Arbeitstage, ${rotation.max_nights_per_month} Nächte/Monat`,
     `Serienplanung aktiv: ${shiftDefs.map((definition) => `${definition.code}=${getShiftSeriesDays(definition)} Tage`).join(', ')}`,
     'Wochenanker aktiv: Neue Serien werden zur nächsten Montagkante ausgerichtet',

@@ -39,6 +39,14 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
   const [editDescription, setEditDescription] = useState('');
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  // Several drafts at once: selection mode with checkboxes, then "delete selected".
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const toggleSelected = (ids: number[], on: boolean) => setSelected((current) => {
+    const next = new Set(current);
+    for (const id of ids) { if (on) next.add(id); else next.delete(id); }
+    return next;
+  });
   const monthLabel = (month: string) => new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1, 1).toLocaleDateString(locale, { month: 'long', year: 'numeric' });
   const time = (value: string) => { const parsed = new Date(value).getTime(); return Number.isFinite(parsed) ? parsed : 0; };
 
@@ -62,7 +70,10 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
           ? `${deleted.length} gelöscht, ${failed.length} nicht gelöscht: ${failed[0].message}`
           : `${deleted.length} deleted, ${failed.length} not deleted: ${failed[0].message}`);
       }
-      if (deleted.length) await onDeleted?.(deleted);
+      if (deleted.length) {
+        setSelected((current) => { const next = new Set(current); deleted.forEach((id) => next.delete(id)); return next; });
+        await onDeleted?.(deleted);
+      }
     } finally { setDeleting(null); }
   }
 
@@ -96,6 +107,9 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
 
   const renderDraft = (draft: D, standalone: boolean) => <div key={draft.id} className={`rounded-lg border ${activeId === draft.id ? 'border-blue-500/50 bg-blue-500/10' : 'border-border/20 bg-background/40'}`}>
     <div className="flex items-center gap-2 p-2">
+      {selectMode && onDeleted && (draft.status !== 'activated'
+        ? <input type="checkbox" checked={selected.has(draft.id)} onChange={(event) => toggleSelected([draft.id], event.target.checked)} aria-label={`${de ? 'Draft auswählen' : 'Select draft'}: ${monthLabel(draft.month)}, v${draft.version}`} className="h-4 w-4 shrink-0 rounded border-border/50" />
+        : <span className="h-4 w-4 shrink-0" title={de ? 'Aktivierte Drafts können nicht gelöscht werden' : 'Activated drafts can not be deleted'} />)}
       <button type="button" className="flex-1 min-w-0 text-left" onClick={() => onOpen(draft)}>
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
           <span>{monthLabel(draft.month)}</span>
@@ -127,6 +141,7 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
     }
   }
   entries.sort((left, right) => right.time - left.time);
+  const deletableIds = groups.flatMap((group) => group.drafts).filter((draft) => draft.status !== 'activated').map((draft) => draft.id);
 
   return <div className="space-y-3">
     <ExcelExportDialog
@@ -142,6 +157,20 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
         else void exportGroup(target.id, 'management', include);
       }}
     />
+    {onDeleted && entries.length > 0 && <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-xs">
+      <Button type="button" size="sm" variant={selectMode ? 'default' : 'outline'} onClick={() => { setSelectMode((current) => !current); setSelected(new Set()); }}>
+        {selectMode ? (de ? 'Auswahl beenden' : 'Stop selecting') : (de ? 'Mehrere auswählen' : 'Select several')}
+      </Button>
+      {selectMode && <>
+        <Button type="button" size="sm" variant="outline" onClick={() => toggleSelected(deletableIds, true)}>{de ? 'Alle auswählen' : 'Select all'}</Button>
+        <Button type="button" size="sm" variant="outline" disabled={selected.size === 0} onClick={() => setSelected(new Set())}>{de ? 'Auswahl aufheben' : 'Clear'}</Button>
+        <span className="text-muted-foreground">{selected.size} {de ? 'ausgewählt' : 'selected'}</span>
+        <Button type="button" size="sm" variant="outline" className="ml-auto border-red-500/40 text-red-300 hover:bg-red-500/10" disabled={selected.size === 0 || deleting !== null}
+          onClick={() => void removeDrafts([...selected], de ? `${selected.size} ausgewählte Drafts wirklich löschen? Das kann nicht rückgängig gemacht werden.` : `Delete ${selected.size} selected drafts? This can not be undone.`)}>
+          <Trash2 className="mr-1.5 h-3.5 w-3.5" />{de ? 'Ausgewählte löschen' : 'Delete selected'}
+        </Button>
+      </>}
+    </div>}
     {entries.map(entry => {
       if (entry.kind === 'draft') return renderDraft(entry.draft, true);
       const { group } = entry;
@@ -155,6 +184,12 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
       const members = [...group.drafts].sort((left, right) => left.month === right.month ? right.version - left.version : left.month.localeCompare(right.month));
       return <div key={entry.key} className="rounded-xl border border-border/30 bg-background/40">
         <div className="flex items-start gap-2 p-3">
+          {selectMode && onDeleted && (() => {
+            const ids = group.drafts.filter((draft) => draft.status !== 'activated').map((draft) => draft.id);
+            if (!ids.length) return <span className="mt-1 h-4 w-4 shrink-0" />;
+            const all = ids.every((id) => selected.has(id));
+            return <input type="checkbox" checked={all} ref={(element) => { if (element) element.indeterminate = !all && ids.some((id) => selected.has(id)); }} onChange={(event) => toggleSelected(ids, event.target.checked)} aria-label={`${de ? 'Gesamte Planung auswählen' : 'Select entire plan'}: ${title}`} className="mt-1 h-4 w-4 shrink-0 rounded border-border/50" />;
+          })()}
           <button type="button" aria-expanded={open} className="flex min-w-0 flex-1 items-start justify-between gap-3 text-left"
             onClick={() => setOpenState(current => ({ ...current, [group.id]: !open }))}>
             <div className="min-w-0">

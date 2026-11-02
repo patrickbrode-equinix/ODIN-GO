@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { Save } from "lucide-react";
 import { api } from "../../api/api";
 import { Button } from "../ui/button";
+import { SearchableSelect } from "../ui/SearchableSelect";
 
 const SHIFT_CODES = ["E1", "E2", "L1", "L2", "N", "COLO"];
 const WEEKDAYS: Array<{ value: number; de: string; en: string }> = [
@@ -173,23 +174,23 @@ export function UserPreferenceEditor({ userId, value, colleagueOptions, isGerman
         <div className={label}>{isGerman ? "Wunschkollegen (höchstens vier)" : "Preferred colleagues (at most four)"}</div>
         <div className="grid gap-2 sm:grid-cols-2">
           {[0, 1, 2, 3].map((slot) => (
-            <select
+            <SearchableSelect
               key={`c-${slot}`}
-              value={draft.colleagues[slot] ?? ""}
-              onChange={(event) => setDraft((current) => {
+              value={draft.colleagues[slot] === undefined ? "" : String(draft.colleagues[slot])}
+              onChange={(value) => setDraft((current) => {
                 const next = [...current.colleagues];
-                const id = Number(event.target.value);
+                const id = Number(value);
                 if (!id) next.splice(slot, 1);
                 else next[slot] = id;
                 return { ...current, colleagues: [...new Set(next.filter(Boolean))] };
               })}
-              className="rounded-lg border border-border/40 bg-background/70 px-2 py-1.5 text-xs text-foreground"
-            >
-              <option value="">{isGerman ? "– kein Wunschkollege –" : "– none –"}</option>
-              {colleagueOptions
+              emptyLabel={isGerman ? "– kein Wunschkollege –" : "– none –"}
+              searchPlaceholder={isGerman ? "Kollegen suchen…" : "Search colleagues…"}
+              noResultsLabel={isGerman ? "Keine Treffer" : "No matches"}
+              options={colleagueOptions
                 .filter((option) => option.id !== userId && (option.id === draft.colleagues[slot] || !draft.colleagues.includes(option.id)))
-                .map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-            </select>
+                .map((option) => ({ value: String(option.id), label: option.name }))}
+            />
           ))}
         </div>
       </div>

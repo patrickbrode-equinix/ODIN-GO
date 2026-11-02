@@ -10,6 +10,8 @@ import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
 import { formatAbsoluteDateTime, formatRelativeTime } from '../../utils/loginStatus';
 import { getHessenHolidayMap } from '../../utils/deHolidays';
 import { VacationWishes } from './VacationWishes';
+import { PLANNING_YEARS } from '../../api/planningPeriods';
+import { SearchableSelect } from '../ui/SearchableSelect';
 import {
   Heart, Moon, Sun, CalendarDays, Users,
   HelpCircle, Save, CheckCircle2, AlertTriangle,
@@ -25,7 +27,7 @@ const COPY = {
     unwantedShifts: 'Unerwünschte Schichten',
     unwantedShiftsHelp: 'Eine ausgewählte Schicht ist ein absolutes Tabu. Die automatische Planung darf dich dafür niemals einteilen. COLO schließt dich von automatisch geplanten Colo-Aufgaben aus.',
     monthlyTitle: 'Zeitlich begrenzte Schichtwünsche',
-    monthlyHelp: 'Lege für einen bestimmten Monat eigene Wünsche fest. Diese Werte gelten nur in diesem Monat und ersetzen dort die Ganzjahresauswahl.',
+    monthlyHelp: 'Lege für einen bestimmten Monat eigene Wünsche fest. Sobald du in einem Monat etwas auswählst, ersetzt diese Auswahl dort die allgemeinen Wünsche vollständig (bevorzugt und unerwünscht). Monate ohne Auswahl folgen den allgemeinen Wünschen.',
     year: 'Jahr',
     month: 'Monat',
     wholeYearHint: 'Die bisherigen Schichtwünsche gelten als Ganzjahreswunsch.',
@@ -63,7 +65,7 @@ const COPY = {
     unwantedShifts: 'Unwanted shifts',
     unwantedShiftsHelp: 'A selected shift is an absolute exclusion. Automatic planning must never assign you to it. COLO excludes you from automatically planned Colo duties.',
     monthlyTitle: 'Time-limited shift wishes',
-    monthlyHelp: 'Set dedicated wishes for one month. These values apply only in that month and replace the whole-year selection there.',
+    monthlyHelp: 'Set dedicated wishes for one month. As soon as you select something in a month, that selection completely replaces the general wishes there (preferred and unwanted). Months without a selection follow the general wishes.',
     year: 'Year',
     month: 'Month',
     wholeYearHint: 'The existing shift wishes apply as a whole-year preference.',
@@ -282,8 +284,9 @@ export default function EmployeePreferences() {
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ msg: string; type: 'ok' | 'err' } | null>(null);
   const [dirty, setDirty] = useState(false);
-  const [preferenceYear, setPreferenceYear] = useState(new Date().getFullYear());
-  const [preferenceMonth, setPreferenceMonth] = useState(new Date().getMonth() + 1);
+  // The planner plans the open planning years only (2027 and following): the month wishes start there, ascending.
+  const [preferenceYear, setPreferenceYear] = useState<number>(PLANNING_YEARS[0]);
+  const [preferenceMonth, setPreferenceMonth] = useState(1);
   const [shiftOptions, setShiftOptions] = useState<string[]>(SHIFT_CODES);
   const [shiftNameMap, setShiftNameMap] = useState<Record<string, string>>({});
   const [blockedDaysEnabled, setBlockedDaysEnabled] = useState(false);
@@ -354,7 +357,11 @@ export default function EmployeePreferences() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await api.put('/shift-config/employee-preferences', { ...prefs, preferred_days: [] });
+      // Only months with a selection are wishes (empty months and months outside the planning years are dropped).
+      const monthly = Object.fromEntries(Object.entries(prefs.monthly_preferences).filter(([key, value]) => (
+        PLANNING_YEARS.includes(Number(key.slice(0, 4))) && (value.preferred_shifts.length > 0 || value.unwanted_shifts.length > 0)
+      )));
+      await api.put('/shift-config/employee-preferences', { ...prefs, monthly_preferences: monthly, preferred_days: [] });
       showToast(copy.saved);
       setDirty(false);
     } catch (e: any) {
@@ -373,6 +380,11 @@ export default function EmployeePreferences() {
     setPrefs(prev => {
       const arr = (prev[field] as any[]) || [];
       const next = arr.includes(value) ? arr.filter((v: any) => v !== value) : [...arr, value];
+      // A shift can not be preferred and unwanted at the same time: choosing one side clears the other.
+      const opposite = field === 'preferred_shifts' ? 'unwanted_shifts' : field === 'unwanted_shifts' ? 'preferred_shifts' : null;
+      if (opposite && !arr.includes(value)) {
+        return { ...prev, [field]: next, [opposite]: (prev[opposite] as string[]).filter((code) => code !== value) };
+      }
       return { ...prev, [field]: next };
     });
     setDirty(true);
@@ -394,21 +406,20 @@ export default function EmployeePreferences() {
     setDirty(true);
   };
   const monthsWithPreferences = Object.entries(prefs.monthly_preferences)
-    .filter(([, value]) => value.preferred_shifts.length > 0 || value.unwanted_shifts.length > 0)
+    .filter(([key, value]) => PLANNING_YEARS.includes(Number(key.slice(0, 4))) && (value.preferred_shifts.length > 0 || value.unwanted_shifts.length > 0))
     .sort(([left], [right]) => left.localeCompare(right));
   const toggleMonthlyShift = (field: 'preferred_shifts' | 'unwanted_shifts', code: string) => {
     setPrefs((current) => {
       const existing = current.monthly_preferences[selectedMonthKey] || { preferred_shifts: [], unwanted_shifts: [] };
-      const nextValues = existing[field].includes(code)
-        ? existing[field].filter((value) => value !== code)
-        : [...existing[field], code];
-      return {
-        ...current,
-        monthly_preferences: {
-          ...current.monthly_preferences,
-          [selectedMonthKey]: { ...existing, [field]: nextValues },
-        },
-      };
+      const adding = !existing[field].includes(code);
+      const nextValues = adding ? [...existing[field], code] : existing[field].filter((value) => value !== code);
+      // Preferred and unwanted exclude each other (also inside one month).
+      const otherField = field === 'preferred_shifts' ? 'unwanted_shifts' : 'preferred_shifts';
+      const nextEntry = { ...existing, [field]: nextValues, [otherField]: adding ? existing[otherField].filter((value) => value !== code) : existing[otherField] };
+      const monthly = { ...current.monthly_preferences, [selectedMonthKey]: nextEntry };
+      // A month without any selection is no wish: drop it, so it does not hide the general wishes.
+      if (nextEntry.preferred_shifts.length === 0 && nextEntry.unwanted_shifts.length === 0) delete monthly[selectedMonthKey];
+      return { ...current, monthly_preferences: monthly };
     });
     setDirty(true);
   };
@@ -476,11 +487,13 @@ export default function EmployeePreferences() {
         <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_190px] sm:items-end">
           <label className="text-xs text-muted-foreground">
             {copy.year}
-            <input type="number" min={2020} max={2100} value={preferenceYear} onChange={(event) => { setPreferenceYear(Number(event.target.value) || new Date().getFullYear()); setDirty(true); }} className="mt-1 w-full rounded-lg border border-border bg-background/85 px-3 py-2 text-sm text-foreground focus:border-sky-500/50 focus:outline-none" />
+            <select value={preferenceYear} onChange={(event) => setPreferenceYear(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-border bg-background/85 px-3 py-2 text-sm text-foreground focus:border-sky-500/50 focus:outline-none">
+              {PLANNING_YEARS.map((year) => <option key={year} value={year}>{year}</option>)}
+            </select>
           </label>
           <label className="text-xs text-muted-foreground">
             {copy.month}
-            <select value={preferenceMonth} onChange={(event) => { setPreferenceMonth(Number(event.target.value)); setDirty(true); }} className="mt-1 w-full rounded-lg border border-border bg-background/85 px-3 py-2 text-sm text-foreground focus:border-sky-500/50 focus:outline-none">
+            <select value={preferenceMonth} onChange={(event) => setPreferenceMonth(Number(event.target.value))} className="mt-1 w-full rounded-lg border border-border bg-background/85 px-3 py-2 text-sm text-foreground focus:border-sky-500/50 focus:outline-none">
               {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => <option key={month} value={month}>{new Date(preferenceYear, month - 1, 1).toLocaleDateString(locale, { month: 'long' })}</option>)}
             </select>
           </label>
@@ -683,23 +696,23 @@ export default function EmployeePreferences() {
           {[0, 1, 2, 3].map((slot) => {
             const selectedId = prefs.preferred_colleagues[slot];
             return (
-              <select
+              <SearchableSelect
                 key={slot}
-                value={selectedId ?? ''}
-                onChange={(event) => {
-                  const nextId = Number.parseInt(event.target.value, 10);
+                value={selectedId === undefined ? '' : String(selectedId)}
+                onChange={(value) => {
+                  const nextId = Number.parseInt(value, 10);
                   const next = prefs.preferred_colleagues.filter((_, index) => index !== slot);
                   if (Number.isInteger(nextId)) next.splice(Math.min(slot, next.length), 0, nextId);
                   update('preferred_colleagues', next.slice(0, 4));
                 }}
                 disabled={slot > prefs.preferred_colleagues.length}
-                className="rounded-lg border border-border/30 bg-background/40 px-3 py-2 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <option value="">{isGerman ? `Wunschkollege ${slot + 1} – keiner` : `Colleague ${slot + 1} – none`}</option>
-                {colleagueOptions
+                emptyLabel={isGerman ? `Wunschkollege ${slot + 1} – keiner` : `Colleague ${slot + 1} – none`}
+                searchPlaceholder={isGerman ? 'Kollegen suchen…' : 'Search colleagues…'}
+                noResultsLabel={isGerman ? 'Keine Treffer' : 'No matches'}
+                options={colleagueOptions
                   .filter((option) => option.id === selectedId || !prefs.preferred_colleagues.includes(option.id))
-                  .map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-              </select>
+                  .map((option) => ({ value: String(option.id), label: option.name }))}
+              />
             );
           })}
         </div>

@@ -8,7 +8,7 @@ export default function UserPreferencesPage() {
       <div>
         <div className="flex items-center gap-3">
           <SlidersHorizontal className="h-6 w-6 text-cyan-400" />
-          <h1 className="text-2xl font-bold">Meine Wünsche</h1>
+          <h1 className="text-2xl font-bold">Schichtwünsche</h1>
         </div>
         <p className="mt-2 text-sm text-muted-foreground">
           Diese Angaben werden bei der automatischen Dienstplanung berücksichtigt.

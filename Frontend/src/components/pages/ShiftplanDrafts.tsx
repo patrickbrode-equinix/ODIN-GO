@@ -28,6 +28,9 @@ import { GroupedDraftList } from "../shiftplan/GroupedDraftList";
 import { ExcelExportDialog } from "../shiftplan/ExcelExportDialog";
 import { excelExportParams, updateDraftMetadata, type ExcelExportInclude, type ExcelExportVariant, type PlanningDraftGroup } from "../../api/planningPeriods";
 import { useAuth } from "../../context/AuthContext";
+import { SearchableSelect } from "../ui/SearchableSelect";
+import { DraftShiftTable } from "./ShiftplanControlCenter";
+import { getPlanningMonth, usePlanningDateStore } from "../../store/planningDateStore";
 
 type DraftSummary = {
   id: number;
@@ -52,7 +55,7 @@ type Draft = DraftSummary & {
     dispatcherConfig?: { enabled?: boolean; priorities?: string[] };
     planningConfig?: { monthly_target_hours?: number };
     coloAssignments?: unknown;
-    planReport?: { lateOverflow?: Array<{ employee: string; day: number }> };
+    planReport?: { lateOverflow?: Array<{ employee: string; day: number }>; colo?: { enabled?: boolean; assigned?: number; requiredAssignments?: number } };
   };
   cost_control?: CostControlData;
 };
@@ -170,19 +173,23 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
 });
 
 export default function ShiftplanDrafts() {
-  const { user } = useAuth();
+  const { user, canWrite } = useAuth();
+  const canEditDrafts = canWrite("shiftplan_control");
   const initialParams = new URLSearchParams(window.location.search);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [draftGroups, setDraftGroups] = useState<PlanningDraftGroup<DraftSummary>[]>([]);
   const draftListLoaded = useRef(false);
   const [activeDraft, setActiveDraft] = useState<Draft | null>(null);
+  // The month of the opened draft travels along to the other planning views.
+  const setSharedPlanningMonth = usePlanningDateStore((state) => state.setMonth);
+  useEffect(() => { if (activeDraft?.month) setSharedPlanningMonth(Number(activeDraft.month.slice(0, 4)), Number(activeDraft.month.slice(5))); }, [activeDraft?.month, setSharedPlanningMonth]);
   const [viewMode, setViewMode] = useState<ViewMode>(initialParams.get("view") === "year" ? "year" : initialParams.get("view") === "quarter" ? "quarter" : initialParams.get("view") === "month" ? "month" : "all");
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaTitle, setMetaTitle] = useState("");
   const [metaDescription, setMetaDescription] = useState("");
   const [metaSaving, setMetaSaving] = useState(false);
   const [selectedQuarter, setSelectedQuarter] = useState(Math.min(4, Math.max(1, Number(initialParams.get('quarter')) || 1)));
-  const [selectedYear, setSelectedYear] = useState(Number(initialParams.get("year")) || 2027);
+  const [selectedYear, setSelectedYear] = useState(Number(initialParams.get("year")) || getPlanningMonth().year);
   const [feedback, setFeedback] = useState<DraftFeedback[]>([]);
   const [votes, setVotes] = useState<VoteSummary>({ approve: 0, needs_changes: 0, total: 0 });
   const [currentVote, setCurrentVote] = useState<string | null>(null);
@@ -202,6 +209,42 @@ export default function ShiftplanDrafts() {
       .then(({ data }) => setShiftTimes(buildShiftTimeMap(data?.definitions)))
       .catch(() => setShiftTimes({}));
   }, []);
+
+  // Manual changes of a draft (same endpoints as the generator page): set a shift, swap two cells, mark Colo.
+  const applyEditedDraft = (edited: any) => setActiveDraft((current) => (current ? { ...current, ...edited } : edited));
+  const editDraftCell = async (employeeName: string, day: number, shiftCode: string) => {
+    if (!activeDraft) return;
+    try {
+      const response = await api.patch(`/shiftplan-control/drafts/${activeDraft.id}/shifts`, { employeeName, day, shiftCode });
+      applyEditedDraft(response.data.draft);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.error || requestError.message);
+      throw requestError;
+    }
+  };
+  const swapDraftCells = async (a: { employeeName: string; day: number }, b: { employeeName: string; day: number }) => {
+    if (!activeDraft) return;
+    try {
+      const response = await api.patch(`/shiftplan-control/drafts/${activeDraft.id}/swap`, { a, b });
+      applyEditedDraft(response.data.draft);
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.error || requestError.message);
+      throw requestError;
+    }
+  };
+  const editDraftColo = async (employeeName: string, day: number, assigned: boolean) => {
+    if (!activeDraft) return;
+    try {
+      const response = await api.patch(`/shiftplan-control/drafts/${activeDraft.id}/colo`, { employeeName, day, assigned });
+      setActiveDraft((current) => {
+        const base: any = current ? { ...current, ...response.data.draft } : response.data.draft;
+        const coloAssignments = Array.isArray(response.data.coloAssignments) ? response.data.coloAssignments : base.config_snapshot?.coloAssignments;
+        return { ...base, config_snapshot: { ...(base.config_snapshot || {}), coloAssignments } };
+      });
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.error || requestError.message);
+    }
+  };
 
   const loadDraft = async (id: number) => {
     setLoading(true);
@@ -452,11 +495,23 @@ export default function ShiftplanDrafts() {
                       {user.isAdmin ? <Button type="button" variant="outline" onClick={() => setManagementExportOpen(true)} disabled={exportingId === activeDraft.id} className="border-slate-600 bg-slate-950/40"><BarChart3 className="mr-2 h-4 w-4" />Excel für die Leitung</Button> : null}
                     </div>
                   </div>
-                  <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman /><span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100"><strong>Ü</strong>= Überbesetzung Spätschicht (Do/Fr)</span><span className="inline-flex items-center gap-2 rounded-md border border-sky-400/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-100"><strong>✎</strong>= manuell geändert</span></div>
+                  <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman />{activeDraft.config_snapshot?.planReport?.colo?.enabled ? <span className="inline-flex items-center gap-2 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-bold text-cyan-100"><strong>Colo</strong>{activeDraft.config_snapshot.planReport.colo.assigned}/{activeDraft.config_snapshot.planReport.colo.requiredAssignments} besetzt</span> : null}<span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100"><strong>Ü</strong>= Überbesetzung Spätschicht (Do/Fr)</span><span className="inline-flex items-center gap-2 rounded-md border border-sky-400/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-100"><strong>✎</strong>= manuell geändert</span></div>
                   <ShiftTimeLegend shiftTimes={shiftTimes} className="mt-2" />
                 </section>
 
-                <section className="liquid-panel overflow-hidden rounded-[26px]"><DraftScheduleTable draft={activeDraft} /></section>
+                {canEditDrafts && activeDraft.status !== "activated" ? (
+                  // Same editor as in the generator: pick a cell, swap two shifts or set a shift by hand.
+                  <section className="liquid-panel rounded-[26px] p-3">
+                    <DraftShiftTable
+                      draft={activeDraft as any}
+                      onCellChange={editDraftCell}
+                      onSwap={swapDraftCells}
+                      onColoChange={editDraftColo}
+                    />
+                  </section>
+                ) : (
+                  <section className="liquid-panel overflow-hidden rounded-[26px]"><DraftScheduleTable draft={activeDraft} /></section>
+                )}
                 <CostControlPanel costControl={activeDraft.cost_control} isGerman />
 
                 <section className="grid gap-5 lg:grid-cols-2">
@@ -464,7 +519,7 @@ export default function ShiftplanDrafts() {
                     <div className="flex items-center gap-3"><MessageSquarePlus className="h-5 w-5 text-cyan-300" /><h3 className="text-lg font-bold">Kommentar oder Verbesserung</h3></div>
                     <p className="mt-2 text-xs text-muted-foreground">Dein Name wird automatisch aus dem verifizierten Jarvis-Profil übernommen.</p>
                     <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_110px]">
-                      <select value={employeeName} onChange={(event) => setEmployeeName(event.target.value)} className="rounded-xl px-3 py-2.5 text-sm"><option value="">Allgemeiner Kommentar</option>{employees.map((employee) => <option key={employee} value={employee}>Bezug: {employee}</option>)}</select>
+                      <SearchableSelect value={employeeName} onChange={setEmployeeName} emptyLabel="Allgemeiner Kommentar" searchPlaceholder="Mitarbeiter suchen…" options={employees.map((employee) => ({ value: employee, label: `Bezug: ${employee}` }))} />
                       <Input type="number" min="1" max={daysInActiveMonth} value={day} onChange={(event) => setDay(event.target.value)} placeholder="Tag (optional)" />
                     </div>
                     <textarea value={suggestion} onChange={(event) => setSuggestion(event.target.value)} rows={4} className="mt-3 w-full rounded-xl p-3 text-sm" placeholder="Was sollte angepasst werden und warum?" />
