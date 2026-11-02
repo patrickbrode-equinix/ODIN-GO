@@ -11,7 +11,7 @@ import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
 import { ShiftplanTable } from '../shiftplan/ShiftplanTable';
 import type { EmployeeMonthlyStats } from '../shiftplan/shiftplan.hours';
 import type { Absence } from '../../api/absences';
-import { GroupedDraftList } from '../shiftplan/GroupedDraftList';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { ColoLegend } from '../shiftplan/ColoBadge';
 import { buildColoMarkLookup, getColoMark } from '../../utils/coloMarks';
 import { excelExportParams, type ExcelExportInclude, type ExcelExportVariant, type PlanningDraftGroup } from '../../api/planningPeriods';
@@ -140,6 +140,8 @@ function getSeverityLabel(severity: string, t: (key: any) => string) {
 /* ------------------------------------------------ */
 
 export default function ShiftplanControlCenter() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const { language, t } = useLanguage();
   const locale = getLanguageLocale(language);
   const isGerman = language === 'de';
@@ -798,7 +800,7 @@ export default function ShiftplanControlCenter() {
       </div>
 
       {/* Tab Content */}
-      <EnterpriseCard noPadding>
+      <EnterpriseCard noPadding className="overflow-clip">
         <div className="p-6">
           {/* Overview Tab */}
           {tab === 'overview' && (
@@ -808,11 +810,11 @@ export default function ShiftplanControlCenter() {
                 <h3 className="text-sm font-bold text-foreground">{t('sc.shiftPlanning')} — {draftListYear}</h3>
               </div>
 
-              <GroupedDraftList groups={draftGroups} activeId={activeDraft?.id}
-                onOpen={draft => { setSelectedMonth(draft.month); void loadDraft(draft.id); setTab('draft'); }}
-                onExportMonth={(draft, variant, include) => void handleExport(draft.id, variant, include)} onError={setError} onMetadataSaved={loadDrafts}
-                onDeleted={async (ids) => { if (activeDraft && ids.includes(activeDraft.id)) setActiveDraft(null); await loadDrafts(); }} />
-              {!draftGroups.length && <p className="py-8 text-center text-sm text-muted-foreground">{isGerman ? 'Noch keine Drafts für dieses Jahr vorhanden.' : 'No drafts for this year yet.'}</p>}
+              {/* The draft list lives on the Drafts page only (select, delete, export, quarter / year groups). */}
+              <div className="rounded-xl border border-border/30 bg-background/40 p-4 text-sm">
+                <p className="text-muted-foreground">{isGerman ? `Für ${draftListYear} gibt es ${draftGroups.reduce((sum, group) => sum + group.drafts.length, 0)} Drafts. Die Liste mit Auswahl, Löschen und Export steht jetzt nur noch unter „Entwürfe".` : `There are ${draftGroups.reduce((sum, group) => sum + group.drafts.length, 0)} drafts for ${draftListYear}. The list with selection, delete and export is now on the Drafts page only.`}</p>
+                <button type="button" className="mt-3 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-xs font-bold text-blue-200 hover:bg-blue-500/20" onClick={() => navigate(`/odin-go/drafts${location.search}`)}>{isGerman ? 'Zu den Entwürfen' : 'Open drafts'}</button>
+              </div>
             </div>
           )}
 

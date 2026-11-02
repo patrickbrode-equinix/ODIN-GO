@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { formatShiftMonthLabel } from '../lib/shiftplanMonth.js';
 import { describe, it } from 'node:test';
 
 import {
@@ -16,7 +17,7 @@ describe('shiftHours helpers', () => {
     assert.equal(getDailyCreditedHours({ shiftCode: 'FS', isWeekend: false }), 0);
     assert.equal(getDailyCreditedHours({ absenceType: 'VACATION', isWeekend: false }), 8);
     assert.equal(getDailyCreditedHours({ absenceType: 'TRAINING', isWeekend: true }), 0);
-    assert.equal(getDailyCreditedHours({ shiftCode: 'E1', shiftHours: 8, isHoliday: true }), 8);
+    assert.equal(getDailyCreditedHours({ shiftCode: 'E1', shiftHours: 8, isHoliday: true }), 16);
   });
 
   it('aggregates monthly and annual hours without double-counting absence days with shifts', () => {
@@ -64,9 +65,9 @@ describe('shiftHours helpers', () => {
   it('distributes the annual target by Mon-Fri working days per month', () => {
     // 2026 has 261 weekdays -> 2088h / 261 = 8h per weekday
     assert.equal(countWeekdaysInYear(2026), 261);
-    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 11 }), 168);
-    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 10 }), 176);
-    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 11, startDay: 1, endDay: 15 }), 80);
+    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 11 }), 174, 'every full month has the configured 174 h');
+    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 2 }), 174);
+    assert.equal(getWorkdayBasedTargetHours({ year: 2026, month: 11, startDay: 1, endDay: 15 }), 82.86);
     let sum = 0;
     for (let month = 1; month <= 12; month++) sum += getWorkdayBasedTargetHours({ year: 2026, month });
     assert.equal(Math.round(sum), DEFAULT_ANNUAL_TARGET_HOURS);
@@ -102,4 +103,27 @@ describe('double-pay days (24.12. / 31.12.)', () => {
     });
     assert.equal(result.employees[0].actual_hours, 11.5 + 8);
   });
+});
+
+describe('holiday hours', () => { it('holiday work counts twice (federal + Hessen), 24.12./31.12. keep their own rule', async () => {
+  const { getHolidayAdjustedShiftHours, buildShiftHoursLookup } = await import('../lib/shiftHours.js');
+  // Karfreitag 2027 is 26.03.; Fronleichnam (Hessen) 27.05.
+  assert.equal(getHolidayAdjustedShiftHours({ baseHours: 8, month: '2027-03', day: 26, holidayName: 'Karfreitag' }), 16);
+  assert.equal(getHolidayAdjustedShiftHours({ baseHours: 8, month: '2027-05', day: 27, holidayName: 'Fronleichnam' }), 16);
+  assert.equal(getHolidayAdjustedShiftHours({ baseHours: 8, month: '2027-03', day: 25, holidayName: null }), 8);
+  // 24.12. with times: presence 07:00-16:00 -> 9h - 1h break + 4h after noon
+  assert.equal(getHolidayAdjustedShiftHours({ baseHours: 8, month: '2027-12', day: 24, holidayName: 'Heiligabend', definition: { start_time: '07:00', end_time: '16:00', start_day_offset: 0, end_day_offset: 0 } }), 12);
+  const summary = aggregateYearlyHours({
+    year: 2027,
+    shifts: [
+      { employee_name: 'Test', month: formatShiftMonthLabel(2027, 3), day: 26, shift_code: 'E1' },
+      { employee_name: 'Test', month: formatShiftMonthLabel(2027, 3), day: 25, shift_code: 'E1' },
+    ],
+    absences: [],
+    shiftHoursLookup: buildShiftHoursLookup([{ code: 'E1', duration_hours: 8 }]),
+  });
+  const entry = summary.employees?.[0] || summary.employee_hours?.[0] || summary[0];
+  const march = (entry.months || []).find((month) => month.month === 3);
+  assert.equal(march.actual_hours, 24);
+});
 });

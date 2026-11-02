@@ -14,7 +14,7 @@ export function ColoBadge({ mark, isGerman, className = "" }: ColoBadgeProps) {
       aria-label={coloMarkTitle(mark, isGerman)}
       className={`inline-flex items-center justify-center rounded border border-cyan-400/60 bg-cyan-500/25 px-1 text-[9px] font-black leading-[13px] text-cyan-100 ${className}`}
     >
-      Colo
+      COLO
     </span>
   );
 }

@@ -291,9 +291,8 @@ export function ShiftplanTable({
 
 
       <CardContent className="p-0 h-full overflow-visible flex-1 min-h-0">
-        {/* The table scrolls inside this box (both axes) so the sticky date header stays
-            visible while scrolling down; a page-level scroll would let it leave the screen. */}
-        <div className="shiftplan-schedule-table overflow-auto h-full max-h-[calc(100dvh-7rem)] rounded-xl border border-white/10 bg-[#0f111a]">
+        {/* One scrollbar only: the page (outer) scrolls both axes; the date header sticks to its top and the name column to its left. */}
+        <div className="shiftplan-schedule-table rounded-xl border border-white/10 bg-[#0f111a]">
           <table ref={tableRef} className="w-full border-collapse text-left">
             <thead className="sticky top-0 bg-[#0f111a]/95 backdrop-blur-md z-40 border-b border-white/10 shadow-sm">
               {/* KW GROUPS */}

@@ -1,10 +1,13 @@
 import { parseMonthLabel } from './monthParser.js';
+import { buildHessenHolidayMap } from './hessenHolidays.js';
 
 export const DEFAULT_MONTHLY_TARGET_HOURS = 174;
 export const DEFAULT_ANNUAL_TARGET_HOURS = DEFAULT_MONTHLY_TARGET_HOURS * 12;
 export const CREDITED_SHIFT_CODES = new Set(['ABW', 'SEMINAR']);
 export const CREDITED_ABSENCE_TYPES = new Set(['VACATION', 'SICK', 'TRAINING', 'OFFSITE']);
 export const CREDITED_ABSENCE_HOURS = 8;
+/** Hours worked on a public holiday (federal + Hessen) count twice. */
+export const HOLIDAY_HOURS_FACTOR = 2;
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -41,20 +44,25 @@ export function countWeekdaysInYear(year) {
 // Distributes the annual target across the months by their Mon-Fri working days,
 // so a month with 21 weekdays gets ~168h and one with 23 weekdays ~184h while the
 // year still sums up to the annual target (Ø 174h with the default 2088h).
+/**
+ * Target hours of a month. The configured monthly target (174 h, Admin menu) applies to EVERY full month, so the
+ * shift plan always shows the same target. Only a part of a month (week plans, partial periods) is scaled by its
+ * Mon-Fri working days.
+ */
 export function getWorkdayBasedTargetHours({
   year,
   month,
   monthlyTargetHours = DEFAULT_MONTHLY_TARGET_HOURS,
-  annualTargetHours,
   startDay = 1,
   endDay = 31,
 }) {
   const normalizedMonthly = normalizeTargetHours(monthlyTargetHours, DEFAULT_MONTHLY_TARGET_HOURS);
-  const normalizedAnnual = normalizeAnnualTargetHours(annualTargetHours, normalizedMonthly);
-  const yearWeekdays = countWeekdaysInYear(year);
-  if (!yearWeekdays) return normalizedMonthly;
+  const monthWeekdays = countWeekdaysInRange(year, month, 1, 31);
+  const lastDay = new Date(year, month, 0).getDate();
+  if (startDay <= 1 && endDay >= lastDay) return normalizedMonthly;
+  if (!monthWeekdays) return normalizedMonthly;
   const weekdays = countWeekdaysInRange(year, month, startDay, endDay);
-  return Number(((normalizedAnnual * weekdays) / yearWeekdays).toFixed(2));
+  return Number(((normalizedMonthly * weekdays) / monthWeekdays).toFixed(2));
 }
 
 /** code -> { startTime, endTime, startDayOffset, endDayOffset } for the double-pay days. */
@@ -118,6 +126,28 @@ export function getDoublePayDayHours({ startTime, endTime, startDayOffset = 0, e
   return Number(Math.max(0, presenceHours - breakHours + bonusMinutes / 60).toFixed(2));
 }
 
+/**
+ * Paid hours of one worked shift on one day: public holidays count twice; 24.12./31.12. use the
+ * "paid twice from 12:00" rule when the shift has times. `definition` may carry start_time/end_time.
+ */
+export function getHolidayAdjustedShiftHours({ baseHours, month, day, holidayName = null, definition = null }) {
+  const base = Number(baseHours) || 0;
+  if (!holidayName || base <= 0) return base;
+  const [year, mon] = String(month || '').split('-').map(Number);
+  if (year && mon && isDoublePayDay(new Date(year, mon - 1, day))) {
+    const paid = definition?.start_time && definition?.end_time
+      ? getDoublePayDayHours({
+        startTime: definition.start_time,
+        endTime: definition.end_time,
+        startDayOffset: definition.start_day_offset,
+        endDayOffset: definition.end_day_offset,
+      })
+      : null;
+    return paid ?? base;
+  }
+  return Number((base * HOLIDAY_HOURS_FACTOR).toFixed(2));
+}
+
 export function getDailyCreditedHours({ shiftCode, shiftHours = 0, absenceType = null, isWeekend = false, isHoliday = false, doublePayHours = null }) {
   const normalizedCode = String(shiftCode || '').trim().toUpperCase();
   const normalizedAbsenceType = String(absenceType || '').trim().toUpperCase();
@@ -125,7 +155,8 @@ export function getDailyCreditedHours({ shiftCode, shiftHours = 0, absenceType =
   if (normalizedCode === 'FS') return 0;
   if (normalizedCode) {
     if (doublePayHours !== null && !CREDITED_SHIFT_CODES.has(normalizedCode)) return doublePayHours;
-    if (isHoliday) return normalizeTargetHours(shiftHours, 0);
+    // Worked on a public holiday (federal + Hessen): hours are credited twice.
+    if (isHoliday) return normalizeTargetHours(shiftHours * HOLIDAY_HOURS_FACTOR, 0);
     if (!isWeekend && CREDITED_SHIFT_CODES.has(normalizedCode)) return CREDITED_ABSENCE_HOURS;
     return normalizeTargetHours(shiftHours, 0);
   }
@@ -172,6 +203,7 @@ export function aggregateYearlyHours({
   monthlyTargetHours = DEFAULT_MONTHLY_TARGET_HOURS,
   annualTargetHours,
 }) {
+  const holidayMapByYear = new Map([[year, buildHessenHolidayMap(year)]]);
   const timesLookup = shiftTimesLookup instanceof Map ? shiftTimesLookup : new Map(Object.entries(shiftTimesLookup || {}));
   const normalizedMonthlyTargetHours = normalizeTargetHours(monthlyTargetHours, DEFAULT_MONTHLY_TARGET_HOURS);
   const normalizedAnnualTargetHours = normalizeAnnualTargetHours(annualTargetHours, normalizedMonthlyTargetHours);
@@ -218,6 +250,7 @@ export function aggregateYearlyHours({
       shiftCode,
       shiftHours: employeeShiftHours?.get(`${employeeName}__${shiftCode}`) ?? hoursLookup.get(shiftCode) ?? 0,
       isWeekend: isWeekend(date),
+      isHoliday: Boolean(holidayMapByYear.get(year)?.[toDateKey(date)]),
       doublePayHours: shiftTimes ? getDoublePayDayHours(shiftTimes) : null,
     });
     const dateKey = toDateKey(date);

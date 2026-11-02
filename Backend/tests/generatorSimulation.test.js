@@ -133,7 +133,7 @@ test('year balance: hours behind the target are planned on top of the next month
   for (const [name, entry] of Object.entries(february.fairness)) {
     const balance = Number(january.carryState[name]?.hourBalance || 0);
     assert.equal(entry.carriedHourBalance, balance, `${name}: carried balance is reported`);
-    const expected = Math.min(Math.max(-balance, -16), 24);
+    const expected = Math.min(Math.max(-balance, -12), 48);
     assert.ok(Math.abs((entry.planningTargetHours - entry.targetHours) - expected) < 0.05, `${name}: planning target = official target + capped balance`);
     if (balance < -1) checked++;
   }

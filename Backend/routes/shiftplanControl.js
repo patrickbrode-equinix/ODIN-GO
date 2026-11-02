@@ -23,11 +23,12 @@ import {
   parseDraftMonthId,
 } from '../lib/shiftplanMonth.js';
 import { parseMonthLabel } from '../lib/monthParser.js';
-import { countWeekdaysInRange, getWorkdayBasedTargetHours } from '../lib/shiftHours.js';
+import { countWeekdaysInRange, getHolidayAdjustedShiftHours, getWorkdayBasedTargetHours } from '../lib/shiftHours.js';
 import {
   applyWeekendBlockSlots,
   getVarietyAdjustment,
   getVarietyJitter,
+  VARIETY_SEED_MIN_PRIORITY,
   normalizeVarietyPriority,
   buildDailyShiftSlots,
   buildShiftSlots,
@@ -65,7 +66,7 @@ import { getHolidayShiftStaffingLimit, normalizeHolidayStaffingConfig } from '..
 import { buildHessenHolidayMap, toIsoDate } from '../lib/hessenHolidays.js';
 import { WISH_STATUS, evaluateMonthWishes } from '../lib/wishFulfillment.js';
 import { mergeMonthlyPreferences } from '../lib/understaffingSuggestions.js';
-import { buildDayLimitMap, buildStaffingForContext, resolveStaffingDayContext } from '../lib/staffingLimits.js';
+import { buildDayLimitMap, buildStaffingForContext, describeStaffingSettings, resolveStaffingDayContext } from '../lib/staffingLimits.js';
 import {
   buildEmployeeNameLookup,
   findEmployeeName,
@@ -1241,7 +1242,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     wishesDenied: 0,
     rulesApplied: [],
   };
-  planReport.varietySeed = varietyPriority > 60 ? varietySeed : 0;
+  planReport.varietySeed = varietyPriority >= 25 ? varietySeed : 0;
 
   const empStats = {};
   const empDayAssignment = {};
@@ -1317,8 +1318,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const chained = Number(carryState?.[employee]?.hourBalance);
     return [employee, balanceFromChain ? (Number.isFinite(chained) ? chained : 0) : (yearToDateBalance.get(employee) || 0)];
   }));
-  const MAX_CATCHUP_HOURS = 24;
-  const MAX_RELIEF_HOURS = 16;
+  // Year balance goal: nobody ends the year more than BALANCE_FLOOR_HOURS below the official target; upwards it is open
+  // (but nobody is planned excessively: the relief below lowers the next month's target).
+  const BALANCE_FLOOR_HOURS = 20;
+  // The balance pass starts well before the limit, so one more 8h shift still ends inside the tolerance.
+  const BALANCE_TRIGGER_HOURS = 6;
+  const MAX_CATCHUP_HOURS = 48;
+  const MAX_RELIEF_HOURS = 12;
   const employeeTargetHours = Object.fromEntries(activeEmployees.map((employee) => {
     const adjustment = isPartialPeriod ? 0 : Math.min(Math.max(-carriedHourBalance[employee], -MAX_RELIEF_HOURS), MAX_CATCHUP_HOURS);
     return [employee, Number(Math.max(0, employeeOfficialTargetHours[employee] + adjustment).toFixed(2))];
@@ -1345,10 +1351,19 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // Guarantee pass: employees more than MAX_HOURS_BELOW_TARGET below the official target may also be planned on
   // weekdays they asked to keep free (a wish, never a rule). Only used when everything else is exhausted.
   let guaranteePass = false;
-  const isHardBlockedForPass = (evaluation) => (relaxedWishPass
-    ? evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred')
-    : evaluation.hardBlocked);
-  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => isHardBlockedForPass(getShiftWishEvaluation(employee, dateStr, code));
+  // Early-shift fallback (balance pass): for employees who are behind on hours, a wish list / unwanted shift never blocks an
+  // early shift (night refusals, night limits and holiday wishes still do). Early is the overflow pool.
+  let earlyFallbackPass = false;
+  const isEarlyShiftCode = (code) => earlyShiftCodes.includes(String(code || '').trim().toUpperCase());
+  const isHardBlockedForPass = (evaluation, code = null) => {
+    if (earlyFallbackPass && isEarlyShiftCode(code)) {
+      return evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred' && violation.type !== 'unwanted');
+    }
+    return relaxedWishPass
+      ? evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred')
+      : evaluation.hardBlocked;
+  };
+  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => isHardBlockedForPass(getShiftWishEvaluation(employee, dateStr, code), code);
   const getShiftWishPenaltyOnDate = (employee, dateStr, code) => getShiftWishEvaluation(employee, dateStr, code).penalty;
   // Month-level variant for the catch-up passes (no date / night count context).
   const evaluateShiftWishForPrefs = (prefs, code) => evaluateShiftWishViolations({
@@ -1382,6 +1397,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   planReport.lateOverflowEnabled = lateOverflowEnabled;
   planReport.lateOverflowEligible = [...lateOverflowEligible];
   planReport.lateOverflow = [];
+  // Shifts above the maximum staffing that the balance pass added on purpose (year balance far below target).
+  planReport.balanceOverstaff = [];
+  // Early shifts that overrode a shift wish / unwanted shift to reach the hours (balance pass).
+  planReport.earlyFallbacks = [];
   const isLateOverflowExempt = (employee, day, typeKey) => lateOverflowEligible.has(employee)
     && typeKey === 'late'
     && [4, 5].includes(dayOfWeek(year, mon, day));
@@ -1576,7 +1595,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (rule.otherDaysPerMonth !== null && countDaysOutsideDbs(employee) + additionalDays > rule.otherDaysPerMonth) return false;
     return true;
   };
-  const getShiftHoursForDay = (definition, day) => getShiftDurationHours(definition, dayOfWeek(year, mon, day));
+  // Paid hours of a shift on a day: public holidays (federal + Hessen) are credited twice.
+  const getShiftHoursForDay = (definition, day) => getHolidayAdjustedShiftHours({
+    baseHours: getShiftDurationHours(definition, dayOfWeek(year, mon, day)),
+    month,
+    day,
+    holidayName: holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null,
+    definition,
+  });
   const isPoolEmployeeWorkingOnWeekday = (definition, employeeName, weekday) => {
     const shiftCode = String(definition?.code || '').trim().toUpperCase();
     if (shiftCode !== dbsPlanningConfig.shiftCode) return true;
@@ -1726,7 +1752,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
 
     const ownPoolHours = specialPoolsByShift.get(String(shiftDef.code || '').trim().toUpperCase())?.get(emp)?.durationHours;
-    const shiftHours = Number.isFinite(ownPoolHours) && ownPoolHours > 0 ? ownPoolHours : getShiftHoursForDay(assignedShiftDef, day);
+    const shiftHours = Number.isFinite(ownPoolHours) && ownPoolHours > 0
+      ? getHolidayAdjustedShiftHours({ baseHours: ownPoolHours, month, day, holidayName: holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null, definition: assignedShiftDef })
+      : getShiftHoursForDay(assignedShiftDef, day);
     if (shiftDef.shift_type === 'night') empStats[emp].nights++;
     if (weekend) {
       empStats[emp].weekends++;
@@ -3068,7 +3096,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       reasons,
     };
   };
-  const hasDefinitionCapacityForEmployee = (employee, day, definition) => {
+  // Cells that exceed the configured maximum on purpose to make up hours (see the balance pass).
+  const balanceOverstaffCells = new Set();
+  const ELASTIC_EXTRA_STAFF = 2;
+  const capacityWithin = (employee, day, definition, extra = 0) => {
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[dateStr] || null);
     if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) return false;
@@ -3081,9 +3112,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const assignedElsewhere = shifts.filter((entry) => Number(entry.day) === Number(day)
       && String(entry.shift_code || '').trim().toUpperCase() === code
       && entry.employee_name !== employee).length;
-    if (assignedElsewhere >= maxStaff) return false;
+    if (assignedElsewhere >= maxStaff + extra) return false;
     const typeKey = normalizePlanningShiftTypeKey(definition?.shift_type);
-    const typeMaximum = getShiftTypeMaximum(typeKey);
+    const typeMaximum = getShiftTypeMaximum(typeKey) + extra;
     if (!Number.isFinite(typeMaximum)) return true;
     // Admin option: late+night wishers may work Thursday/Friday late above the maximum (marked as overstaffing).
     if (isLateOverflowExempt(employee, day, typeKey)) return true;
@@ -3092,6 +3123,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       && normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type) === typeKey).length;
     return assignedTypeElsewhere < typeMaximum;
   };
+  // The balance pass (guaranteePass) may exceed the maximum by ELASTIC_EXTRA_STAFF people: a person who is
+  // far behind on the year balance gets hours before the maximum blocks them.
+  const hasDefinitionCapacityForEmployee = (employee, day, definition) => capacityWithin(employee, day, definition, 0)
+    || (guaranteePass && capacityWithin(employee, day, definition, ELASTIC_EXTRA_STAFF));
 
   // Preferred colleagues: swap whole weekday blocks between two people who work exactly the same days,
   // so a wisher and the wished colleague end up in the same shift type without changing the daily
@@ -3333,13 +3368,19 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   for (const { employee, relaxedPass, guarantee = false } of catchupRuns) {
     relaxedWishPass = relaxedPass;
     guaranteePass = guarantee;
+    earlyFallbackPass = guarantee && (carriedHourBalance[employee] + empHours[employee] - employeeOfficialTargetHours[employee] < -10
+      || empHours[employee] < employeeOfficialTargetHours[employee] - 8);
     if (relaxedPass && !guarantee && !(employeeTargetHours[employee] - empHours[employee] >= 1)) continue;
-    if (guarantee && !(empHours[employee] < employeeOfficialTargetHours[employee] - MAX_HOURS_BELOW_TARGET)) continue;
+    // Balance pass: everybody who is more than half a shift below the planning target and whose year balance is
+    // below -BALANCE_FLOOR_HOURS (or who is far under the monthly target) gets more hours.
+    if (guarantee && !(empHours[employee] < employeeTargetHours[employee] - 4
+      && (carriedHourBalance[employee] + empHours[employee] - employeeOfficialTargetHours[employee] < -BALANCE_TRIGGER_HOURS
+        || empHours[employee] < employeeOfficialTargetHours[employee] - MAX_HOURS_BELOW_TARGET))) continue;
     const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
     const prefs = preferencesForDate(employee, `${month}-01`);
     const candidateDefinitions = (guaranteePass ? [...regularCatchupDefinitions, ...saturdayCatchupDefinitions] : regularCatchupDefinitions)
       .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
-      .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code)))
+      .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code), definition.code))
       .filter((definition) => isOutsideDbsAllowed(employee, definition, 1))
       .sort((left, right) => {
         // Soft wishes (< 100 %): prefer definitions that do not violate a wish.
@@ -3360,8 +3401,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         // Variety: no fixed first definition (always E1) for everybody. The order differs per
         // employee and month but is reproducible.
         if (varietyPriority > 0) {
-          const leftRank = getDeterministicRotationRank({ employee, year, month: mon, weekKey: 'catchup', shiftCode: left.code });
-          const rightRank = getDeterministicRotationRank({ employee, year, month: mon, weekKey: 'catchup', shiftCode: right.code });
+          const leftRank = getDeterministicRotationRank({ employee, year, month: mon, weekKey: 'catchup', shiftCode: varietySeed && varietyPriority >= VARIETY_SEED_MIN_PRIORITY ? `${left.code}#${varietySeed}` : left.code });
+          const rightRank = getDeterministicRotationRank({ employee, year, month: mon, weekKey: 'catchup', shiftCode: varietySeed && varietyPriority >= VARIETY_SEED_MIN_PRIORITY ? `${right.code}#${varietySeed}` : right.code });
           if (leftRank !== rightRank) return leftRank - rightRank;
         }
         return Number(left.sort_order || 0) - Number(right.sort_order || 0);
@@ -3369,7 +3410,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (candidateDefinitions.length === 0) continue;
 
     // Guarantee pass: fill to 10 h below the official target (the limit is 15 h).
-    const fillTarget = () => (guaranteePass ? employeeOfficialTargetHours[employee] - (MAX_HOURS_BELOW_TARGET - 5) : employeeTargetHours[employee]);
+    const fillTarget = () => employeeTargetHours[employee];
     while (empHours[employee] < fillTarget()) {
       const availableDays = [];
       // Every allowed shift is checked, not only the preferred one: when the preferred shift is
@@ -3381,7 +3422,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const dow = dayOfWeek(year, mon, day);
         if (isEmployeeAbsentOnDate(employee, dateStr)) continue;
         if (guaranteePass && dow === 0) continue;
-        if (!guaranteePass && isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
+        // Weekdays an employee asked to keep free are only given up when the month is far below target (last resort).
+        const mayUseBlockedWeekday = guaranteePass && empHours[employee] < employeeOfficialTargetHours[employee] - MAX_HOURS_BELOW_TARGET;
+        if (!mayUseBlockedWeekday && isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
         if (isEmployeeShiftBlockedOnDate(employee, dateStr, catchupDefinition.code)) continue;
         if (isRecoveryProtectedDay(employee, day)) continue;
         if (wouldViolateAdjacentTransition(employee, day, catchupDefinition)) continue;
@@ -3430,7 +3473,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             // fillers over the days would pull people into late shifts that only have room on a few days.
             - definitionRank * (relaxedWishPass ? 80 : 12) - (guaranteePass && dow === 6 ? 60 : 0) + weekTypeBonus
             - (relaxedWishPass ? 0 : colleaguesOfTypeThatDay * 8 * (varietyPriority / 60))
-            - getBlockedDayPenalty(employee, dow) - getShiftWishPenaltyOnDate(employee, dateStr, catchupDefinition.code),
+            - getBlockedDayPenalty(employee, dow) - getShiftWishPenaltyOnDate(employee, dateStr, catchupDefinition.code)
+            // Variety: equally good filler days are decided differently per draft (slider in the settings).
+            + getVarietyJitter({ employee, year, month: mon, weekKey: `fill${day}`, shiftCode: catchupDefinition.code, priority: varietyPriority, seed: varietySeed }),
         });
       }
 
@@ -3442,6 +3487,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const shiftHours = getShiftHoursForDay(catchupDefinition, selectedDay);
       releaseHolidayCredit(employee, selectedDay);
       shifts.push({ employee_name: employee, day: selectedDay, shift_code: catchupDefinition.code });
+      const usesElasticCapacity = guaranteePass && !capacityWithin(employee, selectedDay, catchupDefinition, 0);
+      if (usesElasticCapacity) balanceOverstaffCells.add(`${employee}|${selectedDay}`);
+      const usedEarlyFallback = earlyFallbackPass && isEarlyShiftCode(catchupDefinition.code)
+        && getShiftWishEvaluation(employee, selectedDate, catchupDefinition.code).violations.some((violation) => violation.type === 'unwanted' || violation.type === 'not_preferred');
+      if (usedEarlyFallback) planReport.earlyFallbacks.push({ employee, day: selectedDay, date: selectedDate, code: catchupDefinition.code });
       empDayAssignment[employee][selectedDay] = catchupDefinition.code;
       empHours[employee] += shiftHours;
       empStats[employee].total++;
@@ -3455,6 +3505,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         code: catchupDefinition.code,
         reasons: [
           `Verbindlicher Sollzeitausgleich auf mindestens ${employeeTargetHours[employee]} Stunden`,
+          ...(usedEarlyFallback ? ['Fallback Frühschicht: Schichtwunsch/unerwünschte Schicht zugunsten der Stundenzahl übergangen'] : []),
+          ...(usesElasticCapacity ? ['Überbesetzung zum Stundenausgleich: Jahressaldo im Minus, Maximalbesetzung bewusst überschritten'] : []),
           `Schichtkontinuität: ${catchupDefinition.code} statt zufälligem Schichtwechsel`,
           `Nicht abwesend am ${selectedDate}`,
         ],
@@ -3789,6 +3841,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
   relaxedWishPass = false;
   guaranteePass = false;
+  earlyFallbackPass = false;
 
   // Overtime pass (admin setting "Überstunden": unlimited or a maximum above the target hours). Runs after
   // everybody below target was served, so overtime never takes capacity from those who still miss hours.
@@ -3803,7 +3856,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const prefs = preferencesForDate(employee, `${month}-01`);
       const definitions = regularCatchupDefinitions
         .filter((definition) => !fixedShiftType || fixedShiftType === normalizePlanningShiftTypeKey(definition.shift_type))
-        .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code)))
+        .filter((definition) => !isHardBlockedForPass(evaluateShiftWishForPrefs(prefs, definition.code), definition.code))
         .filter((definition) => isOutsideDbsAllowed(employee, definition, 1));
       if (definitions.length === 0) continue;
       for (let added = 0; added < 12; added++) {
@@ -4036,6 +4089,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  planReport.balanceOverstaff = [...balanceOverstaffCells].map((cell) => {
+    const [employee, dayText] = cell.split('|');
+    const day = Number(dayText);
+    return { employee, day, date: `${month}-${String(day).padStart(2, '0')}`, code: shifts.find((entry) => entry.employee_name === employee && Number(entry.day) === day)?.shift_code || null };
+  }).filter((entry) => entry.code);
   // Final hard-constraint audit. The planning pass must never silently return
   // a draft with an overstaffed definition, a refused night, or a short-night
   // run longer than three consecutive days.
@@ -4044,7 +4102,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const assignmentsToday = shifts.filter((entry) => Number(entry.day) === day);
     for (const definition of shiftDefs) {
       const code = String(definition.code || '').trim().toUpperCase();
-      const assigned = assignmentsToday.filter((entry) => String(entry.shift_code || '').trim().toUpperCase() === code).length;
+      const assignedEntries = assignmentsToday.filter((entry) => String(entry.shift_code || '').trim().toUpperCase() === code);
+      const maxStaffForCheck = Math.max(Number.parseInt(String(definition.max_staff ?? 0), 10) || 0, 0);
+      // Deliberate overstaffing of the balance pass is documented in the plan report, not a conflict.
+      const elasticInDefinition = assignedEntries.filter((entry) => balanceOverstaffCells.has(`${entry.employee_name}|${day}`)).length;
+      const assigned = assignedEntries.length - Math.min(elasticInDefinition, Math.max(assignedEntries.length - maxStaffForCheck, 0));
       const maxStaff = Math.max(Number.parseInt(String(definition.max_staff ?? 0), 10) || 0, 0);
       if (maxStaff > 0 && assigned > maxStaff) {
         conflicts.push({
@@ -4063,7 +4125,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const entriesOfType = assignmentsToday.filter((entry) => normalizePlanningShiftTypeKey(
         shiftDefinitionByCode.get(String(entry.shift_code || '').trim().toUpperCase())?.shift_type
       ) === typeKey);
-      let assignedType = entriesOfType.length;
+      const elasticInType = entriesOfType.filter((entry) => balanceOverstaffCells.has(`${entry.employee_name}|${day}`)).length;
+      let assignedType = entriesOfType.length - Math.min(elasticInType, Math.max(entriesOfType.length - typeMaximum, 0));
       if (assignedType > typeMaximum && lateOverflowEligible.size > 0 && [4, 5].includes(dayOfWeek(year, mon, day)) && typeKey === 'late') {
         // The exempt people who were added last are the overstaffing; it is marked, not reported as a conflict.
         const exemptEntries = entriesOfType.filter((entry) => lateOverflowEligible.has(entry.employee_name));
@@ -4346,6 +4409,25 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       rotationRules: rotation,
       fairnessRules,
       planningConfig: planConfig,
+      // The slider / limit values this draft was generated with (shown in the draft view and the Excel export).
+      planningSettings: {
+        varietyPriority,
+        varietySeed: varietyPriority >= 25 ? varietySeed : 0,
+        lateOverflowEnabled,
+        overtimeUnlimited,
+        maxOvertimeHours: overtimeUnlimited ? null : overtimeAllowance,
+        balanceFloorHours: -BALANCE_FLOOR_HOURS,
+        maxCatchupHours: MAX_CATCHUP_HOURS,
+        maxReliefHours: MAX_RELIEF_HOURS,
+        monthlyTargetHours: configuredMonthlyTargetHours,
+        staffing: describeStaffingSettings({ weekdayRules: weekdayStaffingRules, weekdayMaximums: weekdayStaffingMaximums, dayLimitMap: staffingDayLimitMap }),
+        shiftLimits: shiftDefs.map((definition) => ({
+          code: definition.code,
+          type: normalizePlanningShiftTypeKey(definition.shift_type),
+          minStaff: Number.parseInt(String(definition.min_staff ?? 0), 10) || 0,
+          maxStaff: Number.parseInt(String(definition.max_staff ?? 0), 10) || 0,
+        })),
+      },
       preferenceStrengths: prefStrength,
       dbsPlanningConfig,
       coloPlanningConfig,
@@ -4951,7 +5033,12 @@ export function getDraftShiftHours(snapshot, month, day, code) {
   const override = (Array.isArray(definition.dayOverrides) ? definition.dayOverrides : [])
     .find((entry) => Number(entry?.weekday) === weekday && Number.isFinite(Number(entry?.duration_hours)));
   const hours = override ? Number(override.duration_hours) : Number(definition.durationHours);
-  return Number.isFinite(hours) ? hours : 0;
+  if (!Number.isFinite(hours)) return 0;
+  const holidayName = buildHessenHolidayMap(year)[toIsoDate(new Date(year, (mon || 1) - 1, day))] || null;
+  return getHolidayAdjustedShiftHours({
+    baseHours: hours, month, day, holidayName,
+    definition: { start_time: definition.startTime ?? definition.start_time, end_time: definition.endTime ?? definition.end_time, start_day_offset: definition.startDayOffset ?? definition.start_day_offset, end_day_offset: definition.endDayOffset ?? definition.end_day_offset },
+  });
 }
 
 // Keeps Ist/Differenz of the fairness block in step with manual edits (incremental, so credited hours stay).
@@ -5437,6 +5524,91 @@ function statusFill(status) {
 }
 
 /** Management sheet "Kostenkontrolle": night and Sunday hours per calendar week, month, quarter and employee. */
+const STAFFING_CONTEXT_LABELS = [
+  ['weekday', 'Mo–Fr'], ['saturday', 'Samstag'], ['sunday', 'Sonntag'],
+  ['holiday_national', 'Feiertag national'], ['holiday_international', 'Feiertag international'],
+];
+const STAFFING_TYPE_LABELS = [['early', 'Früh'], ['late', 'Spät'], ['night', 'Nacht']];
+
+function formatStaffingLimit(entry) {
+  if (!entry) return '–';
+  const min = entry.min ?? '–';
+  const max = entry.max ?? '∞';
+  return `${min}–${max}${entry.overflow ? ' (Überlauf)' : ''}`;
+}
+
+// One line with the slider values of a draft (month sheets and drafts list).
+export function describePlanningSettingsLine(settings) {
+  if (!settings) return 'Einstellungen: für diesen Entwurf nicht gespeichert (älterer Entwurf).';
+  const parts = [`Abwechslung ${settings.varietyPriority}%`];
+  for (const [context, label] of STAFFING_CONTEXT_LABELS.slice(0, 3)) {
+    const types = STAFFING_TYPE_LABELS.filter(([type]) => (context === 'weekday' ? true : type !== 'night'));
+    parts.push(`${label}: ${types.map(([type, typeLabel]) => `${typeLabel} ${formatStaffingLimit(settings.staffing?.[context]?.[type])}`).join(', ')}`);
+  }
+  parts.push(settings.overtimeUnlimited ? 'Überstunden unbegrenzt' : `Überstunden max. ${settings.maxOvertimeHours} h`);
+  return `Einstellungen (Min–Max Personen): ${parts.join(' | ')}`;
+}
+
+function addPlanningSettingsSheet(workbook, drafts) {
+  const ws = workbook.addWorksheet('Einstellungen');
+  ws.getCell(1, 1).value = 'Einstellungen der Entwürfe: Regler und Besetzungs-Obergrenzen';
+  ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+  ws.getCell(2, 1).value = 'Besetzung als Min–Max Personen je Schichtart und Tag (∞ = keine Obergrenze, Überlauf = Frühschicht Mo–Fr nimmt Überhang auf). Stand der Erstellung des jeweiligen Entwurfs.';
+  ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
+  const headers = ['Monat', 'Version', 'Abwechslung (%)', 'Seed', 'Überstunden', 'Spät Do/Fr über Max'];
+  for (const [context, contextLabel] of STAFFING_CONTEXT_LABELS) {
+    for (const [type, typeLabel] of STAFFING_TYPE_LABELS) {
+      if (type === 'night' && context !== 'weekday') continue;
+      headers.push(`${contextLabel} ${typeLabel}`);
+    }
+  }
+  headers.push('Obergrenze je Schicht', 'Max. Aufholung (h/Monat)', 'Max. Abbau (h/Monat)', 'Jahresminimum (h)');
+  headers.forEach((header, i) => {
+    const cell = ws.getCell(4, i + 1);
+    cell.value = header;
+    cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+    ws.getColumn(i + 1).width = i === 0 ? 16 : (header === 'Obergrenze je Schicht' ? 34 : 13);
+  });
+  ws.getRow(4).height = 32;
+  drafts.forEach((draft, index) => {
+    const [year, mon] = draft.month.split('-').map(Number);
+    const settings = draft.config_snapshot?.planningSettings;
+    const values = [`${MONTH_NAMES_DE[mon]} ${year}`, draft.version];
+    if (!settings) {
+      values.push('nicht gespeichert');
+    } else {
+      values.push(
+        settings.varietyPriority,
+        settings.varietySeed || '–',
+        settings.overtimeUnlimited ? 'unbegrenzt' : `max. ${settings.maxOvertimeHours} h`,
+        settings.lateOverflowEnabled ? 'ja' : 'nein',
+      );
+      for (const [context] of STAFFING_CONTEXT_LABELS) {
+        for (const [type] of STAFFING_TYPE_LABELS) {
+          if (type === 'night' && context !== 'weekday') continue;
+          values.push(formatStaffingLimit(settings.staffing?.[context]?.[type]));
+        }
+      }
+      values.push(
+        (settings.shiftLimits || []).map((entry) => `${entry.code}: ${entry.maxStaff}`).join(', '),
+        settings.maxCatchupHours,
+        settings.maxReliefHours,
+        settings.balanceFloorHours,
+      );
+    }
+    values.forEach((value, i) => {
+      const cell = ws.getCell(5 + index, i + 1);
+      cell.value = value;
+      cell.font = { name: 'Calibri', size: 9 };
+      cell.alignment = { horizontal: i === 0 ? 'left' : 'center', vertical: 'middle' };
+      cell.border = { bottom: { style: 'thin', color: { argb: 'D1D5DB' } } };
+    });
+  });
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 4 }];
+}
+
 export function addCostControlSheet(workbook, drafts, { timesByCode = new Map() } = {}) {
   const control = buildCostControl(drafts, { timesByCode });
   const ws = workbook.addWorksheet('Kostenkontrolle');
@@ -5769,6 +5941,7 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   // Cost control (night and Sunday hours) is only for the management.
   if (isManagement) addCostControlSheet(workbook, drafts, { timesByCode: await loadShiftTimesByCode() });
 
+
   for (const draft of drafts) {
     const shifts = draft.shifts_json;
     const [year, mon] = draft.month.split('-').map(Number);
@@ -5922,6 +6095,21 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
         }
       }
 
+      // COLO badge: second line "COLO" in every planned Colo cell and a COLO line under the name.
+      let coloDays = 0;
+      for (let d = 1; d <= numDays; d++) {
+        if (!byEmployee[emp][d] || !coloCells.has(`${emp}|${d}`)) continue;
+        coloDays++;
+        const cell = ws.getCell(row, d + 1);
+        const baseFont = { ...(cell.font || { name: 'Calibri', size: 9, bold: true }) };
+        cell.value = { richText: [
+          { text: String(byEmployee[emp][d]), font: baseFont },
+          { text: '\nCOLO', font: { name: 'Calibri', size: 7, bold: true, color: { argb: '0E7490' } } },
+        ] };
+        cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      }
+      if (coloDays > 0) ws.getRow(row).height = 28;
+
       // Credited monthly hours (includes configured shift durations and absences).
       if (showHours) {
         const totalCell = ws.getCell(row, statsCol);
@@ -5964,6 +6152,19 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       legendCell.font = { name: 'Calibri', size: 8, bold: true, color: { argb: '92400E' } };
     }
 
+    // Footer: who is planned for Colo, and the limits this draft was generated with.
+    const coloByEmployee = new Map();
+    for (const key of coloCells) { const [name] = key.split('|'); coloByEmployee.set(name, (coloByEmployee.get(name) || 0) + 1); }
+    if (coloByEmployee.size > 0) {
+      const coloLine = ws.getCell(empNames.length + 6, 1);
+      coloLine.value = `COLO geplant: ${[...coloByEmployee.entries()].sort((a, b) => a[0].localeCompare(b[0], 'de')).map(([name, days]) => `${name} (${days})`).join(', ')}`;
+      coloLine.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '0E7490' } };
+    }
+    if (!isTeam) {
+      const settingsLine = ws.getCell(empNames.length + 7, 1);
+      settingsLine.value = describePlanningSettingsLine(draft.config_snapshot?.planningSettings);
+      settingsLine.font = { name: 'Calibri', size: 8, color: { argb: '6B7280' } };
+    }
     // Footer
     const footerRow = empNames.length + 8;
     ws.getCell(footerRow, 1).value = `Exportiert am ${new Date().toLocaleString('de-DE', { timeZone: config.OPERATIONAL_TIMEZONE })} — ODIN Schichtplan${isTeam ? '' : ` v${draft.version}`}`;
@@ -5981,6 +6182,9 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     };
     ws.headerFooter = { oddFooter: `&L ODIN Schichtplan &C ${sheetName} &R Seite &P von &N` };
   }
+
+  // Slider values and staffing limits of every draft (management / full exports).
+  if (!isTeam) addPlanningSettingsSheet(workbook, drafts);
 
   // If multiple months, add summary sheet
   if (drafts.length > 1) {

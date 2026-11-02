@@ -156,13 +156,9 @@ function countWeekdays(year: number, month1: number) {
   return count;
 }
 
-// Mirrors the backend: the annual target is distributed by Mon-Fri working days.
-function getWorkdayBasedTargetHours(year: number, month1: number, monthlyTarget: number, annualTarget: number | null) {
-  const annual = annualTarget && annualTarget > 0 ? annualTarget : monthlyTarget * 12;
-  let yearWeekdays = 0;
-  for (let m = 1; m <= 12; m++) yearWeekdays += countWeekdays(year, m);
-  if (!yearWeekdays) return monthlyTarget;
-  return Number(((annual * countWeekdays(year, month1)) / yearWeekdays).toFixed(2));
+// Mirrors the backend: every full month has the configured monthly target (174 h from the admin menu).
+function getWorkdayBasedTargetHours(_year: number, _month1: number, monthlyTarget: number, _annualTarget: number | null) {
+  return monthlyTarget;
 }
 
 function pad2(value: number) {
@@ -1985,7 +1981,7 @@ export default function Shiftplan() {
       }
 
       {/* MAIN CONTENT */}
-      <EnterpriseCard noPadding className="flex-1 min-h-0 relative flex flex-col overflow-hidden">
+      <EnterpriseCard noPadding className="flex-1 min-h-0 relative flex flex-col overflow-visible">
         {viewMode === "month" && (
           <>
             <div className="flex-1 min-h-0 relative">

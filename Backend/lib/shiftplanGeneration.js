@@ -848,6 +848,8 @@ export function applyWeekendBlockSlots({ slots = [], saturday = null, sunday = n
 /* ================================================ */
 
 export const DEFAULT_VARIETY_PRIORITY = 60;
+/** From this slider value on a generation seed makes every generated draft different. */
+export const VARIETY_SEED_MIN_PRIORITY = 25;
 
 export function normalizeVarietyPriority(value) {
   const parsed = Number.parseFloat(String(value ?? ''));
@@ -907,7 +909,10 @@ export function getVarietyJitter({ employee, year, month, weekKey, shiftCode, pr
   // (different for every generated draft) makes the same input produce a different, equally valid pattern. Without a
   // seed (or at 60 % and below) the result stays reproducible.
   const boost = normalized > DEFAULT_VARIETY_PRIORITY ? 1 + ((normalized - DEFAULT_VARIETY_PRIORITY) / 40) * 1.5 : 1;
-  const seeded = normalized > DEFAULT_VARIETY_PRIORITY && seed ? `${shiftCode}#${seed}` : shiftCode;
+  // From 25 % on every generated draft carries its own seed (regenerating gives another valid pattern) and the jitter is wider,
+  // so equally good candidates are no longer always decided the same way.
+  const seeded = normalized >= VARIETY_SEED_MIN_PRIORITY && seed ? `${shiftCode}#${seed}` : shiftCode;
+  const amplitude = seeded !== shiftCode ? 110 : 60;
   const rank = getDeterministicRotationRank({ employee, year, month, weekKey, shiftCode: seeded });
-  return Math.round(((rank % 2001) / 1000 - 1) * 60 * scale * boost);
+  return Math.round(((rank % 2001) / 1000 - 1) * amplitude * scale * boost);
 }

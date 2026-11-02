@@ -82,3 +82,25 @@ export function buildStaffingForContext({ context, weekdayRules = {}, weekdayMax
   }
   return { rules, maximums };
 }
+
+/**
+ * Staffing minimum / maximum per day context and shift type, as shown next to a draft and in the Excel export.
+ * `max: null` = no maximum. Weekday early is the overflow pool of the generator (the maximum is not enforced).
+ */
+export function describeStaffingSettings({ weekdayRules = {}, weekdayMaximums = {}, dayLimitMap = null } = {}) {
+  const result = {};
+  for (const context of STAFFING_DAY_CONTEXTS) {
+    const { rules, maximums } = buildStaffingForContext({ context, weekdayRules, weekdayMaximums, dayLimitMap });
+    result[context] = {};
+    for (const type of ['early', 'late', 'night']) {
+      const min = Number(rules[type]);
+      const max = Number(maximums[type]);
+      result[context][type] = {
+        min: Number.isFinite(min) ? min : null,
+        max: Number.isFinite(max) ? max : null,
+        overflow: context === 'weekday' && type === 'early',
+      };
+    }
+  }
+  return result;
+}

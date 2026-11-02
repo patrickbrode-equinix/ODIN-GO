@@ -77,9 +77,11 @@ test('Thursday/Friday late overflow: only with the admin option, only for late+n
   assert.equal(on.planReport.lateOverflowEligible.length, 6);
 
   const weekday = (day) => new Date(2027, 1, day).getDay();
-  for (const [day, count] of lateByDay(off)) if ([1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count <= 3, `day ${day}: ${count} late without the option`);
+  // Without the option the maximum only gives way to the marked balance-pass overstaffing (hours of people far behind).
+  const markedLate = (result, day) => result.planReport.balanceOverstaff.filter((entry) => entry.day === day && typeOf(entry.code) === 'late').length;
+  for (const [day, count] of lateByDay(off)) if ([1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count - markedLate(off, day) <= 3, `day ${day}: ${count} late without the option`);
   const onCounts = lateByDay(on);
-  for (const [day, count] of onCounts) if ([1, 2, 3].includes(weekday(day))) assert.ok(count <= 3, `Mon-Wed day ${day} stays limited`);
+  for (const [day, count] of onCounts) if ([1, 2, 3].includes(weekday(day))) assert.ok(count - markedLate(on, day) <= 3, `Mon-Wed day ${day} stays limited`);
   // Every marked overstaffing is a Thursday/Friday late shift of an eligible employee, and it exceeds the maximum.
   for (const entry of on.planReport.lateOverflow) {
     assert.ok([4, 5].includes(weekday(entry.day)));
@@ -90,7 +92,7 @@ test('Thursday/Friday late overflow: only with the admin option, only for late+n
   // The option is not a free pass: no unmarked day is above the maximum.
   const marked = new Map();
   for (const entry of on.planReport.lateOverflow) marked.set(entry.day, (marked.get(entry.day) || 0) + 1);
-  for (const [day, count] of onCounts) if ([1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count - (marked.get(day) || 0) <= 3, `day ${day} exceeds the maximum without a mark`);
+  for (const [day, count] of onCounts) if ([1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count - (marked.get(day) || 0) - markedLate(on, day) <= 3, `day ${day} exceeds the maximum without a mark`);
   assert.ok(!on.conflicts.some((conflict) => conflict.type === 'max_staff_reached' && conflict.shift === 'late'));
 });
 
@@ -107,8 +109,11 @@ test('variety: a high slider gives a different plan per generation seed, the sam
   assert.equal(fingerprint(a1), fingerprint(a2), 'same seed -> same plan');
   assert.notEqual(fingerprint(a1), fingerprint(b), 'other seed -> other plan');
   assert.equal(a1.planReport.varietySeed, 11);
-  // At the default slider the seed has no effect.
-  assert.equal(fingerprint(await run(60, 11)), fingerprint(await run(60, 12)));
+  // The default slider (60 %) varies as well, so regenerating does not produce the same plan again and again.
+  assert.notEqual(fingerprint(await run(60, 11)), fingerprint(await run(60, 12)));
+  // Slider off: reproducible.
+  assert.equal(fingerprint(await run(0, 11)), fingerprint(await run(0, 12)));
+  assert.equal(a1.planReport.varietySeed, 11);
 });
 
 test('colleagues who wish each other and share a preferred shift end up in the same shift type', async () => {
@@ -164,4 +169,19 @@ test('Armin Hadzic is never planned on weekends, even without any wish', async (
       assert.ok(weekday >= 1 && weekday <= 5, `${year}-${month}-${shift.day} is a weekend`);
     }
   }
+});
+
+test('draft stores the slider and staffing limits it was generated with', async () => {
+  const { db } = buildTeam(24);
+  db.settings.set('shiftplan.variety_priority', '80');
+  const result = await generate(2027, 2, { varietySeed: 5 });
+  const settings = result.configSnapshot.planningSettings;
+  assert.equal(settings.varietyPriority, 80);
+  assert.equal(settings.varietySeed, 5);
+  for (const context of ['weekday', 'saturday', 'sunday', 'holiday_national', 'holiday_international']) {
+    for (const type of ['early', 'late', 'night']) assert.ok(settings.staffing[context][type], `${context}/${type}`);
+  }
+  assert.equal(settings.staffing.weekday.early.overflow, true);
+  assert.ok(settings.shiftLimits.some((entry) => entry.code === 'N' && entry.maxStaff > 0));
+  assert.ok(Array.isArray(result.planReport.earlyFallbacks));
 });

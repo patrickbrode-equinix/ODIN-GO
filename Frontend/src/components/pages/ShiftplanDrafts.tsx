@@ -22,6 +22,7 @@ import { isColoEmployee } from "../../utils/colo";
 import { buildShiftTimeMap, type ShiftTimeMap } from "../../utils/shiftTimes";
 import { ShiftTimeLegend } from "../shiftplan/ShiftTimeLegend";
 import { ColoBadge, ColoLegend } from "../shiftplan/ColoBadge";
+import { DraftSettingsPanel, type DraftPlanningSettings } from "../shiftplan/DraftSettingsPanel";
 import { CostControlPanel, type CostControlData } from "../shiftplan/CostControlPanel";
 import { buildColoMarkLookup, getColoMark } from "../../utils/coloMarks";
 import { GroupedDraftList } from "../shiftplan/GroupedDraftList";
@@ -54,6 +55,7 @@ type Draft = DraftSummary & {
   config_snapshot?: {
     dispatcherConfig?: { enabled?: boolean; priorities?: string[] };
     planningConfig?: { monthly_target_hours?: number };
+    planningSettings?: DraftPlanningSettings;
     coloAssignments?: unknown;
     planReport?: { lateOverflow?: Array<{ employee: string; day: number }>; colo?: { enabled?: boolean; assigned?: number; requiredAssignments?: number } };
   };
@@ -108,11 +110,11 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
   const manualMarks = useMemo(() => new Set((draft.shifts_json || []).filter((shift) => shift.manual_override === true).map((shift) => `${shift.employee_name}|${Number(shift.day)}`)), [draft.shifts_json]);
 
   return (
-    <div className="overflow-x-auto">
+    <div>
       <table className={`min-w-max border-collapse ${compact ? "text-[10px]" : "text-xs"}`}>
         <thead>
           <tr>
-            <th className={`${compact ? "min-w-40 p-2" : "min-w-48 p-3"} sticky left-0 z-20 bg-[#0a1424]/95 text-left`}>{isGerman ? "Mitarbeiter" : "Employee"}</th>
+            <th className={`${compact ? "min-w-40 p-2" : "min-w-48 p-3"} sticky left-0 top-0 z-30 bg-[#0a1424] text-left`}>{isGerman ? "Mitarbeiter" : "Employee"}</th>
             {days.map((value) => {
               const date = new Date(year, month - 1, value);
               const weekend = date.getDay() === 0 || date.getDay() === 6;
@@ -120,7 +122,7 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
               return (
                 <th
                   key={value}
-                  className={`${compact ? "min-w-8 p-1.5" : "min-w-11 p-2"} border-l border-white/6 text-center ${weekend ? "bg-amber-500/5 text-amber-300/90" : "text-muted-foreground"}`}
+                  className={`${compact ? "min-w-8 p-1.5" : "min-w-11 p-2"} sticky top-0 z-20 border-l border-white/6 text-center ${weekend ? "bg-[#1a1810] text-amber-300/90" : "bg-[#0a1424] text-muted-foreground"}`}
                 >
                   <span className="block text-[9px] font-bold uppercase tracking-wide">{weekday}</span>
                   <span className="mt-0.5 block text-[11px] font-black text-foreground">{value}</span>
@@ -497,6 +499,7 @@ export default function ShiftplanDrafts() {
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman />{activeDraft.config_snapshot?.planReport?.colo?.enabled ? <span className="inline-flex items-center gap-2 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-bold text-cyan-100"><strong>Colo</strong>{activeDraft.config_snapshot.planReport.colo.assigned}/{activeDraft.config_snapshot.planReport.colo.requiredAssignments} besetzt</span> : null}<span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100"><strong>Ü</strong>= Überbesetzung Spätschicht (Do/Fr)</span><span className="inline-flex items-center gap-2 rounded-md border border-sky-400/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-100"><strong>✎</strong>= manuell geändert</span></div>
                   <ShiftTimeLegend shiftTimes={shiftTimes} className="mt-2" />
+                  <DraftSettingsPanel settings={activeDraft.config_snapshot?.planningSettings} isGerman={isGerman} />
                 </section>
 
                 {canEditDrafts && activeDraft.status !== "activated" ? (
@@ -510,7 +513,7 @@ export default function ShiftplanDrafts() {
                     />
                   </section>
                 ) : (
-                  <section className="liquid-panel overflow-hidden rounded-[26px]"><DraftScheduleTable draft={activeDraft} /></section>
+                  <section className="liquid-panel rounded-[26px]"><DraftScheduleTable draft={activeDraft} /></section>
                 )}
                 <CostControlPanel costControl={activeDraft.cost_control} isGerman />
 

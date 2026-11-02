@@ -378,10 +378,13 @@ function audit(result, year, month, carryIn) {
 const report = { seed, mutualGroups, employees: employeeCount, months: [], dbsPool: dbsPool.map((entry) => ({ name: entry.employee.name, outside: entry.outside })), coloPool };
 let year = startYear;
 let month = startMonth;
+// The saved drafts of earlier months feed the next month (hour balance, shift continuity) like in the real app.
+let chainedCarry = null;
 for (let index = 0; index < monthCount; index++) {
   addAbsences(year, month);
   const numDays = new Date(year, month, 0).getDate();
-  const result = await generateShiftPlan(year, month, numDays, 'simulation', { varietySeed: Number(args.vseed ?? 0) });
+  const result = await generateShiftPlan(year, month, numDays, 'simulation', { varietySeed: Number(args.vseed ?? 0), carryState: args.nochain ? null : chainedCarry });
+  chainedCarry = result.carryState;
   if (process.env.DEBUG_DAY) {
     const debug = JSON.parse(process.env.DEBUG_DAY);
     if (debug.year === year && debug.mon === month) {
@@ -430,5 +433,15 @@ if (!args.quiet) {
 }
 const tolerance = (predicate) => report.months.map((entry) => entry.perEmployee.filter(predicate).length).join('/');
 originalConsole.log(`Abweichung > 10h unter Soll: ${tolerance((row) => row.target - row.actual > 10)}  | > 10h über Soll: ${tolerance((row) => row.actual - row.target > 10)}`);
+{
+  // Year balance: cumulative actual - official target per employee (goal: within +-20h).
+  const balance = new Map();
+  for (const entry of report.months) for (const row of entry.perEmployee) balance.set(row.employee, (balance.get(row.employee) || 0) + (row.actual - row.target));
+  const values = [...balance.values()].map((value) => Number(value.toFixed(1))).sort((x, y) => x - y);
+  report.yearBalance = Object.fromEntries(balance);
+  const outside = values.filter((value) => Math.abs(value) > 20).length;
+  originalConsole.log(`Jahressaldo (Ist-Soll kumuliert; Ziel >= -20): min=${values[0]} max=${values.at(-1)} median=${values[Math.floor(values.length / 2)]} unter -20h: ${values.filter((value) => value < -20).length} über +20h: ${values.filter((value) => value > 20).length}/${values.length}`);
+  if (args.balances) originalConsole.log('  ' + [...balance.entries()].map(([name, value]) => `${name}:${value.toFixed(1)}`).join('  '));
+}
 originalConsole.log(`seed=${seed} Verstöße gesamt=${totalViolations} Mitarbeiter unter Soll=${report.months.map((entry) => entry.employeesBelowTarget).join('/')} isolierte Tage=${report.months.map((entry) => entry.isolatedWorkDays).join('/')}`);
 process.exit(0);

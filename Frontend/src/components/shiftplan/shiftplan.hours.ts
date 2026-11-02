@@ -11,6 +11,8 @@ import type { HolidayMap } from "../../utils/deHolidays";
  */
 export const SOLL_HOURS = 174;
 export const HOLIDAY_CREDIT_HOURS = 8;
+/** Hours worked on a public holiday count twice. */
+export const HOLIDAY_HOURS_FACTOR = 2;
 /** 1 hour break deducted per working day */
 export const BREAK_HOURS = 1;
 
@@ -152,6 +154,10 @@ export function calculateEmployeeHours(
                 // Deduct 1h break per working day
                 if (h > 0) h = Math.max(0, h - BREAK_HOURS);
             }
+            // Worked on a public holiday (federal + Hessen): hours are credited twice
+            // (24.12./31.12. already use their own "paid twice from 12:00" rule above).
+            const isCreditedCode = CREDITED_SHIFT_CODES.has(String(code || "").toUpperCase());
+            if (holidayName && h > 0 && !isCreditedCode && !isDoublePayDay(monthIndex1, day)) h *= HOLIDAY_HOURS_FACTOR;
         } else {
             if (absence && CREDITED_ABSENCE_TYPES.has(String(absence.type || "").toUpperCase()) && !isWeekend) {
                 h = HOLIDAY_CREDIT_HOURS;

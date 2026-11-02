@@ -2060,6 +2060,8 @@ body::before,
   border: 1px solid var(--ink-line) !important;
   border-radius: 10px !important;
   box-shadow: none !important;
+  /* clip (not hidden): no inner scroll container, so sticky date headers follow the page scroll */
+  overflow: clip !important;
 }
 #root .liquid-panel::after, #root .liquid-hero::after, #root .liquid-kpi::after { display: none !important; }
 .odin-go-workspace-main { background: var(--ink-0) !important; }

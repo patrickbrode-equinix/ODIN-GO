@@ -142,7 +142,7 @@ test('month sheet marks Colo and late overstaffing in the cell (not in the team 
   const sheet = full.getWorksheet('Februar 2027');
   const colo = sheet.getCell(5, 4);
   const overflow = sheet.getCell(5, 5);
-  assert.equal(colo.value, 'L1');
+  assert.equal(colo.value.richText.map((part) => part.text).join(''), 'L1\nCOLO', 'Colo cell carries a visible COLO badge line');
   assert.equal(String(colo.note?.texts ? colo.note.texts.map((part) => part.text).join('') : colo.note), 'Colo');
   assert.match(String(overflow.note?.texts ? overflow.note.texts.map((part) => part.text).join('') : overflow.note), /Überbesetzung/);
   assert.match(colo.border.top.color.argb, /06B6D4$/);

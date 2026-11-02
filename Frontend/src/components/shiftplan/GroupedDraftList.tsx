@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { BarChart3, ChevronDown, FileSpreadsheet, Pencil, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage, getLanguageLocale } from '../../context/LanguageContext';
@@ -42,6 +42,17 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
   // Several drafts at once: selection mode with checkboxes, then "delete selected".
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Shift + click selects the whole range between the last clicked draft and this one (in list order).
+  const lastClickedId = useRef<number | null>(null);
+  const orderedDraftIds = useRef<number[]>([]);
+  const onCheckboxChange = (id: number, checked: boolean, shiftKey: boolean) => {
+    const order = orderedDraftIds.current;
+    const from = lastClickedId.current !== null ? order.indexOf(lastClickedId.current) : -1;
+    const to = order.indexOf(id);
+    if (shiftKey && from >= 0 && to >= 0) toggleSelected(order.slice(Math.min(from, to), Math.max(from, to) + 1), checked);
+    else toggleSelected([id], checked);
+    lastClickedId.current = id;
+  };
   const toggleSelected = (ids: number[], on: boolean) => setSelected((current) => {
     const next = new Set(current);
     for (const id of ids) { if (on) next.add(id); else next.delete(id); }
@@ -108,7 +119,7 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
   const renderDraft = (draft: D, standalone: boolean) => <div key={draft.id} className={`rounded-lg border ${activeId === draft.id ? 'border-blue-500/50 bg-blue-500/10' : 'border-border/20 bg-background/40'}`}>
     <div className="flex items-center gap-2 p-2">
       {selectMode && onDeleted && (draft.status !== 'activated'
-        ? <input type="checkbox" checked={selected.has(draft.id)} onChange={(event) => toggleSelected([draft.id], event.target.checked)} aria-label={`${de ? 'Draft auswählen' : 'Select draft'}: ${monthLabel(draft.month)}, v${draft.version}`} className="h-4 w-4 shrink-0 rounded border-border/50" />
+        ? <input type="checkbox" checked={selected.has(draft.id)} onChange={(event) => onCheckboxChange(draft.id, event.target.checked, Boolean((event.nativeEvent as MouseEvent).shiftKey))} aria-label={`${de ? 'Draft auswählen' : 'Select draft'}: ${monthLabel(draft.month)}, v${draft.version}`} className="h-4 w-4 shrink-0 rounded border-border/50" />
         : <span className="h-4 w-4 shrink-0" title={de ? 'Aktivierte Drafts können nicht gelöscht werden' : 'Activated drafts can not be deleted'} />)}
       <button type="button" className="flex-1 min-w-0 text-left" onClick={() => onOpen(draft)}>
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
@@ -141,6 +152,12 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
     }
   }
   entries.sort((left, right) => right.time - left.time);
+  // Visible order of the deletable drafts (standalone drafts and the months inside the groups) for shift-range selection.
+  orderedDraftIds.current = entries.flatMap((entry) => (entry.kind === 'draft'
+    ? [entry.draft]
+    : [...entry.group.drafts].sort((left, right) => (left.month === right.month ? right.version - left.version : left.month.localeCompare(right.month)))))
+    .filter((draft) => draft.status !== 'activated')
+    .map((draft) => draft.id);
   const deletableIds = groups.flatMap((group) => group.drafts).filter((draft) => draft.status !== 'activated').map((draft) => draft.id);
 
   return <div className="space-y-3">
@@ -164,7 +181,7 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
       {selectMode && <>
         <Button type="button" size="sm" variant="outline" onClick={() => toggleSelected(deletableIds, true)}>{de ? 'Alle auswählen' : 'Select all'}</Button>
         <Button type="button" size="sm" variant="outline" disabled={selected.size === 0} onClick={() => setSelected(new Set())}>{de ? 'Auswahl aufheben' : 'Clear'}</Button>
-        <span className="text-muted-foreground">{selected.size} {de ? 'ausgewählt' : 'selected'}</span>
+        <span className="text-muted-foreground">{selected.size} {de ? 'ausgewählt' : 'selected'} · {de ? 'Shift-Klick wählt einen Bereich' : 'Shift-click selects a range'}</span>
         <Button type="button" size="sm" variant="outline" className="ml-auto border-red-500/40 text-red-300 hover:bg-red-500/10" disabled={selected.size === 0 || deleting !== null}
           onClick={() => void removeDrafts([...selected], de ? `${selected.size} ausgewählte Drafts wirklich löschen? Das kann nicht rückgängig gemacht werden.` : `Delete ${selected.size} selected drafts? This can not be undone.`)}>
           <Trash2 className="mr-1.5 h-3.5 w-3.5" />{de ? 'Ausgewählte löschen' : 'Delete selected'}

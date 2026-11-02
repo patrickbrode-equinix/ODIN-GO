@@ -77,14 +77,15 @@ describe("computeShiftChangeHoursDelta", () => {
     expect(results.map((r) => r.delta)).toEqual([-8, 8]);
   });
 
-  it("keeps holiday credit when a cell is cleared on a weekday holiday", () => {
+  it("keeps the 8h holiday credit when a cell is cleared on a weekday holiday (worked hours count twice)", () => {
     const [result] = computeShiftChangeHoursDelta({
       ...base,
       holidays: { "2026-08-17": "Feiertag" },
       schedule: { Anna: { 17: "E1" } },
       changes: [{ employeeName: "Anna", day: 17, newCode: null }],
     });
-    expect(result.delta).toBe(0);
+    // E1 on a holiday = 2 x 8h worked; cleared = 8h credit -> -8h.
+    expect(result.delta).toBe(-8);
   });
 });
 
