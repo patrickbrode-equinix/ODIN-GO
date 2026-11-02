@@ -4208,6 +4208,99 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  // Colo repair pass: the admin demand (early / late tasks per weekday) is covered by pool members who are still
+  // free that day. Every rule stays in force (wishes, absences, rest, week continuity, limits); only people
+  // from the Colo list are used, the one with the biggest hour deficit first.
+  planReport.coloRepair = [];
+  if (coloPlanningConfig.enabled && coloPoolKeys.size > 0) {
+    relaxedWishPass = false;
+    guaranteePass = false;
+    earlyFallbackPass = false;
+    const poolMembers = activeEmployees.filter(isColoPoolEmployee);
+    const typeOfAssigned = (employee, day) => coloShiftTypeByCode.get(String(empDayAssignment[employee]?.[day] || '').trim().toUpperCase());
+    for (let day = planningStartDay; day <= planningEndDay; day++) {
+      const dow = dayOfWeek(year, mon, day);
+      const dateStr = `${month}-${String(day).padStart(2, '0')}`;
+      selectStaffingForDay(dow, holidayMap[dateStr] || null);
+      const tasks = getColoTaskRequirements(dow, coloPlanningConfig);
+      for (const type of ['early', 'late']) {
+        const required = tasks.filter((task) => task.shiftType === type).reduce((sum, task) => sum + task.required, 0);
+        if (required === 0) continue;
+        const definitionsOfType = (dow === 6 ? saturdayCatchupDefinitions : regularCatchupDefinitions)
+          .filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === type)
+          .filter((definition) => normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow));
+        if (dow === 0 || definitionsOfType.length === 0) continue;
+        let covered = poolMembers.filter((employee) => typeOfAssigned(employee, day) === type).length;
+        while (covered < required) {
+          let best = null;
+          for (const employee of poolMembers) {
+            if (empDayAssignment[employee][day]) continue;
+            if (isEmployeeAbsentOnDate(employee, dateStr) || isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
+            if (isRecoveryProtectedDay(employee, day)) continue;
+            const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
+            const prefs = preferencesForDate(employee, dateStr);
+            let adjacentWorkdays = 0;
+            for (let previous = day - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) adjacentWorkdays++;
+            for (let next = day + 1; next <= numDays && empDayAssignment[employee][next]; next++) adjacentWorkdays++;
+            if (adjacentWorkdays + 1 > Math.max(rotation.max_consecutive_workdays || 6, 5)) continue;
+            const weekStartDay = day - ((dow + 6) % 7);
+            let otherTypeInWeek = false;
+            for (let weekDay = weekStartDay; weekDay < weekStartDay + 7; weekDay++) {
+              if (weekDay === day || weekDay < 1 || weekDay > numDays) continue;
+              const assignedType = getAssignedShiftType(employee, weekDay);
+              if (assignedType && assignedType !== 'special') { otherTypeInWeek = assignedType !== type; break; }
+            }
+            if (otherTypeInWeek && !isDbsPoolMember(employee)) continue;
+            const touchesWorkDay = Boolean(empDayAssignment[employee][day - 1]) || Boolean(empDayAssignment[employee][day + 1]);
+            for (const definition of definitionsOfType) {
+              if (fixedShiftType && fixedShiftType !== type) continue;
+              if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) continue;
+              if (wouldViolateAdjacentTransition(employee, day, definition)) continue;
+              if (!keepsEmployeeShiftCohesion(employee, day, definition)) continue;
+              if (!hasDefinitionCapacityForEmployee(employee, day, definition)) continue;
+              if (!isOutsideDbsAllowed(employee, definition, 1)) continue;
+              const score = (employeeTargetHours[employee] - empHours[employee])
+                + (touchesWorkDay ? 60 : -40)
+                + (definition.code === empLastWorkedShiftCode[employee] ? 30 : 0)
+                - getShiftWishPenaltyOnDate(employee, dateStr, definition.code)
+                - getBlockedDayPenalty(employee, dow);
+              if (!best || score > best.score) best = { employee, definition, score, prefs };
+            }
+          }
+          if (!best) break;
+          const { employee, definition } = best;
+          const shiftHours = getShiftHoursForDay(definition, day);
+          releaseHolidayCredit(employee, day);
+          shifts.push({ employee_name: employee, day, shift_code: definition.code });
+          empDayAssignment[employee][day] = definition.code;
+          empLastWorkedShiftCode[employee] = definition.code;
+          empHours[employee] += shiftHours;
+          empStats[employee].total++;
+          empStats[employee].actualHours = Number(empHours[employee].toFixed(2));
+          if (type === 'early') empStats[employee].earlyCount++;
+          if (type === 'late') empStats[employee].lateCount++;
+          if (dow === 6) {
+            empStats[employee].weekends++;
+            empStats[employee].workedWeekendBlocks.add(getWeekendBlockKey(year, mon, day));
+          }
+          planReport.totalShiftsPlanned++;
+          planReport.coloRepair.push({ employee, day, date: dateStr, code: definition.code, type });
+          explanations[`${employee}_${day}`] = {
+            employee,
+            day,
+            code: definition.code,
+            reasons: [
+              `Colo-Kompetenz: ${definition.code} für den Colo-Bedarf (Admin-Vorgabe) eingeplant`,
+              'Wünsche, Abwesenheiten, Ruhezeiten und Wochenkontinuität geprüft',
+              `Nicht abwesend am ${dateStr}`,
+            ],
+          };
+          covered++;
+        }
+      }
+    }
+  }
+
   shifts.sort((left, right) => left.day - right.day || left.employee_name.localeCompare(right.employee_name, 'de'));
 
   const coloRolePlan = buildColoRolePlan({
@@ -6155,6 +6248,14 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     // Footer: who is planned for Colo, and the limits this draft was generated with.
     const coloByEmployee = new Map();
     for (const key of coloCells) { const [name] = key.split('|'); coloByEmployee.set(name, (coloByEmployee.get(name) || 0) + 1); }
+    const coloReport = draft.config_snapshot?.planReport?.colo;
+    if (coloByEmployee.size === 0 && coloReport) {
+      const coloInfo = ws.getCell(empNames.length + 6, 1);
+      coloInfo.value = coloReport.enabled
+        ? `COLO: keine Einsätze geplant (${coloReport.missing ?? 0} von ${coloReport.requiredAssignments ?? 0} Aufgaben offen) – siehe Konflikte im Draft`
+        : 'COLO: Colo-Planung ist in den Admin-Einstellungen ausgeschaltet, deshalb gibt es keine Markierungen';
+      coloInfo.font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'B45309' } };
+    }
     if (coloByEmployee.size > 0) {
       const coloLine = ws.getCell(empNames.length + 6, 1);
       coloLine.value = `COLO geplant: ${[...coloByEmployee.entries()].sort((a, b) => a[0].localeCompare(b[0], 'de')).map(([name, days]) => `${name} (${days})`).join(', ')}`;
