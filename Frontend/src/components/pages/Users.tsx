@@ -3,7 +3,7 @@
 /* ------------------------------------------------ */
 
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
-import { Plus, Trash2, Users as UsersIcon, CalendarHeart, Pencil, Save, X, ChevronDown, ChevronUp, Download } from "lucide-react";
+import { BarChart3, Plus, Trash2, Users as UsersIcon, CalendarHeart, Pencil, Save, X, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { EnterprisePageShell, EnterpriseCard, EnterpriseFeatureHero, EnterpriseHeader } from "../layout/EnterpriseLayout";
 
 import {
@@ -26,6 +26,7 @@ import { formatAbsoluteDateTime, formatRelativeTime } from "../../utils/loginSta
 
 import { AddUserModal } from "../users/AddUserModal";
 import { UserVacationDialog } from "../users/UserVacationDialog";
+import { EmployeeStatistics } from "../users/EmployeeStatistics";
 import { UserPreferenceEditor } from "../users/UserPreferenceEditor";
 import { fetchAllVacations } from "../../api/vacations";
 import type { Absence } from "../../api/absences";
@@ -561,6 +562,8 @@ export default function Users() {
   /* RENDER                                          */
   /* ------------------------------------------------ */
 
+  const [usersView, setUsersView] = useState<"users" | "stats">("users");
+
   return (
     <EnterprisePageShell>
       {/* HEADER */}
@@ -587,6 +590,18 @@ export default function Users() {
         }
       />
 
+      {/* TABS: user list | statistics */}
+      <div role="tablist" aria-label={language === "de" ? "Benutzerverwaltung" : "User management"} className="flex gap-1 border-b border-white/10">
+        {([["users", language === "de" ? "Benutzer" : "Users", UsersIcon], ["stats", language === "de" ? "Statistik" : "Statistics", BarChart3]] as const).map(([key, label, Icon]) => (
+          <button key={key} type="button" role="tab" aria-selected={usersView === key} onClick={() => setUsersView(key)}
+            className={`-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition-colors ${usersView === key ? "border-indigo-400 text-white" : "border-transparent text-slate-400 hover:text-slate-200"}`}>
+            <Icon className="h-4 w-4" />{label}
+          </button>
+        ))}
+      </div>
+
+      {usersView === "stats" ? <EmployeeStatistics /> : (
+        <>
       <EnterpriseFeatureHero
         tone="cyan"
         eyebrow={copy.subtitle}
@@ -974,6 +989,9 @@ export default function Users() {
           </Table>
         </div>
       </EnterpriseCard>
+
+        </>
+      )}
 
       <AddUserModal
         open={addUserOpen}

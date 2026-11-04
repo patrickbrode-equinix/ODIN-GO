@@ -414,7 +414,7 @@ export default function ShiftplanDrafts() {
   };
 
   return (
-    <EnterprisePageShell className="drafts-enterprise pb-16">
+    <EnterprisePageShell className="drafts-enterprise pb-16 overflow-visible">
       <ExcelExportDialog
         open={managementExportOpen && activeDraft !== null}
         subject={activeDraft ? `${formatMonth(activeDraft.month)} v${activeDraft.version}` : undefined}

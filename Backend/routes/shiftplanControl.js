@@ -66,6 +66,8 @@ import { getHolidayShiftStaffingLimit, normalizeHolidayStaffingConfig } from '..
 import { buildHessenHolidayMap, toIsoDate } from '../lib/hessenHolidays.js';
 import { WISH_STATUS, evaluateMonthWishes } from '../lib/wishFulfillment.js';
 import { mergeMonthlyPreferences } from '../lib/understaffingSuggestions.js';
+import { isRamadanDate } from '../lib/ramadan.js';
+import { notifyPlanActivated } from '../lib/planNotifications.js';
 import { buildDayLimitMap, buildStaffingForContext, describeStaffingSettings, resolveStaffingDayContext } from '../lib/staffingLimits.js';
 import {
   buildEmployeeNameLookup,
@@ -281,7 +283,53 @@ function newVarietySeed() {
   return Math.floor(Math.random() * 1_000_000) + 1;
 }
 
-async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftDefinitions, employeeNameLookup }) {
+// Absence markers that can stand in an existing plan (live plan or quarter / year draft) instead of in the absences table.
+// code -> absence type used by the generator (credited types give 8 h on weekdays).
+const PLAN_ABSENCE_CODES = Object.freeze({ ABW: 'VACATION', URLAUB: 'VACATION', KRANK: 'SICK', S: 'SICK', SEMINAR: 'TRAINING', FS: 'FS' });
+
+/**
+ * Absences that are already planned as codes (ABW, SEMINAR, URLAUB, KRANK, S, FS) in the live plan or in the newest draft of the
+ * month. The generator keeps them as they are and plans only before and after them. Returns [{ employee_name, day, code }].
+ */
+async function loadPlannedAbsenceCodes({ year, month, employeeNameLookup }) {
+  const monthLabel = formatShiftMonthLabel(year, month);
+  const monthId = `${year}-${String(month).padStart(2, '0')}`;
+  const found = new Map();
+  const take = (name, day, code) => {
+    const normalized = String(code || '').trim().toUpperCase();
+    if (!PLAN_ABSENCE_CODES[normalized]) return;
+    const employee = resolveEmployeeName(name, employeeNameLookup);
+    const dayNumber = Number.parseInt(String(day ?? ''), 10);
+    if (!employee || !Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 31) return;
+    found.set(`${employee}|${dayNumber}`, { employee_name: employee, day: dayNumber, code: normalized });
+  };
+  try {
+    const { rows } = await pool.query(
+      `SELECT month, employee_name, day, shift_code
+         FROM shifts WHERE (month = $1 OR month = $2) AND day >= $3
+        ORDER BY employee_name, day`,
+      [monthLabel, monthId, 1]
+    );
+    for (const row of rows) take(row.employee_name, row.day, row.shift_code);
+  } catch (error) {
+    console.warn('Planned absences of the live plan unavailable:', error.message);
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT shifts_json FROM shiftplan_drafts WHERE month = $1 AND status <> 'failed'
+        ORDER BY (status = 'activated') DESC, version DESC
+        LIMIT 1`,
+      [monthId]
+    );
+    const draftShifts = typeof rows[0]?.shifts_json === 'string' ? JSON.parse(rows[0].shifts_json) : rows[0]?.shifts_json;
+    for (const entry of Array.isArray(draftShifts) ? draftShifts : []) take(entry?.employee_name, entry?.day, entry?.shift_code);
+  } catch (error) {
+    console.warn('Planned absences of the latest draft unavailable:', error.message);
+  }
+  return [...found.values()];
+}
+
+async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftDefinitions, employeeNameLookup, rotation = {} }) {
   const previousYear = month === 1 ? year - 1 : year;
   const previousMonth = month === 1 ? 12 : month - 1;
   const previousMonthLabel = formatShiftMonthLabel(previousYear, previousMonth);
@@ -356,11 +404,37 @@ async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftD
       ? getMonthBoundarySeriesRemaining({ definition: lastDefinition, monthStartDayOfWeek: currentMonthStartDow })
       : 0;
 
+    // A block that ended at or shortly before the end of the month still needs its free days in the new month
+    // (night block, long streak, weekend block): the plan of the new month starts with the rest of them.
+    let requiredFreeDays = 0;
+    let recoveryReason = null;
+    const blockEnded = lastRow.day < previousMonthDays || seriesRemaining === 0;
+    if (blockEnded) {
+      const freeDaysSince = previousMonthDays - lastRow.day;
+      const isNight = normalizePlanningShiftTypeKey(lastDefinition.shift_type) === 'night';
+      const isShortNight = isNight && getShiftSeriesDays(lastDefinition) < 7;
+      const lastDate = new Date(previousYear, previousMonth - 1, lastRow.day);
+      const endedOnWeekend = lastDate.getDay() === 0 || lastDate.getDay() === 6;
+      let needed = 0;
+      if (isNight) {
+        needed = Number(isShortNight ? (rotation.short_night_free_days_after ?? rotation.free_days_after_night) : rotation.free_days_after_night) || 0;
+        recoveryReason = isShortNight ? 'Kurze Nachtschicht' : 'Nachtschicht';
+      } else if (endedOnWeekend && getShiftSeriesDays(lastDefinition) >= 6 && Number(rotation.free_days_after_weekend) > 0) {
+        needed = Number(rotation.free_days_after_weekend);
+        recoveryReason = 'Wochenendarbeit';
+      } else if (consecutiveWork >= Math.max(Number(rotation.max_consecutive_workdays) || 0, 1) && Number(rotation.min_free_after_streak) > 0) {
+        needed = Number(rotation.min_free_after_streak);
+        recoveryReason = 'Arbeitsserie';
+      }
+      requiredFreeDays = Math.max(needed - (lastRow.day < previousMonthDays ? freeDaysSince : 0), 0);
+      if (requiredFreeDays === 0) recoveryReason = null;
+    }
+
     carry[employee] = {
       consecutiveWork,
       lastShiftType: lastDefinition.shift_type || null,
-      requiredFreeDays: 0,
-      recoveryReason: null,
+      requiredFreeDays,
+      recoveryReason,
       seriesCode: seriesRemaining > 0 ? lastRow.code : null,
       seriesRemaining,
       lastWorkedShiftCode: lastRow.code,
@@ -1005,6 +1079,21 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     absenceMap.get(absenceKey).push(absence);
   }
 
+  // Absences that already stand in the existing plan as codes (e.g. a quarter draft whose January is still on the
+  // default) are adopted: nothing is planned on those days, and they are written into the new plan unchanged.
+  const adoptedAbsenceCells = [];
+  for (const entry of await loadPlannedAbsenceCodes({ year, month: mon, employeeNameLookup })) {
+    if (!employees.includes(entry.employee_name) && !absenceMap.has(entry.employee_name)) continue;
+    const dateKey = `${month}-${String(entry.day).padStart(2, '0')}`;
+    const dayKey = (value) => (value instanceof Date
+      ? `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+      : String(value || '').slice(0, 10));
+    if ((absenceMap.get(entry.employee_name) || []).some((absence) => dayKey(absence.start_date) <= dateKey && dayKey(absence.end_date) >= dateKey)) continue;
+    if (!absenceMap.has(entry.employee_name)) absenceMap.set(entry.employee_name, []);
+    absenceMap.get(entry.employee_name).push({ employee_name: entry.employee_name, start_date: dateKey, end_date: dateKey, type: PLAN_ABSENCE_CODES[entry.code], source: 'plan' });
+    adoptedAbsenceCells.push(entry);
+  }
+
   const exclRes = await pool.query(
     `SELECT employee_name, fixed_shift_type, weekdays FROM shiftplan_exclusions WHERE is_active = TRUE`
   );
@@ -1082,6 +1171,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const varietySetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.variety_priority' LIMIT 1");
   const varietyPriority = normalizeVarietyPriority(varietySetting.rows[0]?.value);
   // Admin setting: employees who wished for late AND night may work Thursday/Friday late shifts above the weekday maximum.
+  // Admin setting "Ramadan": more late shifts than the normal maximum during the Ramadan period.
+  const ramadanRows = (await pool.query(
+    'SELECT key, value FROM app_settings WHERE key = ANY($1::text[])',
+    [['shiftplan.ramadan_late_enabled', 'shiftplan.ramadan_late_extra']]
+  )).rows;
+  const ramadanSetting = (key) => ramadanRows.find((row) => row.key === key)?.value;
+  const ramadanLateEnabled = parseBooleanAppSetting(ramadanSetting('shiftplan.ramadan_late_enabled'), false);
+  const ramadanLateExtra = ramadanLateEnabled
+    ? Math.min(Math.max(Math.trunc(parseNumberAppSetting(ramadanSetting('shiftplan.ramadan_late_extra'), 2)) || 0, 0), 10)
+    : 0;
   const lateOverflowSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.late_overflow_thu_fri' LIMIT 1");
   const lateOverflowEnabled = parseBooleanAppSetting(typeof lateOverflowSetting.rows[0]?.value === 'string'
     ? lateOverflowSetting.rows[0].value.replace(/^"|"$/g, '')
@@ -1159,7 +1258,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // night uses one global value. The day loop switches these per date.
   let staffingRules = weekdayStaffingRules;
   let staffingMaximums = weekdayStaffingMaximums;
-  const selectStaffingForDay = (dow, holidayName) => {
+  const selectStaffingForDay = (dow, holidayName, dateStr = null) => {
     const context = resolveStaffingDayContext({ dayOfWeek: dow, holidayName });
     const staffing = buildStaffingForContext({
       context,
@@ -1169,6 +1268,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     });
     staffingRules = staffing.rules;
     staffingMaximums = staffing.maximums;
+    // Ramadan: the late maximum is raised by the admin value (the minimum stays as configured).
+    if (ramadanLateExtra > 0 && dateStr && isRamadanDate(dateStr) && Number.isFinite(Number(staffingMaximums.late))) {
+      staffingMaximums = { ...staffingMaximums, late: Number(staffingMaximums.late) + ramadanLateExtra };
+    }
     // Early shift is the overflow pool on normal weekdays: when late/night are full (or fewer people
     // wished for them), everybody else must still fit somewhere. Saturday, Sunday and holidays keep
     // their configured maximums.
@@ -1270,6 +1373,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       employees: activeEmployees,
       shiftDefinitions: shortNightDefinition ? [...shiftDefs, shortNightDefinition] : shiftDefs,
       employeeNameLookup,
+      rotation,
     });
   }
   // Documented in the plan: the previous month (December of the year before for January) feeds the transition.
@@ -2049,7 +2153,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const weekend = isWeekend(year, mon, day);
     const dow = dayOfWeek(year, mon, day);
     const holidayName = holidayMap[dateStr] || null;
-    selectStaffingForDay(dow, holidayName);
+    selectStaffingForDay(dow, holidayName, dateStr);
 
     const absenceCreditedToday = new Set();
     for (const employee of activeEmployees) {
@@ -3101,7 +3205,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const ELASTIC_EXTRA_STAFF = 2;
   const capacityWithin = (employee, day, definition, extra = 0) => {
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
-    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[dateStr] || null);
+    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[dateStr] || null, dateStr);
     if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) return false;
     if (wouldExceedEmployeeWeekendLimit(employee, [day])) return false;
     // Upgrading an already planned day (E1SA -> E1WE) does not add a day outside DBS.
@@ -3968,7 +4072,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   for (let day = planningStartDay; day <= planningEndDay; day++) {
-    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null);
+    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null, `${month}-${String(day).padStart(2, '0')}`);
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     const dow = dayOfWeek(year, mon, day);
     const applicableDefinitions = shiftDefs.filter((definition) => normalizeWeekdaySetting(definition.applicable_days, [0, 1, 2, 3, 4, 5, 6]).includes(dow));
@@ -4098,7 +4202,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // a draft with an overstaffed definition, a refused night, or a short-night
   // run longer than three consecutive days.
   for (let day = planningStartDay; day <= planningEndDay; day++) {
-    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null);
+    selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[`${month}-${String(day).padStart(2, '0')}`] || null, `${month}-${String(day).padStart(2, '0')}`);
     const assignmentsToday = shifts.filter((entry) => Number(entry.day) === day);
     for (const definition of shiftDefs) {
       const code = String(definition.code || '').trim().toUpperCase();
@@ -4221,7 +4325,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     for (let day = planningStartDay; day <= planningEndDay; day++) {
       const dow = dayOfWeek(year, mon, day);
       const dateStr = `${month}-${String(day).padStart(2, '0')}`;
-      selectStaffingForDay(dow, holidayMap[dateStr] || null);
+      selectStaffingForDay(dow, holidayMap[dateStr] || null, dateStr);
       const tasks = getColoTaskRequirements(dow, coloPlanningConfig);
       for (const type of ['early', 'late']) {
         const required = tasks.filter((task) => task.shiftType === type).reduce((sum, task) => sum + task.required, 0);
@@ -4299,6 +4403,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         }
       }
     }
+  }
+
+  // Adopted absences stay in the plan as they were (code unchanged); only a free cell is taken.
+  planReport.adoptedAbsences = [];
+  for (const entry of adoptedAbsenceCells) {
+    if (entry.day < planningStartDay || entry.day > planningEndDay) continue;
+    if (shifts.some((shift) => shift.employee_name === entry.employee_name && Number(shift.day) === entry.day)) continue;
+    shifts.push({ employee_name: entry.employee_name, day: entry.day, shift_code: entry.code });
+    planReport.adoptedAbsences.push({ employee: entry.employee_name, day: entry.day, code: entry.code });
   }
 
   shifts.sort((left, right) => left.day - right.day || left.employee_name.localeCompare(right.employee_name, 'de'));
@@ -4507,6 +4620,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         varietyPriority,
         varietySeed: varietyPriority >= 25 ? varietySeed : 0,
         lateOverflowEnabled,
+        ramadanLateEnabled,
+        ramadanLateExtra,
         overtimeUnlimited,
         maxOvertimeHours: overtimeUnlimited ? null : overtimeAllowance,
         balanceFloorHours: -BALANCE_FLOOR_HOURS,
@@ -5357,6 +5472,9 @@ router.post('/drafts/:id/activate', requirePageAccess('shiftplan_control', 'writ
 
     const manualEmployeeNames = await loadManualEmployeeNameSetForDraftMonth(draftMonth, client);
 
+    // The live plan before the switch: the differences go out as notifications afterwards.
+    const previousLivePlan = (await client.query('SELECT employee_name, day, shift_code FROM shifts WHERE month = $1 OR month = $2', [liveMonthLabel, draftMonth])).rows;
+
     // Delete existing shifts for this month. Also clean up legacy rows written with the raw YYYY-MM key.
     await client.query('DELETE FROM shifts WHERE month = $1 OR month = $2', [liveMonthLabel, draftMonth]);
 
@@ -5418,6 +5536,17 @@ router.post('/drafts/:id/activate', requirePageAccess('shiftplan_control', 'writ
     });
 
     res.json({ ok: true, message: `Draft für ${liveMonthLabel} wurde als aktiver Schichtplan übernommen`, activatedBy: actor, liveMonthLabel, contactSync, userProvisioning });
+    // The people concerned and the admin(s) are told what changed (never blocks the activation).
+    void notifyPlanActivated({
+      db: pool,
+      year: parsedDraftMonth.year,
+      month: parsedDraftMonth.month,
+      monthLabel: liveMonthLabel,
+      previous: previousLivePlan,
+      next: Array.isArray(shifts) ? shifts : [],
+      actor,
+      actorUserId: req.user?.id || null,
+    });
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('Activation error:', err);

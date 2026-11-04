@@ -3,6 +3,8 @@
 /* Reusable panel for Admin Settings + legacy page  */
 /* ================================================ */
 
+import { PlanNotificationSettings } from '../settings/PlanNotificationSettings';
+import { formatRamadanPeriod, getRamadanPeriods } from '../../utils/ramadan';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../../api/api';
 import { EnterpriseFeatureHero, EnterpriseHeader, EnterprisePageShell } from '../layout/EnterpriseLayout';
@@ -371,6 +373,10 @@ interface AdvancedPlanningSettings {
   varietyPriority: number;
   /** Late+night wishers may work Thursday/Friday late shifts above the weekday maximum (marked in the draft). */
   lateOverflowThuFri: boolean;
+  ramadanLateEnabled: boolean;
+  ramadanLateExtra: number;
+  planNotifyEnabled: boolean;
+  planNotifyAdminIds: number[];
 }
 
 type ColoShiftType = 'early' | 'late' | 'night';
@@ -425,6 +431,10 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   adminFlagsEnabled: false,
   varietyPriority: 60,
   lateOverflowThuFri: false,
+  ramadanLateEnabled: false,
+  ramadanLateExtra: 2,
+  planNotifyEnabled: true,
+  planNotifyAdminIds: [],
 };
 
 const DEFAULT_DBS_CONFIG: DbsConfig = {
@@ -568,6 +578,15 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
     adminFlagsEnabled: parseBooleanSetting(settings['shiftplan.admin_flags_enabled'], DEFAULT_ADVANCED_SETTINGS.adminFlagsEnabled),
     varietyPriority: Math.min(100, Math.max(0, parseNumberSetting(settings['shiftplan.variety_priority'], DEFAULT_ADVANCED_SETTINGS.varietyPriority))),
     lateOverflowThuFri: parseBooleanSetting(settings['shiftplan.late_overflow_thu_fri'], DEFAULT_ADVANCED_SETTINGS.lateOverflowThuFri),
+    ramadanLateEnabled: parseBooleanSetting(settings['shiftplan.ramadan_late_enabled'], DEFAULT_ADVANCED_SETTINGS.ramadanLateEnabled),
+    planNotifyEnabled: parseBooleanSetting(settings['shiftplan.plan_notifications_enabled'], DEFAULT_ADVANCED_SETTINGS.planNotifyEnabled),
+    planNotifyAdminIds: (() => {
+      try {
+        const parsed = JSON.parse(String(settings['shiftplan.plan_notify_admin_user_ids'] ?? '[]'));
+        return Array.isArray(parsed) ? parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0) : [];
+      } catch { return []; }
+    })(),
+    ramadanLateExtra: Math.min(10, Math.max(0, Number.parseInt(String(settings['shiftplan.ramadan_late_extra'] ?? ''), 10) || DEFAULT_ADVANCED_SETTINGS.ramadanLateExtra)),
   };
 }
 
@@ -1014,6 +1033,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
         'shiftplan.variety_priority': advancedSettings.varietyPriority,
         'shiftplan.late_overflow_thu_fri': advancedSettings.lateOverflowThuFri,
+        'shiftplan.ramadan_late_enabled': advancedSettings.ramadanLateEnabled,
+        'shiftplan.ramadan_late_extra': advancedSettings.ramadanLateExtra,
+        'shiftplan.plan_notifications_enabled': advancedSettings.planNotifyEnabled,
+        'shiftplan.plan_notify_admin_user_ids': JSON.stringify(advancedSettings.planNotifyAdminIds),
         ...wishStrengthPayload(wishStrengths),
       });
       showToast(t("shiftAdmin.toastAdvancedSaved"));
@@ -1264,6 +1287,10 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.admin_flags_enabled': advancedSettings.adminFlagsEnabled,
         'shiftplan.variety_priority': advancedSettings.varietyPriority,
         'shiftplan.late_overflow_thu_fri': advancedSettings.lateOverflowThuFri,
+        'shiftplan.ramadan_late_enabled': advancedSettings.ramadanLateEnabled,
+        'shiftplan.ramadan_late_extra': advancedSettings.ramadanLateExtra,
+        'shiftplan.plan_notifications_enabled': advancedSettings.planNotifyEnabled,
+        'shiftplan.plan_notify_admin_user_ids': JSON.stringify(advancedSettings.planNotifyAdminIds),
         ...wishStrengthPayload(wishStrengths),
         'shiftplan.dbs_enabled': dbsConfig.enabled,
         'shiftplan.dbs_weekdays': JSON.stringify([1, 2, 3, 4, 5, 6, 0]),
@@ -2129,6 +2156,38 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Wer Nachtschicht und Spätschicht als Wunsch angegeben hat, darf donnerstags und freitags auch dann in die Spätschicht, wenn die maximale Besetzung dort schon erreicht ist. Diese Einsätze werden im Draft als „Überbesetzung" markiert.' : 'Employees who wished for both night and late shifts may work Thursday and Friday late shifts even when the maximum staffing is already reached. These shifts are marked as overstaffing in the draft.'}</span>
               </span>
             </label>
+
+            <PlanNotificationSettings
+              enabled={advancedSettings.planNotifyEnabled}
+              adminIds={advancedSettings.planNotifyAdminIds}
+              isGerman={isGerman}
+              onChange={(next) => setAdvancedSettings({ ...advancedSettings, planNotifyEnabled: next.enabled, planNotifyAdminIds: next.adminIds })}
+            />
+
+            <div className="rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <label className="flex items-start gap-3">
+                <input type="checkbox" checked={advancedSettings.ramadanLateEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, ramadanLateEnabled: event.target.checked })} className="mt-1 rounded border-white/20 bg-slate-950" />
+                <span>
+                  <span className="block font-medium">{isGerman ? 'Spätschicht im Ramadan über der Obergrenze erlauben' : 'Allow more late shifts during Ramadan'}</span>
+                  <span className="mt-1 block text-xs text-slate-400">{isGerman ? 'Im Ramadan-Zeitraum darf die maximale Besetzung der Spätschicht um die unten eingestellte Anzahl Personen überschritten werden. Außerhalb des Zeitraums gilt wieder die normale Obergrenze.' : 'During Ramadan the maximum late staffing may be exceeded by the number of people set below. Outside the period the normal maximum applies again.'}</span>
+                </span>
+              </label>
+              <div className="mt-3 flex flex-wrap items-center gap-3 pl-7">
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  {isGerman ? 'Zusätzliche Personen in der Spätschicht' : 'Additional people in the late shift'}
+                  <input type="number" min={0} max={10} value={advancedSettings.ramadanLateExtra} disabled={!advancedSettings.ramadanLateEnabled} onChange={(event) => setAdvancedSettings({ ...advancedSettings, ramadanLateExtra: Math.min(10, Math.max(0, Number.parseInt(event.target.value, 10) || 0)) })} className="w-16 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-sm text-slate-100 disabled:opacity-50" />
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  {isGerman ? 'Ramadan-Zeiträume' : 'Ramadan periods'}
+                  <select aria-label={isGerman ? 'Ramadan-Zeiträume bis 2030' : 'Ramadan periods until 2030'} defaultValue="" className="rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-sm text-slate-100">
+                    <option value="" disabled>{isGerman ? 'Zeitraum ansehen …' : 'View period …'}</option>
+                    {getRamadanPeriods().map((period) => (
+                      <option key={period.start} value={period.start}>{period.start.slice(0, 4) === period.end.slice(0, 4) ? period.start.slice(0, 4) : period.start.slice(0, 4) + '/' + period.end.slice(0, 4)}: {formatRamadanPeriod(period, isGerman ? 'de-DE' : 'en-GB')}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
 
             <div>
               <label className="text-sm font-medium text-slate-200">{isGerman ? 'Stunden gleichmäßig verteilen' : 'Level hours between employees'}</label>

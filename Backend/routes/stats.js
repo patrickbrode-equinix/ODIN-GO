@@ -1,6 +1,8 @@
 import express from "express";
 import { query } from "../db.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
+import { requirePageAccess } from "../middleware/requirePageAccess.js";
+import { buildEmployeeOverview } from "../lib/employeeStats.js";
 import { aggregateYearlyHours, buildShiftHoursLookup, buildShiftTimesLookup } from "../lib/shiftHours.js";
 
 const router = express.Router();
@@ -50,6 +52,47 @@ router.get("/shift-hours", async (req, res) => {
         });
     } catch (err) {
         console.error("Stats Shift Hours Error:", err);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+/* ------------------------------------------------ */
+/* EMPLOYEE OVERVIEW (user management > statistics)  */
+/* ------------------------------------------------ */
+router.get("/employee-overview", requirePageAccess("user_management", "write"), async (req, res) => {
+    try {
+        const requestedYear = Number.parseInt(String(req.query.year || ""), 10);
+        const year = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100 ? requestedYear : new Date().getFullYear();
+
+        const [shiftDefinitionsRes, shiftsRes, absencesRes, configRes, ownHoursRes] = await Promise.all([
+            query(`SELECT code, shift_type, duration_hours, start_time, end_time, start_day_offset, end_day_offset FROM shift_definitions`),
+            query(`SELECT month, employee_name, day, shift_code FROM shifts WHERE employee_name IS NOT NULL AND btrim(employee_name) <> ''`),
+            query(
+                `SELECT employee_name, start_date, end_date, type
+                 FROM absences
+                 WHERE start_date <= $1::date AND end_date >= $2::date`,
+                [`${year}-12-31`, `${year}-01-01`]
+            ),
+            query(`SELECT monthly_target_hours, annual_target_hours FROM shift_planning_config WHERE id = 1`),
+            query(`SELECT shift_code, employee_name, duration_hours FROM shift_special_pools WHERE is_active = TRUE AND duration_hours IS NOT NULL`).catch(() => ({ rows: [] })),
+        ]);
+        const configRow = configRes.rows[0] || {};
+        const summary = aggregateYearlyHours({
+            year,
+            shifts: shiftsRes.rows,
+            absences: absencesRes.rows,
+            shiftHoursLookup: buildShiftHoursLookup(shiftDefinitionsRes.rows),
+            shiftTimesLookup: buildShiftTimesLookup(shiftDefinitionsRes.rows),
+            employeeShiftHours: new Map(ownHoursRes.rows.map((row) => [`${String(row.employee_name).trim()}__${String(row.shift_code).trim().toUpperCase()}`, Number(row.duration_hours)])),
+            monthlyTargetHours: configRow.monthly_target_hours,
+            annualTargetHours: configRow.annual_target_hours,
+        });
+        res.json({
+            ok: true,
+            ...buildEmployeeOverview({ year, summary, shifts: shiftsRes.rows, absences: absencesRes.rows, definitions: shiftDefinitionsRes.rows }),
+        });
+    } catch (err) {
+        console.error("Stats Employee Overview Error:", err);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });

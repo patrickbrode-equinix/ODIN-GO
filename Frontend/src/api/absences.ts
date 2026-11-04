@@ -6,7 +6,7 @@ export interface Absence {
     employee_id?: number;
     start_date: string; // ISO Date YYYY-MM-DD
     end_date: string; // ISO Date YYYY-MM-DD
-    type: 'VACATION' | 'SICK' | 'TRAINING' | 'OFFSITE';
+    type: 'VACATION' | 'SICK' | 'TRAINING' | 'OFFSITE' | 'ABSENT';
     note?: string;
     /** 'self' = wish entered by the employee, empty = entered by the management. */
     source?: string | null;

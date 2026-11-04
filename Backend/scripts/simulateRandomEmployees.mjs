@@ -113,7 +113,9 @@ if (args.lnonly) {
   for (const employee of candidates.slice(0, Number(args.lnonly))) {
     Object.assign(employee, { preferred: ['L1', 'L2', 'N'], unwanted: ['E1', 'E2'], blocked: [], maxNights: null, nightModel: 'SEVEN_DAY' });
   }
-}const coloPool = rng.shuffle(employees).slice(0, Math.min(6, Math.floor(employeeCount / 6))).map((employee) => employee.name);
+}// --coloeasy: pool members that accept every shift type (realistic admin choice: people who can do Colo nights)
+const coloCandidates = args.coloeasy ? employees.filter((employee) => !employee.unwanted.includes('N') && !employee.preferred.length && employee.maxNights !== 0) : employees;
+const coloPool = rng.shuffle(coloCandidates).slice(0, Math.min(6, Math.floor(employeeCount / 6))).map((employee) => employee.name);
 
 /* ---------- fake database ---------- */
 

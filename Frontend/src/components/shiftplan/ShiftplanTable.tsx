@@ -732,8 +732,8 @@ export function ShiftplanTable({
                                 <Badge variant="outline" className={`
                                         h-6 px-1.5 text-[10px] border-dashed
                                         ${absence ? 'bg-slate-800 text-slate-300 border-slate-600' : ''}
-                                    `} title={absence.type === 'VACATION' ? `Abwesend · Urlaub${absence.note ? ` · ${absence.note}` : ''}` : absence.note}>
-                                  {absence.type === 'VACATION' ? 'ABW' :
+                                    `} title={absence.type === 'ABSENT' ? 'Abwesend' : absence.type === 'VACATION' ? `Abwesend · Urlaub${absence.note ? ` · ${absence.note}` : ''}` : absence.note}>
+                                  {absence.type === 'VACATION' || absence.type === 'ABSENT' ? 'ABW' :
                                     absence.type === 'SICK' ? 'K' :
                                       absence.type === 'TRAINING' ? 'T' : 'O'}
                                 </Badge>

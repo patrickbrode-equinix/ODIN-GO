@@ -185,3 +185,60 @@ test('draft stores the slider and staffing limits it was generated with', async 
   assert.ok(settings.shiftLimits.some((entry) => entry.code === 'N' && entry.maxStaff > 0));
   assert.ok(Array.isArray(result.planReport.earlyFallbacks));
 });
+
+test('absences that stand as codes in the existing January plan are adopted; planning goes on before and after them', async () => {
+  const { db, employees } = buildTeam(24);
+  const worker = employees[3].name;
+  // quarter draft: everybody on the default, three people with ABW / SEMINAR marked
+  db.draftHistory.set('2027-01', [
+    ...[11, 12, 13].map((day) => ({ employee_name: worker, day, shift_code: 'ABW' })),
+    { employee_name: employees[5].name, day: 20, shift_code: 'SEMINAR' },
+    { employee_name: employees[6].name, day: 5, shift_code: 'E2' },
+  ]);
+  const result = await generate(2027, 1);
+  for (const day of [11, 12, 13]) {
+    assert.equal(result.shifts.find((shift) => shift.employee_name === worker && shift.day === day)?.shift_code, 'ABW', `ABW on day ${day} stays`);
+  }
+  assert.equal(result.shifts.find((shift) => shift.employee_name === employees[5].name && shift.day === 20)?.shift_code, 'SEMINAR');
+  assert.ok(result.shifts.some((shift) => shift.employee_name === worker && shift.day < 11 && !/^(ABW|SEMINAR)$/.test(shift.shift_code)), 'planned before the absence');
+  assert.ok(result.shifts.some((shift) => shift.employee_name === worker && shift.day > 13 && !/^(ABW|SEMINAR)$/.test(shift.shift_code)), 'planned after the absence');
+  assert.equal(result.planReport.adoptedAbsences.length, 4);
+  db.draftHistory.clear();
+});
+
+test('a night block that ends just before the new year keeps its free days into January', async () => {
+  const { db, employees } = buildTeam(24);
+  const worker = employees[2].name;
+  // N on Mon 28.12. - Wed 30.12.; 31.12. is free; two free days after nights -> 01.01. still free
+  db.shiftHistory.set(formatShiftMonthLabel(2026, 12), [28, 29, 30].map((day) => ({ employee_name: worker, day, shift_code: 'N' })));
+  const result = await generate(2027, 1);
+  assert.equal(result.shifts.some((shift) => shift.employee_name === worker && shift.day === 1), false, 'free day after the night block');
+});
+
+test('Ramadan option raises the late maximum only inside the Ramadan period', async () => {
+  const customize = (index) => (index < 10 ? { preferred: ['L1', 'L2'], unwanted: ['E1', 'E2', 'N'] } : {});
+  const run = async (enabled) => {
+    const { db } = buildTeam(30, customize);
+    for (const rule of db.staffingRules) if (rule.shift_type === 'late') { rule.min_count = 2; rule.max_count = 3; }
+    db.settings.set('shiftplan.ramadan_late_enabled', String(enabled));
+    db.settings.set('shiftplan.ramadan_late_extra', '3');
+    return generate(2027, 3); // Ramadan 2027 ends around 8./9. March
+  };
+  const lateByDay = (result) => {
+    const counts = new Map();
+    for (const shift of result.shifts) if (typeOf(shift.shift_code) === 'late') counts.set(shift.day, (counts.get(shift.day) || 0) + 1);
+    return counts;
+  };
+  const off = await run(false);
+  const on = await run(true);
+  assert.equal(on.configSnapshot.planningSettings.ramadanLateEnabled, true);
+  assert.equal(on.configSnapshot.planningSettings.ramadanLateExtra, 3);
+  assert.equal(off.configSnapshot.planningSettings.ramadanLateExtra, 0);
+  const weekday = (day) => new Date(2027, 2, day).getDay();
+  // marked balance-pass overstaffing is the only other way above the maximum
+  const marked = (result, day) => result.planReport.balanceOverstaff.filter((entry) => entry.day === day && typeOf(entry.code) === 'late').length;
+  for (const [day, count] of lateByDay(off)) if ([1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count - marked(off, day) <= 3, `day ${day}: ${count} late without Ramadan option`);
+  // after Ramadan (from 10 March) the normal maximum applies again, with the option too
+  for (const [day, count] of lateByDay(on)) if (day >= 10 && [1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count - marked(on, day) <= 3, `day ${day}: ${count} late after Ramadan`);
+  assert.ok(!on.conflicts.some((conflict) => conflict.type === 'max_staff_reached' && conflict.shift === 'late'));
+});

@@ -17,7 +17,7 @@ export const HOLIDAY_HOURS_FACTOR = 2;
 export const BREAK_HOURS = 1;
 
 const CREDITED_SHIFT_CODES = new Set(["ABW", "SEMINAR"]);
-const CREDITED_ABSENCE_TYPES = new Set(["VACATION", "SICK", "TRAINING"]);
+const CREDITED_ABSENCE_TYPES = new Set(["VACATION", "SICK", "TRAINING", "ABSENT"]);
 
 /** Heiligabend (24.12.) and Silvester (31.12.): hours from 12:00 onwards count double. */
 export const DOUBLE_PAY_FROM_MINUTE = 12 * 60;

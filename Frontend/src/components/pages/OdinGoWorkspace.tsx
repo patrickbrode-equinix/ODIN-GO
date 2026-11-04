@@ -26,6 +26,7 @@ import {
   TrendingDown,
   TrendingUp,
   Vote,
+  Wallet,
   Wind,
   X,
 } from "lucide-react";
@@ -44,6 +45,7 @@ import { AnimatedNumber, Sparkline } from "../widgets/MotionWidgets";
 
 const Shiftplan = lazy(() => import("./Shiftplan"));
 const ShiftplanDrafts = lazy(() => import("./ShiftplanDrafts"));
+const PayrollPage = lazy(() => import("./PayrollPage"));
 const Weekplan = lazy(() => import("./Weekplan"));
 const TagesplanungPage = lazy(() => import("./TagesplanungPage"));
 const UserPreferencesPage = lazy(() => import("./UserPreferencesPage"));
@@ -110,6 +112,7 @@ const PRIMARY_TABS: WorkspaceTab[] = [
 const SUPPORT_TABS: WorkspaceTab[] = [
   { id: "drafts", label: { de: "Entwürfe", en: "Drafts" }, path: "/drafts", icon: FileText, group: "support" },
   { id: "preferences", label: { de: "Schichtwünsche", en: "Shift wishes" }, path: "/preferences", icon: SlidersHorizontal, group: "support" },
+  { id: "payroll", label: { de: "Abrechnung", en: "Payroll" }, path: "/payroll", icon: Wallet, group: "support" },
 ];
 
 const ADMIN_TABS: WorkspaceTab[] = [
@@ -128,6 +131,7 @@ const TAB_HELP: Record<string, { de: string; en: string }> = {
   feedback: { de: "Melde Bugs oder Verbesserungsvorschläge, bei Bedarf mit Screenshot. Der Bearbeitungsstatus wird von der Administration nachverfolgt.", en: "Report bugs or improvement ideas, optionally with a screenshot. Administration tracks the processing status." },
   polls: { de: "Erstelle und beantworte Umfragen. Die Ansicht zeigt außerdem die Beteiligung aller berechtigten Mitarbeiter.", en: "Create and answer surveys. The view also shows participation among all eligible employees." },
   drafts: { de: "Prüfe erzeugte Planentwürfe vor der Übernahme. Sichtbar sind Wochentage, Schichtzeiten, Soll-/Ist-Stunden, Kommentare und Freigaben.", en: "Review generated schedule drafts before activation. Weekdays, shift times, target/actual hours, comments, and approvals are shown." },
+  payroll: { de: "Deine persönliche Gehaltsabrechnung als Näherung: Brutto, Abzüge und Netto, live aus deinem Dienstplan. Die Daten sind nur für dich lesbar (verschlüsselt).", en: "Your personal pay estimate: gross, deductions and net, live from your shift plan. The data is only readable by you (encrypted)." },
   preferences: { de: "Persönliche Einstellungen und Schichtpräferenzen. Harte Ausschlüsse und nicht verfügbare Tage werden bei der Planung berücksichtigt.", en: "Personal settings and shift preferences. Hard exclusions and unavailable days are respected during planning." },
   admin: { de: "Zentrale Administration für Schichtregeln, Sicherheit, Wellbeing, Systemoptionen und Protokolle.", en: "Central administration for shift rules, security, wellbeing, system options, and audit logs." },
   generator: { de: "Erstelle, prüfe und übernimm Schichtplanentwürfe. Der Generator berücksichtigt Arbeitszeit, harte Ausschlüsse und die hinterlegten Planungsregeln.", en: "Create, review, and activate schedule drafts. The generator considers working hours, hard exclusions, and configured planning rules." },
@@ -629,6 +633,7 @@ export default function OdinGoWorkspace() {
             <Route path="handover" element={<ShiftHandover />} />
             <Route path="team-handovers" element={<TeamHandovers />} />
             <Route path="preferences" element={isWebSession ? <Navigate to={`../shiftplan${location.search}`} replace /> : <PageGuard pageKey="settings"><UserPreferencesPage /></PageGuard>} />
+            <Route path="payroll" element={isWebSession ? <Navigate to={`../shiftplan${location.search}`} replace /> : <PageGuard pageKey="settings"><PayrollPage /></PageGuard>} />
             <Route path="admin-settings" element={<PageGuard pageKey="admin_settings" min="write"><AdminSettings /></PageGuard>} />
             <Route path="generator" element={<PageGuard pageKey="shiftplan_control" min="write"><ShiftplanControlCenter /></PageGuard>} />
             <Route path="users" element={<PageGuard pageKey="user_management" min="write"><Users /></PageGuard>} />

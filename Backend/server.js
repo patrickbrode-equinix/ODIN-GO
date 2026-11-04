@@ -28,6 +28,7 @@ import schedulesRoutes from "./routes/schedules.js";
 import statusRoutes from "./routes/status.js";
 import adminUsersRoutes from "./routes/adminUsers.js";
 import statsRoutes from "./routes/stats.js";
+import payrollRoutes from "./routes/payroll.js";
 import holidaysRoutes from "./routes/holidays.js";
 import competenciesRoutes from "./routes/competencies.js";
 import projectsRoutes from "./routes/projects.js";
@@ -147,6 +148,7 @@ app.use("/api/admin/users", adminUsersRoutes);
 
 // 17. Statistics (shift hours)
 app.use("/api/stats", statsRoutes);
+app.use("/api/payroll", payrollRoutes);
 
 // 17b. Holidays (public, for Schichtplan)
 app.use("/api/holidays", holidaysRoutes);

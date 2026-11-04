@@ -51,7 +51,7 @@ interface EnterpriseHeaderProps extends Omit<React.HTMLAttributes<HTMLDivElement
 export function EnterpriseHeader({ icon, title, subtitle, rightContent, style, className, ...props }: EnterpriseHeaderProps) {
     return (
         <div
-            className={cn("relative flex flex-wrap items-center justify-between gap-3", className)}
+            className={cn("ent-card relative flex flex-wrap items-center justify-between gap-3", className)}
             style={{ ...ENT_CARD_BASE, padding: "14px 18px", ...style }}
             {...props}
         >
@@ -128,7 +128,7 @@ export function EnterpriseFeatureHero({ eyebrow, title, description, metrics = [
 export function EnterpriseCard({ children, delayMs: _delayMs = 0, style, noPadding, className, ...props }: EnterpriseCardProps) {
     return (
         <div
-            className={cn("relative overflow-hidden", className)}
+            className={cn("ent-card relative overflow-hidden", className)}
             style={{
                 ...ENT_CARD_BASE,
                 padding: noPadding ? 0 : ENT_CARD_BASE.padding,

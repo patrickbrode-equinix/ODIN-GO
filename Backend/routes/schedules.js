@@ -4,6 +4,8 @@
 /* ------------------------------------------------ */
 
 import express from "express";
+import { notifyShiftChanges } from "../lib/planNotifications.js";
+import { canSeeSickness, maskScheduleSickness } from "../lib/sicknessVisibility.js";
 import db from "../db.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { requirePageAccess } from "../middleware/requirePageAccess.js";
@@ -518,7 +520,8 @@ router.get(
           id: `${parsed.year}-${String(parsed.month).padStart(2, "0")}`,
           daysInMonth: new Date(parsed.year, parsed.month, 0).getDate() || maxDay || 31,
         },
-        schedule,
+        // Sick leave is only visible to admins and the selected people; everybody else sees "Abwesend" (ABW).
+        schedule: (await canSeeSickness(db, req.user)) ? schedule : maskScheduleSickness(schedule),
         manualEmployees,
       });
     } catch (err) {
@@ -1072,6 +1075,7 @@ router.put(
         [month, employeeName, day]
       );
       const previousShiftCode = existingShiftResult.rows[0]?.shift_code ?? null;
+      let notifyChange = null;
 
       const manualEmployeeRes = await client.query(
         `SELECT 1 FROM (
@@ -1118,10 +1122,13 @@ router.put(
            VALUES ($1,$2,$3,$4,$5,$6)`,
           [employeeName, changedDate, previousShiftCode, shiftCode || null, changedBy, "MANUAL_SHIFT_CHANGE"]
         );
+        notifyChange = { employee_name: employeeName, date: changedDate, old_value: previousShiftCode, new_value: shiftCode || null };
       }
 
       await client.query("COMMIT");
       res.json({ success: true });
+      // The person concerned and the admin get a notification (never blocks the save).
+      if (notifyChange) void notifyShiftChanges({ db, changes: [notifyChange], actor: req.user?.displayName || req.user?.email || "Unbekannt", actorUserId: req.user?.id || null });
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
       console.error("SCHEDULE CELL UPDATE ERROR:", e);
@@ -1212,6 +1219,12 @@ router.post(
       await client.query("COMMIT");
       recomputeConstraintsInternal(month).catch((error) => console.error("Constraint recompute after manual change failed:", error));
       res.json({ success: true, changes });
+      void notifyShiftChanges({
+        db,
+        changes: changes.map((change) => ({ employee_name: employeeName, date: `${parsedMonth.year}-${String(parsedMonth.month).padStart(2, "0")}-${String(change.day).padStart(2, "0")}`, old_value: change.oldShift, new_value: change.newShift })),
+        actor: changedBy,
+        actorUserId: req.user?.id || null,
+      });
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       console.error("BULK SCHEDULE CHANGE ERROR:", error);
@@ -1294,6 +1307,19 @@ router.post(
 
       await client.query("COMMIT");
       res.json({ success: true, swapped: true });
+      const swapMonth = parseMonthLabel(month);
+      if (swapMonth) {
+        const swapDate = `${swapMonth.year}-${String(swapMonth.month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        void notifyShiftChanges({
+          db,
+          changes: [
+            { employee_name: employeeA, date: swapDate, old_value: aShift, new_value: bShift },
+            { employee_name: employeeB, date: swapDate, old_value: bShift, new_value: aShift },
+          ],
+          actor: req.user?.displayName || req.user?.email || "Unbekannt",
+          actorUserId: req.user?.id || null,
+        });
+      }
     } catch (e) {
       await client.query("ROLLBACK").catch(() => {});
       console.error("SCHEDULE SWAP ERROR:", e);

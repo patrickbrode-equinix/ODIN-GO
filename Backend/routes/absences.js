@@ -2,6 +2,8 @@ import express from 'express';
 import db from '../db.js';
 import { requireAuth } from '../middleware/authMiddleware.js';
 import { requirePageAccess } from '../middleware/requirePageAccess.js';
+import { notifySickAbsence } from '../lib/planNotifications.js';
+import { canSeeSickness, maskAbsenceRows } from '../lib/sicknessVisibility.js';
 
 const router = express.Router();
 
@@ -36,7 +38,8 @@ router.get('/', requireAuth, async (req, res) => {
         }
 
         const { rows } = await db.query(query, params);
-        res.json(rows);
+        // Sick leave only for admins and the selected people, everybody else sees a neutral absence.
+        res.json((await canSeeSickness(db, req.user)) ? rows : maskAbsenceRows(rows));
     } catch (err) {
         console.error('Error fetching absences:', err);
         res.status(500).json({ error: 'Failed to fetch absences' });
@@ -72,6 +75,10 @@ router.post('/', requireAuth, requirePageAccess('shiftplan', 'write'), async (re
         await recomputeConflictsInternal(employee_name, start_date, end_date);
 
         res.json(rows[0]);
+        // Sick and planned as absent: the admin gets a notification.
+        if (String(type).toUpperCase() === 'SICK') {
+            void notifySickAbsence({ db, entries: [{ employee_name, start_date: String(start_date).slice(0, 10), end_date: String(end_date).slice(0, 10) }], actor: req.user?.displayName || req.user?.email || 'Unbekannt' });
+        }
     } catch (err) {
         console.error('Error creating absence:', err);
         res.status(500).json({ error: 'Failed to create absence' });

@@ -20,6 +20,7 @@ import { useShiftSelection } from "../../hooks/useShiftSelection";
 import { useHiddenEmployees } from "../../hooks/useHiddenEmployees";
 import { ShiftImportDialog } from "../shiftplan/ShiftImportDialog"; // [NEW] Excel Import
 import { HistoryDialog } from "../shiftplan/HistoryDialog"; // [NEW]
+import { SickVisibilityDialog } from "../shiftplan/SickVisibilityDialog";
 import { CompetencyModal } from "../shiftplan/CompetencyModal";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -242,6 +243,9 @@ export default function Shiftplan() {
   const [wellbeingVisible, setWellbeingVisible] = useState(false);
 
   const [isEditMode, setIsEditMode] = useState(false);
+  // Month without any plan: the table shows a read-only placeholder (everybody on E2, Mon-Fri) and a notice.
+  const [isPlaceholderMonth, setIsPlaceholderMonth] = useState(false);
+  const [sickVisibilityOpen, setSickVisibilityOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
 
   const [editOpen, setEditOpen] = useState(false);
@@ -1157,7 +1161,40 @@ export default function Shiftplan() {
       clearSelection();
 
       const data = await fetchSchedule(monthLabel);
-      const sched = (data && typeof data === 'object' && data.schedule) ? data.schedule : {};
+      let sched = (data && typeof data === 'object' && data.schedule) ? data.schedule : {};
+      let placeholder = false;
+      if (Object.keys(sched).length === 0) {
+        // No plan yet: take the employee names from the nearest planned month and show everybody on E2 (Mon-Fri).
+        const names = new Set<string>();
+        const candidates = [
+          ...Object.entries(shiftStore.schedulesByMonth || {}).filter(([label, value]) => label !== monthLabel && value && Object.keys(value as any).length > 0).map(([, value]) => value as Record<string, any>),
+        ];
+        for (const candidate of candidates) Object.keys(candidate).forEach((name) => names.add(name));
+        if (names.size === 0) {
+          for (const other of monthsWithData.filter((label) => label !== monthLabel).slice(0, 3)) {
+            try {
+              const otherData = await fetchSchedule(other);
+              Object.keys(otherData?.schedule || {}).forEach((name) => names.add(name));
+              if (names.size > 0) break;
+            } catch { /* try the next month */ }
+          }
+        }
+        const meta0 = (data && typeof data === 'object') ? data.meta : null;
+        const year0 = meta0?.year || selectedYear;
+        const month0 = meta0?.month || (selectedMonthIndex + 1);
+        const total0 = new Date(year0, month0, 0).getDate();
+        const filled: Record<string, Record<number, string>> = {};
+        for (const name of [...names].sort((left, right) => left.localeCompare(right, 'de'))) {
+          filled[name] = {};
+          for (let day = 1; day <= total0; day++) {
+            const weekday = new Date(year0, month0 - 1, day).getDay();
+            if (weekday !== 0 && weekday !== 6) filled[name][day] = 'E2';
+          }
+        }
+        sched = filled;
+        placeholder = true;
+      }
+      setIsPlaceholderMonth(placeholder);
       const meta = (data && typeof data === 'object') ? data.meta : null;
       const manual = Array.isArray((data as any)?.manualEmployees)
         ? (data as any).manualEmployees as ManualShiftplanEmployee[]
@@ -1165,7 +1202,8 @@ export default function Shiftplan() {
 
       setSchedule(sched);
       setManualEmployees(manual);
-      shiftStore.setSchedule(monthLabel, sched);
+      // The placeholder is never cached or saved.
+      shiftStore.setSchedule(monthLabel, placeholder ? {} : sched);
       shiftStore.setSelectedMonth(monthLabel);
 
       if (meta && typeof meta === 'object' && meta.year && meta.month) {
@@ -1230,7 +1268,7 @@ export default function Shiftplan() {
   /* ------------------------------------------------ */
 
   const toggleEditMode = () => {
-    if (!canEdit) return;
+    if (!canEdit || isPlaceholderMonth) return;
     setIsEditMode((prev) => {
       const next = !prev;
       if (!next) {
@@ -1243,12 +1281,14 @@ export default function Shiftplan() {
   };
 
   const handleCellClick = (employeeName: string, day: number, modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => {
+    if (isPlaceholderMonth) return;
     selectCell(employeeName, day, modifiers);
     setContextMenu(null);
   };
 
   const handleCellContextMenu = (e: React.MouseEvent, args: { employeeName: string; day: number; current: string }) => {
     e.preventDefault(); // Ensure native menu is prevented
+    if (isPlaceholderMonth) return; // the template of an unplanned month is read-only
     if (!isSelected(args.employeeName, args.day)) {
       selectCell(args.employeeName, args.day, { shiftKey: false, ctrlKey: false, metaKey: false });
     }
@@ -1647,7 +1687,7 @@ export default function Shiftplan() {
 
   // REMOVED: h-[calc(100vh-20px)] overflow-hidden => allowed page scroll
   return (
-    <EnterprisePageShell className="shiftplan-enterprise pb-20">
+    <EnterprisePageShell className="shiftplan-enterprise pb-20 overflow-visible">
       {/* HEADER */}
       <EnterpriseHeader
         title={t("shiftplan.title")}
@@ -1699,6 +1739,18 @@ export default function Shiftplan() {
             >
               {hiddenPanelVisible ? `${t("shiftplan.hiddenOn")}: ${hiddenEmployees.size}` : `${t("shiftplan.hidden")} (${hiddenEmployees.size})`}
             </Button>
+
+            {user.isAdmin && (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-7 px-3 text-[11px] font-bold tracking-wider uppercase"
+                onClick={() => setSickVisibilityOpen(true)}
+                title={isGerman ? "Wer Krankmeldungen sehen darf und Mitteilungen erhält" : "Who can see sick leave and receives notifications"}
+              >
+                {isGerman ? "Krank-Sicht" : "Sick access"}
+              </Button>
+            )}
 
             {canEdit && (
               <>
@@ -1802,14 +1854,18 @@ export default function Shiftplan() {
             return (
               <button
                 key={idx}
+                data-plan={hasData ? "yes" : "no"}
                 onClick={() => handleShiftplanMonthSelect(idx)}
                 className={`
-                            liquid-tab inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium whitespace-nowrap
+                            liquid-tab inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold whitespace-nowrap rounded-md border
+                            ${hasData
+                              ? `border-emerald-500/50 bg-emerald-500/10 text-emerald-300 ${active ? "bg-emerald-500/25 ring-1 ring-emerald-400/60" : ""}`
+                              : `border-red-500/50 bg-red-500/10 text-red-300 ${active ? "bg-red-500/25 ring-1 ring-red-400/60" : ""}`}
                             ${active ? "is-active" : ""}
                           `}
                 title={hasData ? undefined : (isGerman ? "Noch kein Plan für diesen Monat" : "No plan for this month yet")}
               >
-                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${hasData ? "bg-emerald-500" : "bg-slate-400/60"}`} />
+                <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${hasData ? "bg-emerald-500" : "bg-red-500"}`} />
                 {label.split(" ")[0]}
               </button>
             );
@@ -1980,10 +2036,17 @@ export default function Shiftplan() {
         )
       }
 
+      <SickVisibilityDialog open={sickVisibilityOpen} onClose={() => setSickVisibilityOpen(false)} isGerman={isGerman} />
+
       {/* MAIN CONTENT */}
       <EnterpriseCard noPadding className="flex-1 min-h-0 relative flex flex-col overflow-visible">
         {viewMode === "month" && (
           <>
+            {isPlaceholderMonth ? (
+              <div role="status" className="mb-3 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
+                {isGerman ? "Noch keine Planung vorhanden. Die Ansicht zeigt nur eine Vorlage (alle Mitarbeiter auf E2, Montag bis Freitag) und wird nicht gespeichert." : "No plan yet. The view only shows a template (everybody on E2, Monday to Friday) and is not saved."}
+              </div>
+            ) : null}
             <div className="flex-1 min-h-0 relative">
               <ShiftplanTable
                 schedule={visibleSchedule}

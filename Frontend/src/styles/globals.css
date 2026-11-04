@@ -2216,3 +2216,308 @@ body::before,
 @keyframes odin-bar { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 @keyframes odin-glow { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .odin-intro *, .odin-intro-glow { animation-duration: .01s !important; animation-delay: 0s !important; } }
+
+
+/* ================================================================ */
+/* Design v3 – Liquid Glass (enterprise)                            */
+/* Floating glass bars, layered translucent panels, soft depth,     */
+/* spring motion. Glass only where it carries meaning (bars, cards, */
+/* dialogs, menus); data tables stay calm and readable.             */
+/* ================================================================ */
+:root {
+  --font-sans-brand: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display-brand: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --glass-radius: 20px;
+}
+.dark {
+  --glass-bg: rgba(34, 46, 74, 0.40);
+  --glass-bg-strong: rgba(22, 31, 52, 0.82);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-edge: rgba(255, 255, 255, 0.22);
+  --glass-shadow: 0 18px 44px -18px rgba(2, 6, 18, 0.65), 0 2px 8px rgba(2, 6, 18, 0.25);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.12), inset 0 -1px 0 rgba(255, 255, 255, 0.03);
+  --canvas-1: #080d18;
+  --accent: #6aa5ff;
+  --accent-2: #8f7bff;
+  --accent-soft: rgba(106, 165, 255, 0.16);
+}
+.light {
+  --glass-bg: rgba(255, 255, 255, 0.62);
+  --glass-bg-strong: rgba(255, 255, 255, 0.86);
+  --glass-border: rgba(20, 40, 80, 0.10);
+  --glass-edge: rgba(255, 255, 255, 0.9);
+  --glass-shadow: 0 16px 38px -18px rgba(30, 50, 100, 0.28), 0 2px 6px rgba(30, 50, 100, 0.08);
+  --glass-inner: inset 0 1px 0 rgba(255, 255, 255, 0.9), inset 0 -1px 0 rgba(30, 50, 100, 0.04);
+  --canvas-1: #eef2fa;
+  --accent: #2563eb;
+  --accent-2: #6d4ff0;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+}
+
+/* ---------- canvas: soft aurora behind everything ---------- */
+.odin-go-workspace-shell {
+  position: relative;
+  background-color: var(--canvas-1) !important;
+  isolation: isolate;
+}
+.odin-go-workspace-shell::before,
+.odin-go-workspace-shell::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+}
+.odin-go-workspace-shell::before {
+  background:
+    radial-gradient(42% 38% at 10% 12%, rgba(86, 124, 255, 0.62), transparent 70%),
+    radial-gradient(34% 34% at 90% 10%, rgba(56, 189, 248, 0.42), transparent 70%),
+    radial-gradient(40% 40% at 72% 96%, rgba(147, 112, 255, 0.50), transparent 72%),
+    radial-gradient(30% 30% at 28% 70%, rgba(20, 184, 166, 0.22), transparent 72%);
+  filter: blur(36px);
+  animation: odin-aurora 38s ease-in-out infinite alternate;
+}
+.odin-go-workspace-shell::after {
+  background: radial-gradient(60% 50% at 50% 0%, rgba(255, 255, 255, 0.05), transparent 70%);
+}
+.light .odin-go-workspace-shell::before {
+  background:
+    radial-gradient(38% 34% at 12% 8%, rgba(120, 160, 255, 0.40), transparent 70%),
+    radial-gradient(30% 30% at 88% 6%, rgba(125, 211, 252, 0.40), transparent 70%),
+    radial-gradient(34% 36% at 70% 100%, rgba(196, 181, 253, 0.40), transparent 72%);
+}
+@keyframes odin-aurora {
+  0% { transform: translate3d(-2%, -1%, 0) scale(1); }
+  50% { transform: translate3d(3%, 2%, 0) scale(1.06); }
+  100% { transform: translate3d(-1%, 3%, 0) scale(1.02); }
+}
+.odin-go-workspace-main { background: transparent !important; }
+
+/* ---------- floating glass bars ---------- */
+.odin-go-workspace-shell > header,
+.liquid-tabbar,
+.light .liquid-tabbar {
+  background: var(--glass-bg) !important;
+  -webkit-backdrop-filter: blur(26px) saturate(180%) !important;
+  backdrop-filter: blur(26px) saturate(180%) !important;
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-shadow), var(--glass-inner) !important;
+  margin: 10px 12px 0;
+  border-radius: 22px;
+}
+.liquid-tabbar { margin-top: 8px; border-radius: 20px; }
+.odin-go-workspace-shell > header { z-index: 45; }
+
+/* ---------- tabs: segmented glass pills ---------- */
+#root .liquid-tab {
+  height: 34px !important;
+  border-radius: 12px !important;
+  color: var(--ink-muted) !important;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  transition: background-color 0.25s var(--spring), color 0.2s ease, transform 0.25s var(--spring), box-shadow 0.25s var(--spring) !important;
+}
+#root .liquid-tab:hover {
+  background: rgba(255, 255, 255, 0.07) !important;
+  color: var(--ink-text) !important;
+  transform: translateY(-1px);
+}
+.light #root .liquid-tab:hover { background: rgba(20, 40, 80, 0.06) !important; }
+#root .liquid-tab:active { transform: scale(0.97); }
+#root .liquid-tab.is-active,
+#root .liquid-tab[aria-selected="true"],
+#root .liquid-tab[aria-current="page"] {
+  color: var(--ink-text) !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.07)) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 6px 16px -6px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.10) !important;
+  font-weight: 600;
+}
+.light #root .liquid-tab.is-active,
+.light #root .liquid-tab[aria-selected="true"] {
+  background: linear-gradient(180deg, #ffffff, rgba(255, 255, 255, 0.7)) !important;
+  box-shadow: inset 0 1px 0 #fff, 0 6px 14px -6px rgba(30, 50, 100, 0.35), 0 0 0 1px rgba(20, 40, 80, 0.08) !important;
+}
+#root .liquid-tab.is-active svg { color: var(--accent); }
+/* months of the shift plan: plan available = green, no plan = red */
+#root .liquid-tab[data-plan="yes"] { color: #6fe0a0 !important; }
+#root .liquid-tab[data-plan="no"] { color: #ff8b8b !important; }
+#root .liquid-tab[data-plan="yes"].is-active { background: linear-gradient(180deg, rgba(63, 191, 121, 0.38), rgba(63, 191, 121, 0.14)) !important; color: #c8ffe0 !important; }
+#root .liquid-tab[data-plan="no"].is-active { background: linear-gradient(180deg, rgba(239, 106, 106, 0.38), rgba(239, 106, 106, 0.14)) !important; color: #ffd0d0 !important; }
+.light #root .liquid-tab[data-plan="yes"] { color: #137a42 !important; }
+.light #root .liquid-tab[data-plan="no"] { color: #b42323 !important; }
+
+/* header chips */
+#root .odin-chip {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 12px !important;
+  box-shadow: var(--glass-inner) !important;
+  transition: background-color 0.2s ease, transform 0.25s var(--spring);
+}
+#root .odin-chip:hover { background: rgba(255, 255, 255, 0.11) !important; transform: translateY(-1px); }
+.light #root .odin-chip { background: rgba(255, 255, 255, 0.7) !important; }
+
+/* ---------- glass cards and panels ---------- */
+.ent-card,
+#root .liquid-panel,
+#root .liquid-hero,
+#root .liquid-kpi,
+#root [data-slot="card"] {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.015) 45%), var(--glass-bg) !important;
+  -webkit-backdrop-filter: blur(24px) saturate(170%) !important;
+  backdrop-filter: blur(24px) saturate(170%) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--glass-radius) !important;
+  box-shadow: var(--glass-shadow), var(--glass-inner) !important;
+  position: relative;
+  transition: box-shadow 0.35s var(--spring), border-color 0.3s ease, transform 0.35s var(--spring);
+}
+/* specular edge: a soft light line along the top of every glass surface */
+.ent-card::before,
+#root .liquid-panel::before,
+#root [data-slot="card"]::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--glass-edge), transparent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+.ent-card:hover,
+#root .liquid-panel:hover {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+}
+.light .ent-card:hover, .light #root .liquid-panel:hover { border-color: rgba(20, 40, 80, 0.16) !important; }
+
+/* ---------- buttons ---------- */
+#root [data-slot="button"] {
+  border-radius: 12px !important;
+  font-weight: 600;
+  letter-spacing: -0.005em;
+  transition: transform 0.2s var(--spring), box-shadow 0.25s var(--spring), background-color 0.2s ease, border-color 0.2s ease, filter 0.2s ease !important;
+}
+#root [data-slot="button"]:hover:not(:disabled) { transform: translateY(-1px); }
+#root [data-slot="button"]:active:not(:disabled) { transform: scale(0.97); }
+#root [data-slot="button"][class*="bg-primary"],
+#root [data-slot="button"][class*="bg-indigo-600"] {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 95%, white), color-mix(in srgb, var(--accent) 78%, black)) !important;
+  color: #fff !important;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), 0 8px 20px -8px color-mix(in srgb, var(--accent) 80%, transparent) !important;
+}
+#root [data-slot="button"][class*="bg-primary"]:hover:not(:disabled) { filter: brightness(1.08); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4), 0 12px 26px -8px color-mix(in srgb, var(--accent) 85%, transparent) !important; }
+#root [data-slot="button"][class*="border"]:not([class*="bg-primary"]) {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid var(--glass-border) !important;
+  box-shadow: var(--glass-inner);
+}
+#root [data-slot="button"][class*="border"]:not([class*="bg-primary"]):hover:not(:disabled) { background: rgba(255, 255, 255, 0.12) !important; }
+.light #root [data-slot="button"][class*="border"]:not([class*="bg-primary"]) { background: rgba(255, 255, 255, 0.7) !important; }
+
+/* ---------- inputs ---------- */
+#root [data-slot="input"],
+#root [data-slot="textarea"],
+#root [data-slot="select-trigger"],
+#root select,
+#root input[type="text"],
+#root input[type="search"],
+#root input[type="number"],
+#root input[type="email"],
+#root input[type="password"] {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 12px !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.2s ease, box-shadow 0.25s var(--spring), background-color 0.2s ease;
+}
+.light #root [data-slot="input"], .light #root [data-slot="textarea"], .light #root select, .light #root input[type="text"], .light #root input[type="search"], .light #root input[type="number"] { background: rgba(255, 255, 255, 0.8) !important; box-shadow: inset 0 1px 2px rgba(30, 50, 100, 0.08); }
+#root [data-slot="input"]:focus-visible,
+#root [data-slot="textarea"]:focus-visible,
+#root select:focus-visible,
+#root input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent) !important;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent), inset 0 1px 2px rgba(0, 0, 0, 0.18) !important;
+  outline: none;
+}
+
+/* ---------- dialogs, popovers, menus: heavy glass ---------- */
+#root [data-slot="dialog-overlay"] { background: rgba(5, 9, 20, 0.45) !important; -webkit-backdrop-filter: blur(10px) saturate(140%); backdrop-filter: blur(10px) saturate(140%); }
+#root [data-slot="dialog-content"],
+#root [data-slot="popover-content"],
+#root [data-slot="select-content"],
+#root [data-slot="context-menu-content"],
+#root [data-slot="context-menu-sub-content"] {
+  background: var(--glass-bg-strong) !important;
+  -webkit-backdrop-filter: blur(34px) saturate(190%) !important;
+  backdrop-filter: blur(34px) saturate(190%) !important;
+  border: 1px solid var(--glass-border) !important;
+  border-radius: 22px !important;
+  box-shadow: 0 30px 80px -20px rgba(2, 6, 18, 0.75), var(--glass-inner) !important;
+}
+#root [data-slot="dialog-content"] { animation: odin-pop 0.38s var(--spring); }
+@keyframes odin-pop { from { opacity: 0; transform: translateY(14px) scale(0.965); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+
+/* ---------- tables: calm, translucent header, soft rows ---------- */
+#root [data-slot="table-head"] { color: var(--ink-muted); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
+#root [data-slot="table-row"] { transition: background-color 0.18s ease; }
+#root [data-slot="table-row"]:hover { background: rgba(255, 255, 255, 0.05) !important; }
+.light #root [data-slot="table-row"]:hover { background: rgba(20, 40, 80, 0.04) !important; }
+
+/* ---------- page entrance and scrollbars ---------- */
+.odin-go-workspace-main > * { animation: odin-rise 0.55s var(--spring) both; }
+@keyframes odin-rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.odin-go-workspace-main { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.22) transparent; }
+.odin-go-workspace-main::-webkit-scrollbar { width: 10px; height: 10px; }
+.odin-go-workspace-main::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 10px; border: 3px solid transparent; background-clip: content-box; }
+.odin-go-workspace-main::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.32); background-clip: content-box; border: 3px solid transparent; }
+.light .odin-go-workspace-main::-webkit-scrollbar-thumb { background: rgba(20, 40, 80, 0.22); background-clip: content-box; }
+::selection { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* week / day plan: glass surfaces */
+.weekplan-v2, .daily-plan-v2 { background: transparent !important; }
+.weekplan-v2 .wk-table { background: var(--glass-bg) !important; -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); border-color: var(--glass-border) !important; border-radius: 18px; }
+.weekplan-v2 .wk-seg, .weekplan-v2 .wk-icon-btn, .daily-plan-v2 .dp-btn { background: rgba(255, 255, 255, 0.06) !important; border-color: var(--glass-border) !important; border-radius: 12px !important; }
+.daily-plan-v2 .dp-header { background: var(--glass-bg) !important; -webkit-backdrop-filter: blur(22px) saturate(170%); backdrop-filter: blur(22px) saturate(170%); border: 1px solid var(--glass-border) !important; border-radius: 20px; margin: 12px 16px 0; box-shadow: var(--glass-shadow), var(--glass-inner); }
+.daily-plan-v2 .dp-panel { background: var(--glass-bg) !important; -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%); border-radius: 20px !important; border-color: var(--glass-border) !important; box-shadow: var(--glass-shadow), var(--glass-inner); transition: transform 0.35s var(--spring), box-shadow 0.35s var(--spring); }
+.daily-plan-v2 .dp-panel:hover { transform: translateY(-3px); }
+.weekplan-v2 .wk-header { padding-top: 14px; }
+
+/* respect user settings */
+@media (prefers-reduced-motion: reduce) {
+  .odin-go-workspace-shell::before { animation: none; }
+  .odin-go-workspace-main > *, #root [data-slot="dialog-content"] { animation: none; }
+  #root .liquid-tab, #root [data-slot="button"], .ent-card { transition: none !important; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .odin-go-workspace-shell > header, .liquid-tabbar, .ent-card, #root .liquid-panel, #root [data-slot="card"], #root [data-slot="dialog-content"] { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; background: var(--ink-1) !important; }
+}
+
+/* page wrappers of the older themes must not cover the aurora */
+#root .odin-go-workspace-main > div,
+#root .odin-go-workspace-main [class*="-enterprise"],
+#root .odin-go-workspace-main [class*="enterprise-surface"] { background: transparent !important; background-image: none !important; }
+/* rounded icon tiles and small inner boxes inside glass cards */
+#root .ent-card [class*="bg-secondary"] { background: rgba(255, 255, 255, 0.08) !important; border-color: var(--glass-border) !important; border-radius: 12px !important; }
+
+/* nested boxes (command center, KPI tiles, small panels): translucent instead of solid */
+#root .odin-go-workspace-main .bg-card:not(table):not(tr):not(td):not(th),
+#root .odin-go-workspace-main .shiftplan-command-center {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.012) 50%), rgba(30, 42, 68, 0.34) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  border-color: var(--glass-border) !important;
+  border-radius: 18px !important;
+  box-shadow: var(--glass-inner);
+}
+.light #root .odin-go-workspace-main .bg-card:not(table):not(tr):not(td):not(th),
+.light #root .odin-go-workspace-main .shiftplan-command-center { background: linear-gradient(155deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.55)) !important; }
+.odin-go-workspace-shell::before {
+  background:
+    radial-gradient(42% 38% at 10% 12%, rgba(86, 124, 255, 0.62), transparent 70%),
+    radial-gradient(34% 34% at 90% 10%, rgba(56, 189, 248, 0.42), transparent 70%),
+    radial-gradient(40% 40% at 78% 92%, rgba(147, 112, 255, 0.55), transparent 72%),
+    radial-gradient(34% 34% at 14% 88%, rgba(20, 184, 166, 0.34), transparent 72%),
+    radial-gradient(30% 30% at 50% 50%, rgba(79, 70, 229, 0.20), transparent 72%);
+}

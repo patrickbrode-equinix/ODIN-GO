@@ -467,7 +467,7 @@ export default function ShiftplanControlCenter() {
   ];
 
   return (
-    <EnterprisePageShell style={{ maxWidth: 'none' }}>
+    <EnterprisePageShell className="overflow-visible" style={{ maxWidth: 'none' }}>
       {/* Header */}
       <EnterpriseHeader
         icon={<CalendarClock className="w-6 h-6 text-blue-400" />}

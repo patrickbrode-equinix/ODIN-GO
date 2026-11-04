@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { buildEmployeeMonthHours } from '../lib/payrollHours.js';
+
+const definitions = [
+  { code: 'E1', duration_hours: 8, start_time: '06:30', end_time: '15:30', start_day_offset: 0, end_day_offset: 0 },
+  { code: 'N', duration_hours: 8.5, start_time: '21:15', end_time: '06:45', start_day_offset: 0, end_day_offset: 1 },
+];
+
+test('supplement hours come from the real shift times (night 20-6, Sunday, holiday)', () => {
+  // 2027-03-26 is Karfreitag (Friday), 2027-03-28 Sunday (Easter Sunday), 2027-03-23 an ordinary Tuesday
+  const result = buildEmployeeMonthHours({
+    year: 2027,
+    month: 3,
+    shifts: [
+      { day: 23, shift_code: 'E1' },
+      { day: 26, shift_code: 'E1' },
+      { day: 27, shift_code: 'N' },
+      { day: 28, shift_code: 'E1' },
+      { day: 29, shift_code: 'KRANK' },
+    ],
+    definitions,
+  });
+  const byDate = Object.fromEntries(result.shifts.map((row) => [row.date, row]));
+  assert.equal(byDate['2027-03-23'].night, 0);
+  assert.ok(byDate['2027-03-26'].holiday >= 7.9, 'Karfreitag: the whole shift is a holiday');
+  assert.ok(byDate['2027-03-27'].night > 7, 'night shift: most hours are night hours');
+  assert.ok(byDate['2027-03-27'].sunday > 0, 'the night shift reaches into Sunday');
+  assert.ok(byDate['2027-03-28'].sunday >= 7.9);
+  assert.equal(byDate['2027-03-29'].code, 'ABW', 'sick leave reads as a neutral absence');
+  assert.equal(result.totals.workedShifts, 4);
+  assert.equal(result.totals.absenceDays, 1);
+});
