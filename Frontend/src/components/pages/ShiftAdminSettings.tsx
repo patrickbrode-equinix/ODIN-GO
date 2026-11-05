@@ -1494,7 +1494,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const updateColoEmployeeRule = (employeeName: string, patch: Partial<ColoEmployeeRule>) => {
     setColoConfig((current) => ({
       ...current,
-      employeeRules: { ...current.employeeRules, [employeeName]: { shift_types: [], weekdays: [], ...current.employeeRules[employeeName], ...patch } },
+      employeeRules: { ...current.employeeRules, [employeeName]: { ...(current.employeeRules[employeeName] ?? { shift_types: [], weekdays: [] }), ...patch } },
     }));
   };
 
