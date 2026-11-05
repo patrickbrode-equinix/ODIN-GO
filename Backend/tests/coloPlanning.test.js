@@ -16,6 +16,7 @@ test('normalizes a persisted Colo configuration', () => {
   }), {
     enabled: true,
     employeePool: ['Anna Beispiel', 'Ben Test'],
+    employeeRules: {},
     requirements: [
       { id: 'preparation', label: 'Colo Vorbereitung (Börse: E-Mail/Telefon)', weekdays: [1, 2, 3, 4, 5], shift_type: 'early', staff: 2 },
       { id: 'night', label: 'Colo Nacht', weekdays: [0, 1, 2, 3, 4, 5, 6], shift_type: 'night', staff: 1 },

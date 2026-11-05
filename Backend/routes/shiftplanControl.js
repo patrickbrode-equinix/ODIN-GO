@@ -589,6 +589,7 @@ async function loadColoPlanningConfig() {
     [[
       'shiftplan.colo_enabled',
       'shiftplan.colo_pool',
+      'shiftplan.colo_pool_rules',
       'shiftplan.colo_requirements',
       'shiftplan.colo_weekday_preparation_staff',
       'shiftplan.colo_night_staff',
@@ -600,6 +601,7 @@ async function loadColoPlanningConfig() {
   return normalizeColoPlanningConfig({
     enabled: settings['shiftplan.colo_enabled'],
     employeePool: settings['shiftplan.colo_pool'],
+    employeeRules: settings['shiftplan.colo_pool_rules'],
     requirements: settings['shiftplan.colo_requirements'],
     weekdayPreparationStaff: settings['shiftplan.colo_weekday_preparation_staff'],
     nightStaff: settings['shiftplan.colo_night_staff'],
@@ -1941,6 +1943,17 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const coloShiftTypeByCode = new Map([...shiftDefs, ...(shortNightDefinition ? [shortNightDefinition] : [])]
     .map((definition) => [String(definition.code || '').trim().toUpperCase(), normalizePlanningShiftTypeKey(definition.shift_type)]));
   const isColoPoolEmployee = (employee) => coloPoolKeys.has(coloNameKey(employee));
+  // Per-person Colo limits of the admin menu (only certain shift types / weekdays). Someone who is not allowed to do
+  // Colo on that shift type / weekday does not count as Colo cover and is not steered into it.
+  const coloRuleByKey = new Map(Object.entries(coloPlanningConfig.employeeRules || {}).map(([name, rule]) => [coloNameKey(name), rule]));
+  const isColoAllowedFor = (employee, shiftType, weekday) => {
+    if (!isColoPoolEmployee(employee)) return false;
+    const rule = coloRuleByKey.get(coloNameKey(employee));
+    if (!rule) return true;
+    if (shiftType && rule.shift_types.length > 0 && !rule.shift_types.includes(shiftType)) return false;
+    if (Number.isInteger(weekday) && rule.weekdays.length > 0 && !rule.weekdays.includes(weekday)) return false;
+    return true;
+  };
   // Returns the open Colo demand for today and the following days that a new
   // block starting today would cover. Running blocks count as future cover.
   const getOpenColoDemandByOffset = (day, shiftType, horizon) => {
@@ -1952,7 +1965,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         .filter((task) => task.shiftType === shiftType)
         .reduce((sum, task) => sum + task.required, 0);
       const covered = activeEmployees.filter((employee) => {
-        if (!isColoPoolEmployee(employee)) return false;
+        if (!isColoAllowedFor(employee, shiftType, dayOfWeek(year, mon, targetDay))) return false;
         if (coloShiftTypeByCode.get(String(empDayAssignment[employee]?.[day] || '').trim().toUpperCase()) !== shiftType) return false;
         return offset === 0 || empSeriesRemaining[employee] >= offset;
       }).length;
@@ -2840,7 +2853,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const coloWellbeingOk = (normalizePlanningShiftTypeKey(shiftDef.shift_type) !== 'night' || stats.nights <= averageNights + 1)
             && (!plannedWeekendKey || stats.workedWeekendBlocks.has(plannedWeekendKey) || stats.workedWeekendBlocks.size <= averageWeekends + 0.5);
           const coloBoost = openColoDemandByOffset.slice(0, Math.max(seriesDays, 1)).some((demand) => demand > 0)
-            && isColoPoolEmployee(employee)
+            && isColoAllowedFor(employee, normalizePlanningShiftTypeKey(shiftDef.shift_type), dayOfWeek(year, mon, day))
             && coloWellbeingOk
             && !unwantedShiftList.includes('COLO')
             && (!planConfig.respect_employee_wishes || preferredShiftList.length === 0 || preferenceMatch || preferredWishIgnored);
@@ -4356,11 +4369,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           .filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === type)
           .filter((definition) => normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow));
         if (dow === 0 || definitionsOfType.length === 0) continue;
-        let covered = poolMembers.filter((employee) => typeOfAssigned(employee, day) === type).length;
+        let covered = poolMembers.filter((employee) => typeOfAssigned(employee, day) === type && isColoAllowedFor(employee, type, dow)).length;
         while (covered < required) {
           let best = null;
           for (const employee of poolMembers) {
             if (empDayAssignment[employee][day]) continue;
+            if (!isColoAllowedFor(employee, type, dow)) continue;
             if (isEmployeeAbsentOnDate(employee, dateStr) || isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
             if (isRecoveryProtectedDay(employee, day)) continue;
             const fixedShiftType = fixedShiftTypeByEmployee.get(employee);

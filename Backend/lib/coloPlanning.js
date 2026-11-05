@@ -122,11 +122,43 @@ function parseEmployeePool(value) {
     });
 }
 
+/**
+ * Per-person limits inside the Colo pool: { "Name": { shift_types: ['early'], weekdays: [1,2,3] } }.
+ * An empty / missing list means "no limit". Not every pool member is suited for every Colo task
+ * (e.g. only early shifts, or never at weekends).
+ */
+function parseEmployeeRules(value, pool) {
+  let raw = value;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const poolByKey = new Map(pool.map((employee) => [coloNameKey(employee), employee]));
+  const rules = {};
+  for (const [name, rule] of Object.entries(raw)) {
+    const employee = poolByKey.get(coloNameKey(name));
+    if (!employee || !rule || typeof rule !== 'object') continue;
+    const shiftTypes = [...new Set((Array.isArray(rule.shift_types) ? rule.shift_types : [])
+      .map((entry) => String(entry || '').trim().toLowerCase())
+      .filter((entry) => ['early', 'late', 'night'].includes(entry)))];
+    const weekdays = [...new Set((Array.isArray(rule.weekdays) ? rule.weekdays : [])
+      .map((entry) => Number.parseInt(String(entry), 10))
+      .filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 6))].sort((a, b) => a - b);
+    const limitedTypes = shiftTypes.length > 0 && shiftTypes.length < 3;
+    const limitedDays = weekdays.length > 0 && weekdays.length < 7;
+    if (!limitedTypes && !limitedDays) continue;
+    rules[employee] = { shift_types: limitedTypes ? shiftTypes : [], weekdays: limitedDays ? weekdays : [] };
+  }
+  return rules;
+}
+
 export function normalizeColoPlanningConfig(value = {}) {
   const stored = normalizeColoRequirements(value.requirements);
+  const employeePool = parseEmployeePool(value.employeePool);
   return {
     enabled: parseBoolean(value.enabled, false),
-    employeePool: parseEmployeePool(value.employeePool),
+    employeePool,
+    employeeRules: parseEmployeeRules(value.employeeRules, employeePool),
     requirements: stored ?? legacyColoRequirements({
       weekdayPreparationStaff: value.weekdayPreparationStaff,
       nightStaff: value.nightStaff,
@@ -273,7 +305,14 @@ export function buildColoRolePlan({
 
       for (let slot = 0; slot < task.required; slot++) {
         const candidates = (workingByDay.get(day) || [])
-          .filter(({ employee, shiftType }) => !usedToday.has(employee) && shiftType === task.shiftType)
+          .filter(({ employee, shiftType }) => {
+            if (usedToday.has(employee) || shiftType !== task.shiftType) return false;
+            const rule = config.employeeRules[employee];
+            if (!rule) return true;
+            if (rule.shift_types.length > 0 && !rule.shift_types.includes(task.shiftType)) return false;
+            if (rule.weekdays.length > 0 && !rule.weekdays.includes(weekday)) return false;
+            return true;
+          })
           .map(({ employee, planName, shiftCode }) => {
             const preferences = preferenceFor(preferencesByEmployee, planName) || preferenceFor(preferencesByEmployee, employee);
             const blockedDays = normalizePreferenceDays(preferences?.blocked_days);

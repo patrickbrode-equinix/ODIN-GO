@@ -397,9 +397,16 @@ interface DbsConfig {
   fillGaps: boolean;
 }
 
+/** Limits for one person of the Colo list. Empty list = no limit. */
+interface ColoEmployeeRule {
+  shift_types: ColoShiftType[];
+  weekdays: number[];
+}
+
 interface ColoConfig {
   enabled: boolean;
   employeePool: string[];
+  employeeRules: Record<string, ColoEmployeeRule>;
   requirements: ColoRequirement[];
 }
 
@@ -447,6 +454,7 @@ const DEFAULT_DBS_CONFIG: DbsConfig = {
 const DEFAULT_COLO_CONFIG: ColoConfig = {
   enabled: false,
   employeePool: [],
+  employeeRules: {},
   requirements: [],
 };
 
@@ -612,8 +620,37 @@ function parseEmployeePoolSetting(value: unknown): string[] {
   return dedupeEmployeeNames(entries.map((entry) => String(entry || '').trim()).filter(Boolean));
 }
 
+function parseColoEmployeeRules(value: unknown): Record<string, ColoEmployeeRule> {
+  let raw: unknown = value;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const rules: Record<string, ColoEmployeeRule> = {};
+  for (const [name, entry] of Object.entries(raw as Record<string, Partial<ColoEmployeeRule>>)) {
+    const shiftTypes = (Array.isArray(entry?.shift_types) ? entry.shift_types : []).filter((type): type is ColoShiftType => ['early', 'late', 'night'].includes(String(type)));
+    const weekdays = Array.isArray(entry?.weekdays) ? normalizeColoWeekdays(entry.weekdays) : [];
+    rules[name] = { shift_types: shiftTypes, weekdays };
+  }
+  return rules;
+}
+
+/** Only rules that really limit something are stored (all three shift types / all seven days = no limit). */
+function cleanColoEmployeeRules(rules: Record<string, ColoEmployeeRule>, pool: string[]): Record<string, ColoEmployeeRule> {
+  const cleaned: Record<string, ColoEmployeeRule> = {};
+  for (const name of pool) {
+    const rule = rules[name];
+    if (!rule) continue;
+    const shiftTypes = rule.shift_types.length < 3 ? rule.shift_types : [];
+    const weekdays = rule.weekdays.length < 7 ? rule.weekdays : [];
+    if (shiftTypes.length > 0 || weekdays.length > 0) cleaned[name] = { shift_types: shiftTypes, weekdays };
+  }
+  return cleaned;
+}
+
 function extractColoConfig(settings: Record<string, string>): ColoConfig {
   return {
+    employeeRules: parseColoEmployeeRules(settings['shiftplan.colo_pool_rules']),
     enabled: parseBooleanSetting(settings['shiftplan.colo_enabled'], DEFAULT_COLO_CONFIG.enabled),
     employeePool: parseEmployeePoolSetting(settings['shiftplan.colo_pool']),
     requirements: parseColoRequirements(settings['shiftplan.colo_requirements']) ?? legacyColoRequirements(settings),
@@ -1238,6 +1275,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
       await api.put('/app-settings', {
         'shiftplan.colo_enabled': coloConfig.enabled,
         'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
+        'shiftplan.colo_pool_rules': JSON.stringify(cleanColoEmployeeRules(coloConfig.employeeRules, coloConfig.employeePool)),
         'shiftplan.colo_requirements': JSON.stringify(cleanColoRequirements(coloConfig.requirements)),
       });
       await api.put('/app-settings', { 'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes) });
@@ -1300,6 +1338,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
         'shiftplan.colo_enabled': coloConfig.enabled,
         'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
+        'shiftplan.colo_pool_rules': JSON.stringify(cleanColoEmployeeRules(coloConfig.employeeRules, coloConfig.employeePool)),
         'shiftplan.colo_requirements': JSON.stringify(cleanColoRequirements(coloConfig.requirements)),
         'shiftplan.active_shift_modes': JSON.stringify(activeShiftModes),
       });
@@ -1445,7 +1484,28 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   };
 
   const removeColoEmployee = (employeeName: string) => {
-    setColoConfig((current) => ({ ...current, employeePool: current.employeePool.filter((entry) => entry !== employeeName) }));
+    setColoConfig((current) => {
+      const remainingRules = { ...current.employeeRules };
+      delete remainingRules[employeeName];
+      return { ...current, employeePool: current.employeePool.filter((entry) => entry !== employeeName), employeeRules: remainingRules };
+    });
+  };
+
+  const updateColoEmployeeRule = (employeeName: string, patch: Partial<ColoEmployeeRule>) => {
+    setColoConfig((current) => ({
+      ...current,
+      employeeRules: { ...current.employeeRules, [employeeName]: { shift_types: [], weekdays: [], ...current.employeeRules[employeeName], ...patch } },
+    }));
+  };
+
+  const toggleColoEmployeeShiftType = (employeeName: string, type: ColoShiftType) => {
+    const current = coloConfig.employeeRules[employeeName]?.shift_types ?? [];
+    updateColoEmployeeRule(employeeName, { shift_types: current.includes(type) ? current.filter((entry) => entry !== type) : [...current, type] });
+  };
+
+  const toggleColoEmployeeWeekday = (employeeName: string, weekday: number) => {
+    const current = coloConfig.employeeRules[employeeName]?.weekdays ?? [];
+    updateColoEmployeeRule(employeeName, { weekdays: normalizeColoWeekdays(current.includes(weekday) ? current.filter((entry) => entry !== weekday) : [...current, weekday]) });
   };
 
   const addColoRequirement = () => {
@@ -2547,12 +2607,49 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 <span className="rounded-full bg-cyan-500/15 px-2 py-0.5 text-xs text-cyan-200">{coloConfig.employeePool.length}</span>
               </div>
               <div className="max-h-80 space-y-1 overflow-y-auto p-2">
-                {selectedColoEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Noch niemand ausgewählt' : 'No one selected yet'}</div> : selectedColoEmployees.map((employee) => (
-                  <button key={employee} type="button" onClick={() => removeColoEmployee(employee)} className="flex w-full items-center justify-between rounded-xl border border-cyan-400/15 bg-cyan-500/8 px-3 py-2 text-left text-sm text-cyan-50 transition hover:border-red-400/25 hover:bg-red-500/10">
-                    <span className="truncate">{employee}</span>
-                    <span className="inline-flex items-center gap-1 text-xs text-slate-400"><ArrowLeft className="h-3.5 w-3.5" /> {isGerman ? 'Entfernen' : 'Remove'}</span>
-                  </button>
-                ))}
+                {selectedColoEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Noch niemand ausgewählt' : 'No one selected yet'}</div> : selectedColoEmployees.map((employee) => {
+                  const rule = coloConfig.employeeRules[employee];
+                  const types = rule?.shift_types ?? [];
+                  const days = rule?.weekdays ?? [];
+                  const limited = (types.length > 0 && types.length < 3) || (days.length > 0 && days.length < 7);
+                  return (
+                    <div key={employee} className="rounded-xl border border-cyan-400/15 bg-cyan-500/8 px-3 py-2 text-sm text-cyan-50">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium">{employee}</span>
+                        <button type="button" onClick={() => removeColoEmployee(employee)} className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-slate-400 transition hover:bg-red-500/10 hover:text-red-200">
+                          <ArrowLeft className="h-3.5 w-3.5" /> {isGerman ? 'Entfernen' : 'Remove'}
+                        </button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{isGerman ? 'Colo nur in' : 'Colo only in'}</span>
+                        {COLO_SHIFT_TYPE_OPTIONS.map((option) => {
+                          const active = types.includes(option.value);
+                          return (
+                            <button key={option.value} type="button" onClick={() => toggleColoEmployeeShiftType(employee, option.value)} className={`rounded-full px-2.5 py-1 text-xs transition ${active ? 'bg-cyan-400/25 text-cyan-50 ring-1 ring-cyan-300/40' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>
+                              {isGerman ? option.labelDe : option.labelEn}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{isGerman ? 'an Tagen' : 'on days'}</span>
+                        {weekdayOptions.map((option) => {
+                          const active = days.includes(option.value);
+                          return (
+                            <button key={option.value} type="button" onClick={() => toggleColoEmployeeWeekday(employee, option.value)} className={`rounded-full px-2 py-1 text-xs transition ${active ? 'bg-cyan-400/25 text-cyan-50 ring-1 ring-cyan-300/40' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>
+                              {option.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-1.5 text-[11px] text-slate-400">
+                        {limited
+                          ? (isGerman ? 'Wird nur für die markierten Schichten und Tage für Colo eingeplant.' : 'Only planned for Colo in the marked shifts and days.')
+                          : (isGerman ? 'Keine Einschränkung: alle Schichten und Tage möglich.' : 'No limit: all shifts and days possible.')}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
