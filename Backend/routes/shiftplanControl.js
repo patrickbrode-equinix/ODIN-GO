@@ -80,7 +80,7 @@ import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, focusCostControl } from '../lib/costControl.js';
 import { isWeekdayOnlyEmployee, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
-import { buildColoRolePlan, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
+import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
   evaluateShiftWishViolations,
@@ -285,7 +285,8 @@ function newVarietySeed() {
 
 // Absence markers that can stand in an existing plan (live plan or quarter / year draft) instead of in the absences table.
 // code -> absence type used by the generator (credited types give 8 h on weekdays).
-const PLAN_ABSENCE_CODES = Object.freeze({ ABW: 'VACATION', URLAUB: 'VACATION', KRANK: 'SICK', S: 'SICK', SEMINAR: 'TRAINING', FS: 'FS' });
+// FS (free marker of a default plan) is NOT an absence: it must never block days in the new plan.
+const PLAN_ABSENCE_CODES = Object.freeze({ ABW: 'VACATION', URLAUB: 'VACATION', KRANK: 'SICK', S: 'SICK', SEMINAR: 'TRAINING' });
 
 /**
  * Absences that are already planned as codes (ABW, SEMINAR, URLAUB, KRANK, S, FS) in the live plan or in the newest draft of the
@@ -326,7 +327,28 @@ async function loadPlannedAbsenceCodes({ year, month, employeeNameLookup }) {
   } catch (error) {
     console.warn('Planned absences of the latest draft unavailable:', error.message);
   }
-  return [...found.values()];
+  // A default plan often marks every weekend with an absence-like code. Weekend cells only count when the run of
+  // absence cells they belong to also contains a weekday (a real absence from Friday to Monday, a vacation week ...).
+  const byEmployee = new Map();
+  for (const entry of found.values()) {
+    if (!byEmployee.has(entry.employee_name)) byEmployee.set(entry.employee_name, new Set());
+    byEmployee.get(entry.employee_name).add(entry.day);
+  }
+  const isWeekendDay = (day) => { const weekday = new Date(year, month - 1, day).getDay(); return weekday === 0 || weekday === 6; };
+  const kept = [];
+  for (const entry of found.values()) {
+    if (!isWeekendDay(entry.day)) { kept.push(entry); continue; }
+    const days = byEmployee.get(entry.employee_name);
+    let touchesWeekday = false;
+    for (const direction of [-1, 1]) {
+      for (let day = entry.day + direction; days.has(day); day += direction) {
+        if (!isWeekendDay(day)) { touchesWeekday = true; break; }
+      }
+      if (touchesWeekday) break;
+    }
+    if (touchesWeekday) kept.push(entry);
+  }
+  return kept;
 }
 
 async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftDefinitions, employeeNameLookup, rotation = {} }) {
@@ -1914,11 +1936,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // Colo competence: steer pool members into the shifts where Colo cover is
   // required, but only when this does not contradict their own shift wishes.
   const coloPoolKeys = new Set(coloPlanningConfig.enabled
-    ? coloPlanningConfig.employeePool.map((employee) => employee.toLocaleLowerCase('de'))
+    ? coloPlanningConfig.employeePool.map((employee) => coloNameKey(employee))
     : []);
   const coloShiftTypeByCode = new Map([...shiftDefs, ...(shortNightDefinition ? [shortNightDefinition] : [])]
     .map((definition) => [String(definition.code || '').trim().toUpperCase(), normalizePlanningShiftTypeKey(definition.shift_type)]));
-  const isColoPoolEmployee = (employee) => coloPoolKeys.has(String(employee || '').toLocaleLowerCase('de'));
+  const isColoPoolEmployee = (employee) => coloPoolKeys.has(coloNameKey(employee));
   // Returns the open Colo demand for today and the following days that a new
   // block starting today would cover. Running blocks count as future cover.
   const getOpenColoDemandByOffset = (day, shiftType, horizon) => {

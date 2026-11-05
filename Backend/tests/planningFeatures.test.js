@@ -242,3 +242,25 @@ test('Ramadan option raises the late maximum only inside the Ramadan period', as
   for (const [day, count] of lateByDay(on)) if (day >= 10 && [1, 2, 3, 4, 5].includes(weekday(day))) assert.ok(count - marked(on, day) <= 3, `day ${day}: ${count} late after Ramadan`);
   assert.ok(!on.conflicts.some((conflict) => conflict.type === 'max_staff_reached' && conflict.shift === 'late'));
 });
+
+test('a default January plan (E2 Mon-Fri, FS / ABW on every weekend) does not restrict the generator to Monday-Friday', async () => {
+  const { db, employees } = buildTeam(24);
+  const standard = [];
+  for (const employee of employees) {
+    for (let day = 1; day <= 31; day++) {
+      const weekday = new Date(2027, 0, day).getDay();
+      standard.push({ employee_name: employee.name, day, shift_code: weekday === 0 || weekday === 6 ? (day % 2 ? 'FS' : 'ABW') : 'E2' });
+    }
+  }
+  db.draftHistory.set('2027-01', standard);
+  db.shiftHistory.set(formatShiftMonthLabel(2027, 1), standard);
+  const result = await generate(2027, 1);
+  assert.equal(result.planReport.adoptedAbsences.length, 0, 'default fill is not adopted as absence');
+  const weekend = result.shifts.filter((shift) => {
+    const weekday = new Date(2027, 0, shift.day).getDay();
+    return (weekday === 0 || weekday === 6) && typeOf(shift.shift_code) !== 'other';
+  });
+  assert.ok(weekend.length > 0, 'weekend shifts are planned as configured');
+  db.draftHistory.clear();
+  db.shiftHistory.clear();
+});

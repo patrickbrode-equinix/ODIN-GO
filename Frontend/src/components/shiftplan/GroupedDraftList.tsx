@@ -121,7 +121,24 @@ export function GroupedDraftList<D extends PlanningDraftSummary>({ groups, activ
       {selectMode && onDeleted && (draft.status !== 'activated'
         ? <input type="checkbox" checked={selected.has(draft.id)} onChange={(event) => onCheckboxChange(draft.id, event.target.checked, Boolean((event.nativeEvent as MouseEvent).shiftKey))} aria-label={`${de ? 'Draft auswählen' : 'Select draft'}: ${monthLabel(draft.month)}, v${draft.version}`} className="h-4 w-4 shrink-0 rounded border-border/50" />
         : <span className="h-4 w-4 shrink-0" title={de ? 'Aktivierte Drafts können nicht gelöscht werden' : 'Activated drafts can not be deleted'} />)}
-      <button type="button" className="flex-1 min-w-0 text-left" onClick={() => onOpen(draft)}>
+      <button
+        type="button"
+        className="flex-1 min-w-0 text-left select-none"
+        title={onDeleted && draft.status !== 'activated' ? (de ? 'Shift-Klick: mehrere markieren (Bereich), Strg-Klick: einzeln hinzufügen' : 'Shift-click: select a range, Ctrl-click: add one') : undefined}
+        onMouseDown={(event) => { if (event.shiftKey) event.preventDefault(); }}
+        onClick={(event) => {
+          // Holding Shift (range) or Ctrl / Cmd (single) marks drafts without opening them; in selection mode every click marks.
+          const modifier = event.shiftKey || event.ctrlKey || event.metaKey;
+          if (onDeleted && draft.status !== 'activated' && (modifier || selectMode)) {
+            event.preventDefault();
+            if (!selectMode) setSelectMode(true);
+            onCheckboxChange(draft.id, !selected.has(draft.id) || event.shiftKey, event.shiftKey);
+            return;
+          }
+          lastClickedId.current = draft.id; // anchor for a following Shift-click range
+          onOpen(draft);
+        }}
+      >
         <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-foreground">
           <span>{monthLabel(draft.month)}</span>
           <span className="rounded border border-border/40 px-1.5 text-[10px] font-bold text-muted-foreground">v{draft.version}</span>

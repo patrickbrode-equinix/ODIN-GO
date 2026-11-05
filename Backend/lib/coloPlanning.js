@@ -24,6 +24,24 @@ function taskLabel(requirement, weekday) {
   return `Colo ${typeLabel}`;
 }
 
+/**
+ * Identity key of a person: the same for "Brode, Patrick", "Patrick Brode" and "patrick  brode" (lower case, no
+ * accents or punctuation, tokens sorted). The Colo pool of the admin menu and the names of the plan are compared
+ * with it, so the pool spelling can differ from the plan without losing the Colo marks.
+ */
+export function coloNameKey(value) {
+  return String(value ?? '')
+    .toLocaleLowerCase('de')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .sort()
+    .join(' ');
+}
+
 function parseWeekdays(value) {
   const entries = Array.isArray(value) ? value : [];
   return [...new Set(entries.map((entry) => Number.parseInt(String(entry), 10)).filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 6))]
@@ -97,7 +115,7 @@ function parseEmployeePool(value) {
   return entries
     .map((entry) => String(entry || '').trim().replace(/\s+/g, ' '))
     .filter((entry) => {
-      const key = entry.toLocaleLowerCase('de');
+      const key = coloNameKey(entry);
       if (!entry || seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -218,7 +236,7 @@ export function buildColoRolePlan({
     return { assignments, conflicts, summary, config };
   }
 
-  const poolByKey = new Map(config.employeePool.map((employee) => [employee.toLocaleLowerCase('de'), employee]));
+  const poolByKey = new Map(config.employeePool.map((employee) => [coloNameKey(employee), employee]));
   const definitionTypeByCode = new Map(shiftDefinitions.map((definition) => [
     String(definition.code || '').trim().toUpperCase(),
     String(definition.shift_type || '').trim().toLowerCase(),
@@ -228,12 +246,13 @@ export function buildColoRolePlan({
   for (const shift of shifts) {
     const day = Number.parseInt(String(shift.day ?? ''), 10);
     const shiftCode = String(shift.shift_code || '').trim().toUpperCase();
-    const employeeKey = String(shift.employee_name || '').trim().toLocaleLowerCase('de');
+    const employeeKey = coloNameKey(shift.employee_name);
     const employee = poolByKey.get(employeeKey);
     const shiftType = definitionTypeByCode.get(shiftCode);
     if (!employee || !Number.isInteger(day) || NON_WORKING_SHIFT_CODES.has(shiftCode)) continue;
     if (!workingByDay.has(day)) workingByDay.set(day, []);
-    workingByDay.get(day).push({ employee, shiftCode, shiftType });
+    // planName: the spelling of the plan. Marks and roles are stored under it, so every view finds them.
+    workingByDay.get(day).push({ employee, planName: String(shift.employee_name || '').trim(), shiftCode, shiftType });
   }
 
   const totalByEmployee = new Map(config.employeePool.map((employee) => [employee, 0]));
@@ -255,8 +274,8 @@ export function buildColoRolePlan({
       for (let slot = 0; slot < task.required; slot++) {
         const candidates = (workingByDay.get(day) || [])
           .filter(({ employee, shiftType }) => !usedToday.has(employee) && shiftType === task.shiftType)
-          .map(({ employee, shiftCode }) => {
-            const preferences = preferenceFor(preferencesByEmployee, employee);
+          .map(({ employee, planName, shiftCode }) => {
+            const preferences = preferenceFor(preferencesByEmployee, planName) || preferenceFor(preferencesByEmployee, employee);
             const blockedDays = normalizePreferenceDays(preferences?.blocked_days);
             const unwantedShifts = normalizeCodes(preferences?.unwanted_shifts);
             const preferredShifts = normalizeCodes(preferences?.preferred_shifts);
@@ -269,6 +288,7 @@ export function buildColoRolePlan({
             const continuesTask = previousDayTask.has(`${task.key}:${employee}`);
             return {
               employee,
+              planName,
               shiftCode,
               continuesTask,
               score,
@@ -290,7 +310,7 @@ export function buildColoRolePlan({
         taskCounts[task.key] = (taskCounts[task.key] || 0) + 1;
         taskByEmployee.set(winner.employee, taskCounts);
         assignments.push({
-          employee_name: winner.employee,
+          employee_name: winner.planName,
           date: dateKey,
           role_key: 'colo',
           comment: task.label,
