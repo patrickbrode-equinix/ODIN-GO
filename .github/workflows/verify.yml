@@ -1,0 +1,41 @@
+name: Verify clean deployment
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Docker Compose configuration
+        env:
+          DB_PASSWORD: ci-only-database-password
+          JWT_SECRET: ci-only-jwt-secret
+          SHIFTPLANNER_API_KEY: ci-only-application-key
+        run: docker compose config --quiet
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            Backend/package-lock.json
+            Frontend/package-lock.json
+      - name: Install backend dependencies
+        run: npm ci --prefix Backend
+      - name: Run backend tests
+        env:
+          JWT_SECRET: ci-only-jwt-secret
+          SHIFTPLANNER_API_KEY: ci-only-application-key
+          OPERATIONAL_TIMEZONE: Europe/Berlin
+        run: npm test --prefix Backend
+      - name: Install frontend dependencies
+        run: npm ci --prefix Frontend
+      - name: Build frontend
+        env:
+          VITE_API_BASE_URL: /api
+        run: npm run build --prefix Frontend
+      - name: Run frontend tests
+        run: npm test --prefix Frontend
