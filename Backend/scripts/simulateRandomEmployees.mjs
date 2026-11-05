@@ -74,6 +74,10 @@ function buildEmployees() {
 }
 
 const employees = buildEmployees();
+// Fixed pair rule of the real team: these two are never planned together on night or weekend shifts.
+for (const [index, first, last] of [[5, 'Patrick', 'Brode'], [9, 'Godfrey', 'Emanuel']]) {
+  if (employees[index]) Object.assign(employees[index], { first, last, name: `${first} ${last}` });
+}
 if (args.profile === 'flexible') {
   for (const employee of employees) Object.assign(employee, { preferred: [], unwanted: [], blocked: [], maxNights: null, maxWeekends: null, holidays: [] });
 }
@@ -152,6 +156,7 @@ for (const [type, key] of [['late', 'late'], ['night', 'night']]) {
     if (rule) { rule.min_count = Number(args[key]); rule.max_count = Number(args[key]); }
   }
 }db.settings.set('shiftplan.dbs_enabled', 'true');
+if (args.gap) db.settings.set('shiftplan.min_weekend_gap_weeks', String(args.gap));
 if (args.colo !== 'off') {
   db.settings.set('shiftplan.colo_enabled', 'true');
   db.settings.set('shiftplan.colo_pool', JSON.stringify(coloPool));
@@ -375,6 +380,64 @@ function audit(result, year, month, carryIn) {
   };
 }
 
+/* ---------- structure audit: holes inside blocks, weekend frequency, pair rule ---------- */
+
+const absenceDayKey = (year, month, day) => `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+const SATURDAY_KEYS_SEEN = new Map(); // employee -> Set of Saturday timestamps worked (chained over months)
+
+function auditStructure(result, year, month) {
+  const numDays = new Date(year, month, 0).getDate();
+  const cells = new Map(); // name -> Map(day -> code)
+  for (const shift of result.shifts) {
+    if (!cells.has(shift.employee_name)) cells.set(shift.employee_name, new Map());
+    cells.get(shift.employee_name).set(Number(shift.day), shift.shift_code);
+  }
+  const holes = [];
+  const weekendsPerEmployee = [];
+  const tooFrequentWeekends = [];
+  for (const employee of employees) {
+    const own = cells.get(employee.name) || new Map();
+    const absent = (day) => db.absences.some((absence) => absence.employee_name === employee.name
+      && absenceDayKey(year, month, day) >= absence.start_date && absenceDayKey(year, month, day) <= absence.end_date);
+    for (let day = 2; day < numDays; day++) {
+      if (own.has(day) || !own.has(day - 1) || !own.has(day + 1) || absent(day)) continue;
+      const holeDow = new Date(year, month - 1, day).getDay();
+      if (holeDow === 1 || holeDow === 0 || employee.blocked.includes(holeDow)) continue; // only a free day inside a Mon-Sun week counts (blocked days are wishes)
+      const before = typeByCode.get(own.get(day - 1));
+      const after = typeByCode.get(own.get(day + 1));
+      if (before && before === after && before !== 'special') holes.push(`${employee.name} ${month}/${day} ${own.get(day - 1)}-frei-${own.get(day + 1)}`);
+    }
+    // a weekend counts as worked when Saturday OR Sunday is worked (a single Saturday is already a weekend)
+    const worked = SATURDAY_KEYS_SEEN.get(employee.name) || new Set();
+    let count = 0;
+    for (let day = 1; day <= numDays; day++) {
+      const dow = new Date(year, month - 1, day).getDay();
+      if ((dow === 6 || dow === 0) && own.has(day)) {
+        const saturday = new Date(year, month - 1, dow === 6 ? day : day - 1).getTime();
+        if (!worked.has(saturday)) { worked.add(saturday); count += 1; }
+      }
+    }
+    SATURDAY_KEYS_SEEN.set(employee.name, worked);
+    weekendsPerEmployee.push(count);
+    const sorted = [...worked].sort((a, b) => a - b);
+    for (let index = 1; index < sorted.length; index++) {
+      const weeks = Math.round((sorted[index] - sorted[index - 1]) / (7 * 86400000));
+      if (weeks <= 1 && new Date(sorted[index]).getMonth() === month - 1) tooFrequentWeekends.push(`${employee.name} ${month}`);
+    }
+  }
+  const pairViolations = [];
+  const first = cells.get('Patrick Brode') || new Map();
+  const second = cells.get('Godfrey Emanuel') || new Map();
+  for (let day = 1; day <= numDays; day++) {
+    if (!first.has(day) || !second.has(day)) continue;
+    const dow = new Date(year, month - 1, day).getDay();
+    const night = typeByCode.get(first.get(day)) === 'night' && typeByCode.get(second.get(day)) === 'night';
+    if (night || dow === 0 || dow === 6) pairViolations.push(`${month}/${day} ${first.get(day)}+${second.get(day)}`);
+  }
+  const histogram = weekendsPerEmployee.reduce((map, value) => ({ ...map, [value]: (map[value] || 0) + 1 }), {});
+  return { holes: holes.length, holeList: holes, weekendHistogram: histogram, weekendsInConsecutiveWeeks: tooFrequentWeekends.length, pairViolations };
+}
+
 /* ---------- run ---------- */
 
 const report = { seed, mutualGroups, employees: employeeCount, months: [], dbsPool: dbsPool.map((entry) => ({ name: entry.employee.name, outside: entry.outside })), coloPool };
@@ -396,6 +459,7 @@ for (let index = 0; index < monthCount; index++) {
     }
   }
   report.months.push(audit(result, year, month));
+  report.months.at(-1).structure = auditStructure(result, year, month);
   const label = formatShiftMonthLabel(year, month);
   db.shiftHistory.set(label, result.shifts.map((shift) => ({ employee_name: shift.employee_name, day: shift.day, shift_code: shift.shift_code })));
   month += 1;
@@ -433,6 +497,8 @@ if (!args.quiet) {
     }
   }
 }
+originalConsole.log(`Struktur: Lücken im Block=${report.months.map((entry) => entry.structure.holes).join('/')} | Wochenenden direkt hintereinander=${report.months.map((entry) => entry.structure.weekendsInConsecutiveWeeks).join('/')} | Paar-Verstöße=${report.months.map((entry) => entry.structure.pairViolations.length).join('/')} | Wochenenden pro Person ${JSON.stringify(report.months.map((entry) => entry.structure.weekendHistogram))}`);
+if (args.holes) originalConsole.log('  Lücken:\n    ' + report.months.flatMap((entry) => entry.structure.holeList).join('\n    '));
 const tolerance = (predicate) => report.months.map((entry) => entry.perEmployee.filter(predicate).length).join('/');
 originalConsole.log(`Abweichung > 10h unter Soll: ${tolerance((row) => row.target - row.actual > 10)}  | > 10h über Soll: ${tolerance((row) => row.actual - row.target > 10)}`);
 {

@@ -375,6 +375,7 @@ interface AdvancedPlanningSettings {
   lateOverflowThuFri: boolean;
   ramadanLateEnabled: boolean;
   ramadanLateExtra: number;
+  minWeekendGapWeeks: number;
   planNotifyEnabled: boolean;
   planNotifyAdminIds: number[];
 }
@@ -440,6 +441,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   lateOverflowThuFri: false,
   ramadanLateEnabled: false,
   ramadanLateExtra: 2,
+  minWeekendGapWeeks: 3,
   planNotifyEnabled: true,
   planNotifyAdminIds: [],
 };
@@ -594,6 +596,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
         return Array.isArray(parsed) ? parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0) : [];
       } catch { return []; }
     })(),
+    minWeekendGapWeeks: Math.min(6, Math.max(1, Number.parseInt(String(settings['shiftplan.min_weekend_gap_weeks'] ?? ''), 10) || DEFAULT_ADVANCED_SETTINGS.minWeekendGapWeeks)),
     ramadanLateExtra: Math.min(10, Math.max(0, Number.parseInt(String(settings['shiftplan.ramadan_late_extra'] ?? ''), 10) || DEFAULT_ADVANCED_SETTINGS.ramadanLateExtra)),
   };
 }
@@ -1072,6 +1075,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.late_overflow_thu_fri': advancedSettings.lateOverflowThuFri,
         'shiftplan.ramadan_late_enabled': advancedSettings.ramadanLateEnabled,
         'shiftplan.ramadan_late_extra': advancedSettings.ramadanLateExtra,
+        'shiftplan.min_weekend_gap_weeks': advancedSettings.minWeekendGapWeeks,
         'shiftplan.plan_notifications_enabled': advancedSettings.planNotifyEnabled,
         'shiftplan.plan_notify_admin_user_ids': JSON.stringify(advancedSettings.planNotifyAdminIds),
         ...wishStrengthPayload(wishStrengths),
@@ -1327,6 +1331,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.late_overflow_thu_fri': advancedSettings.lateOverflowThuFri,
         'shiftplan.ramadan_late_enabled': advancedSettings.ramadanLateEnabled,
         'shiftplan.ramadan_late_extra': advancedSettings.ramadanLateExtra,
+        'shiftplan.min_weekend_gap_weeks': advancedSettings.minWeekendGapWeeks,
         'shiftplan.plan_notifications_enabled': advancedSettings.planNotifyEnabled,
         'shiftplan.plan_notify_admin_user_ids': JSON.stringify(advancedSettings.planNotifyAdminIds),
         ...wishStrengthPayload(wishStrengths),
@@ -2223,6 +2228,15 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               isGerman={isGerman}
               onChange={(next) => setAdvancedSettings({ ...advancedSettings, planNotifyEnabled: next.enabled, planNotifyAdminIds: next.adminIds })}
             />
+
+            <div className="rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <div className="font-medium">{isGerman ? 'Abstand zwischen zwei Wochenenden' : 'Distance between two weekends'}</div>
+              <div className="mt-1 text-xs text-slate-400">{isGerman ? 'Wer ein Wochenende gearbeitet hat (auch nur den Samstag), bekommt die folgenden Wochenenden frei. 3 = zwei freie Wochenenden dazwischen, 2 = nie zwei Wochenenden direkt hintereinander, 1 = aus.' : 'Whoever worked a weekend (even only the Saturday) gets the following weekends off. 3 = two free weekends in between, 2 = never two weekends in a row, 1 = off.'}</div>
+              <label className="mt-3 flex items-center gap-2 text-xs text-slate-300">
+                {isGerman ? 'Mindestabstand in Wochen' : 'Minimum distance in weeks'}
+                <input type="number" min={1} max={6} value={advancedSettings.minWeekendGapWeeks} onChange={(event) => setAdvancedSettings({ ...advancedSettings, minWeekendGapWeeks: Math.min(6, Math.max(1, Number.parseInt(event.target.value, 10) || 1)) })} className="w-16 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-sm text-slate-100" />
+              </label>
+            </div>
 
             <div className="rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
               <label className="flex items-start gap-3">

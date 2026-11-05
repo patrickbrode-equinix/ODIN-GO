@@ -33,6 +33,8 @@ function buildScenario(seed) {
     free_days_after_block: 2, duration_hours: null, other_shift_codes: index === 0 ? ['LATE'] : [], other_days_per_month: null, sort_order: index,
   }));
   db.settings.set('shiftplan.dbs_enabled', 'true');
+  // This scenario checks wishes, the DBS rule and holiday credit; the weekend spacing has its own test (neverTogetherAndBlocks).
+  db.settings.set('shiftplan.min_weekend_gap_weeks', '1');
   return { db, employees, dbsMembers };
 }
 
