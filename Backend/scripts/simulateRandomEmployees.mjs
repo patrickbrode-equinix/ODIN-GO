@@ -145,6 +145,16 @@ db.preferences = employees.map((employee) => ({
   preferred_colleagues: employee.colleagues,
   updated_at: new Date(),
 }));
+// --dbsmonthly: DBS pool members have an own wish for every month (only E2 / only L1), like a real wish list.
+if (args.dbsmonthly) {
+  dbsPool.forEach(({ employee }, index) => {
+    const row = db.preferences.find((entry) => entry.user_id === employee.userId);
+    for (let offset = 0; offset < monthCount; offset += 1) {
+      const date = new Date(startYear, startMonth - 1 + offset, 1);
+      row.monthly_preferences[`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`] = { preferred_shifts: [index % 2 ? 'L1' : 'E2'] };
+    }
+  });
+}
 db.specialPools = dbsPool.map(({ employee, weekdays, outside }, index) => ({
   shift_code: 'DBS', employee_name: employee.name, monthly_max_assignments: 31, working_weekdays: weekdays,
   free_days_after_block: 2, duration_hours: null, other_shift_codes: outside, other_days_per_month: null, sort_order: index,

@@ -87,3 +87,27 @@ test('month wishes overrule contradicting general wishes for 28 of 36 people at 
   }
   assert.deepEqual(violations.slice(0, 5), [], `${violations.length} shifts deviate from the month wish`);
 });
+
+test('the DBS week stays complete for pool members who wished only E2 for the month (or in general)', async () => {
+  const { db, names } = buildTeam(30, (database, list) => {
+    database.settings.set('shiftplan.dbs_enabled', 'true');
+    database.specialPools = list.slice(0, 3).map((name, index) => ({
+      shift_code: 'DBS', employee_name: name, monthly_max_assignments: 31, working_weekdays: [1, 2, 3, 4, 5],
+      free_days_after_block: 2, duration_hours: null, other_shift_codes: [], other_days_per_month: null, sort_order: index,
+    }));
+    // pool member 0: monthly wish "only E2"; pool member 1: general wish "only E2"; member 2: free
+    database.preferences[0].monthly_preferences = { '2027-01': { preferred_shifts: ['E2'], unwanted_shifts: [] } };
+    database.preferences[1].preferred_shifts = ['E2'];
+  });
+  const result = await generateShiftPlan(2027, 1, 31, 'test', {});
+  const dbsShifts = result.shifts.filter((shift) => shift.shift_code === 'DBS');
+  assert.ok(dbsShifts.length >= 15, `DBS must be planned for a month, got ${dbsShifts.length} days`);
+  assert.ok(dbsShifts.every((shift) => names.slice(0, 3).includes(shift.employee_name)), 'only pool members work DBS');
+  assert.equal(result.conflicts.filter((conflict) => conflict.type === 'dbs_week_incomplete').length, 0);
+  // the wish list still applies to the regular shifts of the pool members
+  for (const name of names.slice(0, 2)) {
+    const regular = result.shifts.filter((shift) => shift.employee_name === name && shift.shift_code !== 'DBS').map((shift) => shift.shift_code);
+    assert.ok(regular.every((code) => code.startsWith('E2')), `${name}: ${[...new Set(regular)].join(',')}`);
+  }
+  void db;
+});

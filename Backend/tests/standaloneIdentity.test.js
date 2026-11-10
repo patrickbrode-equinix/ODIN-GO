@@ -11,6 +11,7 @@ const users = [
   { id: 3, first_name: 'Max', last_name: 'Mustermann', login_name: null, email: 'max.mustermann@equinix.com', upn: null, approved: true, is_admin: false, is_root: false },
   { id: 4, first_name: 'Eva', last_name: 'Zwilling', login_name: null, email: null, upn: null, approved: true, is_admin: false, is_root: false },
   { id: 5, first_name: 'Eva', last_name: 'Zwilling', login_name: null, email: null, upn: null, approved: true, is_admin: false, is_root: false },
+  { id: 6, first_name: 'Amine Mohamed', last_name: 'Tigoudar', login_name: null, email: 'amine.tigoudar@eu.equinix.com', upn: null, approved: true, is_admin: false, is_root: false },
 ];
 
 // Minimal stand-in for the three queries of the route.
@@ -74,4 +75,13 @@ test('Mendix login name = first initial + last name finds the employee without a
   assert.equal((await verify({ jarvisUserName: 'mmustermann' })).body.user.id, 3);
   assert.equal((await verify({ jarvisUserName: 'ezwilling' })).status, 409, 'two employees with the same initial and name stay ambiguous');
   assert.equal((await verify({ jarvisUserName: 'xyz' })).status, 404);
+});
+
+test('employee with two given names is found by the e-mail or name of either one', async () => {
+  const byMail = await verify({ email: 'mohamed.tigoudar@eu.equinix.com', displayName: 'Amine Tigoudar' });
+  assert.equal(byMail.status, 200);
+  assert.equal(byMail.body.user.id, 6);
+  assert.equal((await verify({ jarvisUserName: 'mtigoudar' })).body.user.id, 6);
+  assert.equal((await verify({ jarvisUserName: 'atigoudar' })).body.user.id, 6);
+  assert.equal((await verify({ email: 'tom.tigoudar@eu.equinix.com' })).status, 404);
 });

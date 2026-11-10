@@ -79,8 +79,8 @@ import {
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, focusCostControl } from '../lib/costControl.js';
-import { PERSONAL_AVOID_KEY_PREFIX, PERSONAL_AVOID_RULE, mayKeepPersonalAvoidList, getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
-import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
+import { PERSONAL_AVOID_KEY_PREFIX, PERSONAL_AVOID_RULE, mayKeepPersonalAvoidList, requiresFullWeekend, getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
+import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, isColoAllowedByRule, isColoCoveredByDbs, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
   evaluateShiftWishViolations,
@@ -1499,7 +1499,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const holidayMap = buildHessenHolidayMap(year);
   // Shift-level wish check resolved against the admin strengths: only wishes
   // with strength 100 hard-block; softer wishes surface as a penalty.
-  const getShiftWishEvaluation = (employee, dateStr, code, shiftType = null) => evaluateShiftWishViolations({
+  // Special-pool duties (DBS and others) are assigned by the pool rotation. The list "I only want these shifts"
+  // describes the regular shifts and never blocks such a duty (otherwise one monthly wish empties the whole DBS week).
+  const isPoolDutyCode = (code) => specialPoolsByShift.has(String(code || '').trim().toUpperCase());
+  const withoutPreferredListForPoolDuty = (evaluation, code) => {
+    if (!isPoolDutyCode(code) || !evaluation.violations.some((violation) => violation.type === 'not_preferred')) return evaluation;
+    const violations = evaluation.violations.filter((violation) => violation.type !== 'not_preferred');
+    return { hardBlocked: violations.some((violation) => violation.hard), penalty: violations.reduce((sum, violation) => sum + violation.penalty, 0), violations };
+  };
+  const getShiftWishEvaluation = (employee, dateStr, code, shiftType = null) => withoutPreferredListForPoolDuty(evaluateShiftWishViolations({
     strengths: prefStrength,
     prefs: preferencesForDate(employee, dateStr),
     code,
@@ -1507,7 +1515,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     holidayName: holidayMap[dateStr],
     shiftType,
     nightCount: Number(empStats[employee]?.nights || 0),
-  });
+  }), code);
   // Last-resort pass: employees who are still below their target hours may get a shift that is not on
   // their preferred list (e.g. early when late/night are full). Unwanted shifts, blocked days,
   // limits and absences stay absolute.
@@ -1527,7 +1535,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       ? evaluation.violations.some((violation) => violation.hard && (violation.monthly || violation.type !== 'not_preferred'))
       : evaluation.hardBlocked;
   };
-  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesCrossMonthWeekType(employee, dateStr, code)
+  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesFullWeekend(employee, code)
+    || violatesCrossMonthWeekType(employee, dateStr, code)
     || violatesNeverTogetherOnDate(employee, dateStr, code)
     || violatesInexperiencedOnDate(employee, dateStr, code)
     || isHardBlockedForPass(getShiftWishEvaluation(employee, dateStr, code), code);
@@ -1605,6 +1614,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     if (own.size > 0 && other.size > 0) return new Set([...own].filter((type) => other.has(type)));
     return own.size > 0 ? own : other;
   };
+  // Employees who work a weekend only as Saturday + Sunday: no Monday-Saturday block (E1SA/E2SA), see the final weekend pass.
+  let fullWeekendEmployees = new Set();
+  const violatesFullWeekend = (employee, code) => fullWeekendEmployees.has(employee) && /SA$/.test(String(code || '').trim().toUpperCase());
   let violatesNeverTogetherOnDate = () => false;
   let violatesCrossMonthWeekType = () => false;
   let violatesInexperiencedOnDate = () => false;
@@ -2040,6 +2052,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
   // Fixed pair rule (lib/fixedEmployeeRules.js): never together on night / weekend shifts. Checked in every
   // candidate test (also against the running blocks of the partner); a final pass removes what slipped through.
+  fullWeekendEmployees = new Set(activeEmployees.filter((employee) => requiresFullWeekend(employee)));
   const neverTogetherByEmployee = new Map();
   for (const employee of activeEmployees) {
     for (const other of activeEmployees) {
@@ -2140,11 +2153,15 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const coloRuleByKey = new Map(Object.entries(coloPlanningConfig.employeeRules || {}).map(([name, rule]) => [coloNameKey(name), rule]));
   const isColoAllowedFor = (employee, shiftType, weekday) => {
     if (!isColoPoolEmployee(employee)) return false;
-    const rule = coloRuleByKey.get(coloNameKey(employee));
-    if (!rule) return true;
-    if (shiftType && rule.shift_types.length > 0 && !rule.shift_types.includes(shiftType)) return false;
-    if (Number.isInteger(weekday) && rule.weekdays.length > 0 && !rule.weekdays.includes(weekday)) return false;
-    return true;
+    return isColoAllowedByRule(coloRuleByKey.get(coloNameKey(employee)), shiftType, weekday);
+  };
+  // Pool members on the DBS duty who may cover this Colo task as well (admin rule): they count as Colo cover, so no
+  // further person has to be planned for it.
+  const dbsColoCoverCount = (day, shiftType) => {
+    if (!dbsPlanningConfig.enabled || coloPoolKeys.size === 0) return 0;
+    const weekday = dayOfWeek(year, mon, day);
+    const holder = dbsRoster.get(day);
+    return holder && isColoPoolEmployee(holder) && isColoCoveredByDbs(coloRuleByKey.get(coloNameKey(holder)), shiftType, weekday) ? 1 : 0;
   };
   // Returns the open Colo demand for today and the following days that a new
   // block starting today would cover. Running blocks count as future cover.
@@ -2160,7 +2177,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         if (!isColoAllowedFor(employee, shiftType, dayOfWeek(year, mon, targetDay))) return false;
         if (coloShiftTypeByCode.get(String(empDayAssignment[employee]?.[day] || '').trim().toUpperCase()) !== shiftType) return false;
         return offset === 0 || empSeriesRemaining[employee] >= offset;
-      }).length;
+      }).length + dbsColoCoverCount(targetDay, shiftType);
       demand.push(Math.max(required - covered, 0));
     }
     return demand;
@@ -4720,7 +4737,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           .filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === type)
           .filter((definition) => normalizeWeekdaySetting(definition.applicable_days, [1, 2, 3, 4, 5]).includes(dow));
         if (dow === 0 || definitionsOfType.length === 0) continue;
-        let covered = poolMembers.filter((employee) => typeOfAssigned(employee, day) === type && isColoAllowedFor(employee, type, dow)).length;
+        let covered = poolMembers.filter((employee) => typeOfAssigned(employee, day) === type && isColoAllowedFor(employee, type, dow)).length + dbsColoCoverCount(day, type);
         while (covered < required) {
           let best = null;
           for (const employee of poolMembers) {
@@ -4839,6 +4856,52 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  // Weekend as a pair: whoever works Saturday also works Sunday (and the other way round). Missing day is added with the
+  // same shift (a Monday-Saturday block becomes the Monday-Sunday block); when that is not allowed, the lone day is dropped.
+  planReport.fullWeekend = [];
+  for (const employee of fullWeekendEmployees) {
+    const rows = [];
+    for (let saturday = planningStartDay; saturday < planningEndDay; saturday++) {
+      if (dayOfWeek(year, mon, saturday) !== 6 || saturday + 1 > numDays) continue;
+      const sunday = saturday + 1;
+      const hasSaturday = Boolean(empDayAssignment[employee][saturday]);
+      const hasSunday = Boolean(empDayAssignment[employee][sunday]);
+      if (hasSaturday === hasSunday) continue;
+      rows.push({ present: hasSaturday ? saturday : sunday, missing: hasSaturday ? sunday : saturday });
+    }
+    for (const { present, missing } of rows) {
+      const presentCode = String(empDayAssignment[employee][present] || '').trim().toUpperCase();
+      const weekendCode = /SA$/.test(presentCode) && shiftDefinitionByCode.has(presentCode.replace(/SA$/, 'WE')) ? presentCode.replace(/SA$/, 'WE') : presentCode;
+      const definition = shiftDefinitionByCode.get(weekendCode);
+      const dateStr = `${month}-${String(missing).padStart(2, '0')}`;
+      const possible = definition
+        && missing >= planningStartDay && missing <= planningEndDay
+        && !isEmployeeAbsentOnDate(employee, dateStr)
+        && !isEmployeeBlockedByPreferenceOnDay(employee, dayOfWeek(year, mon, missing))
+        && !violatesNeverTogetherOnDate(employee, dateStr, weekendCode);
+      if (possible) {
+        if (weekendCode !== presentCode) {
+          // E1SA -> E1WE: the whole block Monday to Saturday takes the weekend variant
+          for (let blockDay = present; blockDay >= 1 && empDayAssignment[employee][blockDay] && String(empDayAssignment[employee][blockDay]).toUpperCase() === presentCode; blockDay--) {
+            changeEmployeeShiftCode(employee, blockDay, weekendCode, [`Wochenende nur als Samstag und Sonntag: ${presentCode} wurde zu ${weekendCode}`]);
+          }
+        }
+        addEmployeeTargetCatchupShift(employee, missing, definition, [`Wochenende nur als Samstag und Sonntag: ${weekendCode} auch am ${missing}.`, `Nicht abwesend am ${dateStr}`]);
+        planReport.fullWeekend.push({ employee, day: missing, code: weekendCode, action: 'added' });
+      } else {
+        removeCell(employee, present);
+        planReport.fullWeekend.push({ employee, day: present, code: presentCode, action: 'removed' });
+        conflicts.push({
+          day: present,
+          date: `${month}-${String(present).padStart(2, '0')}`,
+          shift: presentCode,
+          severity: 'warning',
+          type: 'full_weekend',
+          message: `${employee} arbeitet Wochenenden nur als Samstag und Sonntag; der zweite Tag ist nicht möglich (Abwesenheit, Sperrtag oder Kollegen-Regel), deshalb wurde der ${present}. entfernt.`,
+        });
+      }
+    }
+  }
   planReport.holeRepair = [];
   {
     relaxedWishPass = false;
@@ -4977,6 +5040,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     config: coloPlanningConfig,
     preferencesByEmployee: empPrefsMap,
     respectEmployeeWishes: planConfig.respect_employee_wishes,
+    dbsShiftCode: dbsPlanningConfig.enabled ? dbsPlanningConfig.shiftCode : null,
   });
   conflicts.push(...coloRolePlan.conflicts);
   planReport.colo = coloRolePlan.summary;

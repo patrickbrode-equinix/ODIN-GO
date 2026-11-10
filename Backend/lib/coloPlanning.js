@@ -127,6 +127,44 @@ function parseEmployeePool(value) {
  * An empty / missing list means "no limit". Not every pool member is suited for every Colo task
  * (e.g. only early shifts, or never at weekends).
  */
+const RULE_TYPES = ['early', 'late', 'night'];
+
+function parseWeekdayMatrix(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const matrix = {};
+  let any = false;
+  for (const type of RULE_TYPES) {
+    matrix[type] = parseWeekdays(value[type]);
+    if (matrix[type].length > 0) any = true;
+  }
+  return any ? matrix : null;
+}
+
+/**
+ * Granular per-person rule (new): allowed = { early: [weekdays], late: [...], night: [...] } means Colo only for exactly
+ * these shift type / weekday combinations (e.g. early Mon-Fri + Sunday, never Saturday). It replaces the older
+ * shift_types x weekdays cross product. dbs_cover = { early: [weekdays] }: while this person has the DBS duty they
+ * also take the Colo task of that type on these weekdays (saves planning one more person).
+ */
+export function isColoAllowedByRule(rule, shiftType, weekday) {
+  if (!rule) return true;
+  if (rule.allowed) {
+    const hasType = RULE_TYPES.includes(shiftType);
+    const hasDay = Number.isInteger(weekday);
+    if (hasType && hasDay) return (rule.allowed[shiftType] || []).includes(weekday);
+    if (hasType) return (rule.allowed[shiftType] || []).length > 0;
+    if (hasDay) return RULE_TYPES.some((type) => (rule.allowed[type] || []).includes(weekday));
+    return true;
+  }
+  if (shiftType && rule.shift_types?.length > 0 && !rule.shift_types.includes(shiftType)) return false;
+  if (Number.isInteger(weekday) && rule.weekdays?.length > 0 && !rule.weekdays.includes(weekday)) return false;
+  return true;
+}
+
+export function isColoCoveredByDbs(rule, shiftType, weekday) {
+  return Boolean(rule?.dbs_cover?.[shiftType]?.includes(weekday));
+}
+
 function parseEmployeeRules(value, pool) {
   let raw = value;
   if (typeof raw === 'string') {
@@ -144,10 +182,17 @@ function parseEmployeeRules(value, pool) {
     const weekdays = [...new Set((Array.isArray(rule.weekdays) ? rule.weekdays : [])
       .map((entry) => Number.parseInt(String(entry), 10))
       .filter((entry) => Number.isInteger(entry) && entry >= 0 && entry <= 6))].sort((a, b) => a - b);
+    const matrix = parseWeekdayMatrix(rule.allowed);
+    const fullMatrix = matrix && RULE_TYPES.every((type) => matrix[type].length === 7);
+    const dbsCover = parseWeekdayMatrix(rule.dbs_cover);
     const limitedTypes = shiftTypes.length > 0 && shiftTypes.length < 3;
     const limitedDays = weekdays.length > 0 && weekdays.length < 7;
-    if (!limitedTypes && !limitedDays) continue;
-    rules[employee] = { shift_types: limitedTypes ? shiftTypes : [], weekdays: limitedDays ? weekdays : [] };
+    const granular = matrix && !fullMatrix;
+    if (!granular && !limitedTypes && !limitedDays && !dbsCover) continue;
+    rules[employee] = granular
+      ? { shift_types: [], weekdays: [], allowed: matrix }
+      : { shift_types: limitedTypes ? shiftTypes : [], weekdays: limitedDays ? weekdays : [] };
+    if (dbsCover) rules[employee].dbs_cover = dbsCover;
   }
   return rules;
 }
@@ -243,8 +288,10 @@ export function buildColoRolePlan({
   config: rawConfig = {},
   preferencesByEmployee = new Map(),
   respectEmployeeWishes = true,
+  dbsShiftCode = null,
 } = {}) {
   const config = normalizeColoPlanningConfig(rawConfig);
+  const dbsCode = dbsShiftCode ? String(dbsShiftCode).trim().toUpperCase() : null;
   const assignments = [];
   const conflicts = [];
   const summary = {
@@ -284,7 +331,7 @@ export function buildColoRolePlan({
     if (!employee || !Number.isInteger(day) || NON_WORKING_SHIFT_CODES.has(shiftCode)) continue;
     if (!workingByDay.has(day)) workingByDay.set(day, []);
     // planName: the spelling of the plan. Marks and roles are stored under it, so every view finds them.
-    workingByDay.get(day).push({ employee, planName: String(shift.employee_name || '').trim(), shiftCode, shiftType });
+    workingByDay.get(day).push({ employee, planName: String(shift.employee_name || '').trim(), shiftCode, shiftType, isDbs: Boolean(dbsCode) && shiftCode === dbsCode });
   }
 
   const totalByEmployee = new Map(config.employeePool.map((employee) => [employee, 0]));
@@ -305,15 +352,15 @@ export function buildColoRolePlan({
 
       for (let slot = 0; slot < task.required; slot++) {
         const candidates = (workingByDay.get(day) || [])
-          .filter(({ employee, shiftType }) => {
-            if (usedToday.has(employee) || shiftType !== task.shiftType) return false;
+          .filter(({ employee, shiftType, isDbs }) => {
+            if (usedToday.has(employee)) return false;
             const rule = config.employeeRules[employee];
-            if (!rule) return true;
-            if (rule.shift_types.length > 0 && !rule.shift_types.includes(task.shiftType)) return false;
-            if (rule.weekdays.length > 0 && !rule.weekdays.includes(weekday)) return false;
-            return true;
+            // Someone on the DBS duty only counts where the admin allowed that person to cover this Colo task as well.
+            if (isDbs) return isColoCoveredByDbs(rule, task.shiftType, weekday);
+            if (shiftType !== task.shiftType) return false;
+            return isColoAllowedByRule(rule, task.shiftType, weekday);
           })
-          .map(({ employee, planName, shiftCode }) => {
+          .map(({ employee, planName, shiftCode, isDbs }) => {
             const preferences = preferenceFor(preferencesByEmployee, planName) || preferenceFor(preferencesByEmployee, employee);
             const blockedDays = normalizePreferenceDays(preferences?.blocked_days);
             const unwantedShifts = normalizeCodes(preferences?.unwanted_shifts);
@@ -329,13 +376,14 @@ export function buildColoRolePlan({
               employee,
               planName,
               shiftCode,
+              isDbs,
               continuesTask,
               score,
               rank: deterministicRank(`${year}-${month}-${day}-${task.key}-${employee}`),
             };
           })
           .filter(Boolean)
-          .sort((left, right) => Number(right.continuesTask) - Number(left.continuesTask) || right.score - left.score || left.rank - right.rank || left.employee.localeCompare(right.employee, 'de'));
+          .sort((left, right) => Number(right.isDbs) - Number(left.isDbs) || Number(right.continuesTask) - Number(left.continuesTask) || right.score - left.score || left.rank - right.rank || left.employee.localeCompare(right.employee, 'de'));
 
         const winner = candidates[0];
         if (!winner) {

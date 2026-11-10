@@ -49,6 +49,11 @@ const NEVER_TOGETHER_RULES = [
 export const PERSONAL_AVOID_KEY_PREFIX = 'personal.avoid_colleagues.user_';
 export const PERSONAL_AVOID_RULE = Object.freeze({ label: 'Persönliche Wunschliste (Patrick Brode)', nightShifts: true, weekendDays: true });
 
+/** Employees who work a weekend only as Saturday AND Sunday together (never just one of the two days). */
+export function requiresFullWeekend(...names) {
+  return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));
+}
+
 /** True when the name belongs to the one person who may keep a personal avoid list. */
 export function mayKeepPersonalAvoidList(...names) {
   return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));

@@ -79,11 +79,22 @@ async function verifyIdentity(req, res) {
           WHERE approved = TRUE
           ORDER BY id ASC`,
       );
-      rows = candidates.rows.filter((candidate) => {
+      const exact = candidates.rows.filter((candidate) => {
         const first = normalizeName(candidate.first_name);
         const last = normalizeName(candidate.last_name);
         if (nameKeys.has(normalizeName(`${candidate.first_name || ""} ${candidate.last_name || ""}`))) return true;
-        return Boolean(first && last) && loginKeys.has(`${first[0]}${last.replace(/ /g, "")}`);
+        // Login name: initial of any given name + last name ("Amine Mohamed Tigoudar" -> atigoudar and mtigoudar).
+        return Boolean(first && last) && first.split(" ").some((token) => loginKeys.has(`${token[0]}${last.replace(/ /g, "")}`));
+      });
+      // Looser tier, only when nothing matched exactly: all name parts from Jarvis/the e-mail ("Mohamed Tigoudar",
+      // "Amine Tigoudar") appear in the stored full name ("Amine Mohamed Tigoudar"). Must still be unique.
+      rows = exact.length ? exact : candidates.rows.filter((candidate) => {
+        const last = normalizeName(candidate.last_name);
+        const parts = new Set(normalizeName(`${candidate.first_name || ""} ${candidate.last_name || ""}`).split(" ").filter(Boolean));
+        return Boolean(last) && [...nameKeys].some((key) => {
+          const tokens = key.split(" ").filter(Boolean);
+          return tokens.length >= 2 && tokens.every((token) => parts.has(token)) && tokens.includes(last.split(" ").pop());
+        });
       });
     }
   }

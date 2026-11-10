@@ -403,6 +403,33 @@ interface DbsConfig {
 interface ColoEmployeeRule {
   shift_types: ColoShiftType[];
   weekdays: number[];
+  /** Granular: Colo only on exactly these shift type / weekday combinations (missing = no limit). */
+  allowed?: Record<ColoShiftType, number[]>;
+  /** While the person has the DBS duty they also cover the Colo task of this type on these weekdays. */
+  dbs_cover?: Record<ColoShiftType, number[]>;
+}
+
+type ColoMatrix = Record<ColoShiftType, number[]>;
+const COLO_ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+const COLO_TYPES: ColoShiftType[] = ['early', 'late', 'night'];
+const COLO_WORKWEEK = [1, 2, 3, 4, 5];
+const COLO_WEEKEND = [6, 0];
+const emptyColoMatrix = (): ColoMatrix => ({ early: [], late: [], night: [] });
+const fullColoMatrix = (): ColoMatrix => ({ early: [...COLO_ALL_DAYS], late: [...COLO_ALL_DAYS], night: [...COLO_ALL_DAYS] });
+const isFullColoMatrix = (matrix: ColoMatrix) => COLO_TYPES.every((type) => matrix[type].length === 7);
+const hasColoMatrixEntries = (matrix?: ColoMatrix) => Boolean(matrix) && COLO_TYPES.some((type) => (matrix as ColoMatrix)[type].length > 0);
+/** The editable matrix of a person: the granular rule, else the old shift type x weekday limits, else "everything allowed". */
+function coloRuleToMatrix(rule?: ColoEmployeeRule): ColoMatrix {
+  if (rule?.allowed) return { early: [...rule.allowed.early], late: [...rule.allowed.late], night: [...rule.allowed.night] };
+  const types = rule?.shift_types?.length ? rule.shift_types : COLO_TYPES;
+  const days = rule?.weekdays?.length ? rule.weekdays : COLO_ALL_DAYS;
+  return { early: types.includes('early') ? [...days] : [], late: types.includes('late') ? [...days] : [], night: types.includes('night') ? [...days] : [] };
+}
+function parseColoMatrix(value: unknown): ColoMatrix | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const matrix: ColoMatrix = { early: normalizeColoWeekdays(source.early), late: normalizeColoWeekdays(source.late), night: normalizeColoWeekdays(source.night) };
+  return COLO_TYPES.some((type) => matrix[type].length > 0) ? matrix : undefined;
 }
 
 interface ColoConfig {
@@ -636,7 +663,11 @@ function parseColoEmployeeRules(value: unknown): Record<string, ColoEmployeeRule
   for (const [name, entry] of Object.entries(raw as Record<string, Partial<ColoEmployeeRule>>)) {
     const shiftTypes = (Array.isArray(entry?.shift_types) ? entry.shift_types : []).filter((type): type is ColoShiftType => ['early', 'late', 'night'].includes(String(type)));
     const weekdays = Array.isArray(entry?.weekdays) ? normalizeColoWeekdays(entry.weekdays) : [];
-    rules[name] = { shift_types: shiftTypes, weekdays };
+    // Old limits (shift types x weekdays) become the granular matrix, saved in the new form from now on.
+    const legacy: ColoEmployeeRule = { shift_types: shiftTypes, weekdays };
+    const matrix = parseColoMatrix(entry?.allowed) ?? ((shiftTypes.length > 0 && shiftTypes.length < 3) || (weekdays.length > 0 && weekdays.length < 7) ? coloRuleToMatrix(legacy) : undefined);
+    const dbsCover = parseColoMatrix(entry?.dbs_cover);
+    rules[name] = { shift_types: [], weekdays: [], ...(matrix ? { allowed: matrix } : {}), ...(dbsCover ? { dbs_cover: dbsCover } : {}) };
   }
   return rules;
 }
@@ -647,9 +678,9 @@ function cleanColoEmployeeRules(rules: Record<string, ColoEmployeeRule>, pool: s
   for (const name of pool) {
     const rule = rules[name];
     if (!rule) continue;
-    const shiftTypes = rule.shift_types.length < 3 ? rule.shift_types : [];
-    const weekdays = rule.weekdays.length < 7 ? rule.weekdays : [];
-    if (shiftTypes.length > 0 || weekdays.length > 0) cleaned[name] = { shift_types: shiftTypes, weekdays };
+    const allowed = rule.allowed && !isFullColoMatrix(rule.allowed) ? rule.allowed : undefined;
+    const dbsCover = hasColoMatrixEntries(rule.dbs_cover) ? rule.dbs_cover : undefined;
+    if (allowed || dbsCover) cleaned[name] = { shift_types: [], weekdays: [], ...(allowed ? { allowed } : {}), ...(dbsCover ? { dbs_cover: dbsCover } : {}) };
   }
   return cleaned;
 }
@@ -1508,14 +1539,21 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }));
   };
 
-  const toggleColoEmployeeShiftType = (employeeName: string, type: ColoShiftType) => {
-    const current = coloConfig.employeeRules[employeeName]?.shift_types ?? [];
-    updateColoEmployeeRule(employeeName, { shift_types: current.includes(type) ? current.filter((entry) => entry !== type) : [...current, type] });
+  const coloMatrixOf = (employeeName: string, key: 'allowed' | 'dbs_cover'): ColoMatrix => (
+    key === 'allowed' ? coloRuleToMatrix(coloConfig.employeeRules[employeeName]) : (coloConfig.employeeRules[employeeName]?.dbs_cover ?? emptyColoMatrix())
+  );
+  const setColoMatrix = (employeeName: string, key: 'allowed' | 'dbs_cover', matrix: ColoMatrix) => {
+    updateColoEmployeeRule(employeeName, key === 'allowed' ? { shift_types: [], weekdays: [], allowed: matrix } : { dbs_cover: matrix });
   };
-
-  const toggleColoEmployeeWeekday = (employeeName: string, weekday: number) => {
-    const current = coloConfig.employeeRules[employeeName]?.weekdays ?? [];
-    updateColoEmployeeRule(employeeName, { weekdays: normalizeColoWeekdays(current.includes(weekday) ? current.filter((entry) => entry !== weekday) : [...current, weekday]) });
+  const toggleColoCell = (employeeName: string, key: 'allowed' | 'dbs_cover', type: ColoShiftType, weekday: number) => {
+    const matrix = coloMatrixOf(employeeName, key);
+    const days = matrix[type];
+    setColoMatrix(employeeName, key, { ...matrix, [type]: normalizeColoWeekdays(days.includes(weekday) ? days.filter((entry) => entry !== weekday) : [...days, weekday]) });
+  };
+  const setColoRow = (employeeName: string, key: 'allowed' | 'dbs_cover', type: ColoShiftType, days: number[]) => {
+    const matrix = coloMatrixOf(employeeName, key);
+    const same = days.length === matrix[type].length && days.every((day) => matrix[type].includes(day));
+    setColoMatrix(employeeName, key, { ...matrix, [type]: same ? [] : [...days] });
   };
 
   const addColoRequirement = () => {
@@ -2574,6 +2612,26 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                         );
                       })}
                     </div>
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{isGerman ? 'Schnellwahl' : 'Presets'}</span>
+                      {[
+                        { labelDe: 'Mo–Fr', labelEn: 'Mon–Fri', days: [1, 2, 3, 4, 5] },
+                        { labelDe: 'Sa + So', labelEn: 'Sat + Sun', days: [6, 0] },
+                        { labelDe: 'Nur Sa', labelEn: 'Sat only', days: [6] },
+                        { labelDe: 'Nur So', labelEn: 'Sun only', days: [0] },
+                        { labelDe: 'Ganze Woche', labelEn: 'Whole week', days: [0, 1, 2, 3, 4, 5, 6] },
+                      ].map((preset) => (
+                        <button key={preset.labelEn} type="button" onClick={() => updateColoRequirement(entry.id, { weekdays: normalizeColoWeekdays(preset.days) })} className="rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-slate-300 ring-1 ring-white/10 hover:bg-white/10">{isGerman ? preset.labelDe : preset.labelEn}</button>
+                      ))}
+                    </div>
+                    <input
+                      type="text"
+                      maxLength={120}
+                      value={entry.label ?? ''}
+                      onChange={(event) => updateColoRequirement(entry.id, { label: event.target.value })}
+                      placeholder={isGerman ? 'Bezeichnung (optional), z. B. Colo Wochenende Früh' : 'Label (optional), e.g. Colo weekend early'}
+                      className="mt-1.5 w-full rounded-xl border border-white/10 bg-slate-950/60 px-3 py-1.5 text-xs text-slate-100 placeholder:text-slate-500"
+                    />
                     {entry.weekdays.length === 0 ? (
                       <div className="mt-1 text-[11px] text-amber-300">{isGerman ? 'Mindestens einen Tag wählen, sonst wird der Eintrag nicht gespeichert.' : 'Pick at least one day, otherwise the entry is not saved.'}</div>
                     ) : null}
@@ -2662,9 +2720,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               <div className="max-h-80 space-y-1 overflow-y-auto p-2">
                 {selectedColoEmployees.length === 0 ? <div className="px-3 py-8 text-center text-sm text-slate-500">{isGerman ? 'Noch niemand ausgewählt' : 'No one selected yet'}</div> : selectedColoEmployees.map((employee) => {
                   const rule = coloConfig.employeeRules[employee];
-                  const types = rule?.shift_types ?? [];
-                  const days = rule?.weekdays ?? [];
-                  const limited = (types.length > 0 && types.length < 3) || (days.length > 0 && days.length < 7);
+                  const limited = !isFullColoMatrix(coloRuleToMatrix(rule));
+                  const hasDbsCover = hasColoMatrixEntries(rule?.dbs_cover);
+                  const isDbsMember = dbsPool.some((entry) => entry.employee_name === employee);
                   return (
                     <div key={employee} className="rounded-xl border border-cyan-400/15 bg-cyan-500/8 px-3 py-2 text-sm text-cyan-50">
                       <div className="flex items-center justify-between gap-2">
@@ -2673,32 +2731,64 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                           <ArrowLeft className="h-3.5 w-3.5" /> {isGerman ? 'Entfernen' : 'Remove'}
                         </button>
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{isGerman ? 'Colo nur in' : 'Colo only in'}</span>
-                        {COLO_SHIFT_TYPE_OPTIONS.map((option) => {
-                          const active = types.includes(option.value);
-                          return (
-                            <button key={option.value} type="button" onClick={() => toggleColoEmployeeShiftType(employee, option.value)} className={`rounded-full px-2.5 py-1 text-xs transition ${active ? 'bg-cyan-400/25 text-cyan-50 ring-1 ring-cyan-300/40' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>
-                              {isGerman ? option.labelDe : option.labelEn}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{isGerman ? 'an Tagen' : 'on days'}</span>
-                        {weekdayOptions.map((option) => {
-                          const active = days.includes(option.value);
-                          return (
-                            <button key={option.value} type="button" onClick={() => toggleColoEmployeeWeekday(employee, option.value)} className={`rounded-full px-2 py-1 text-xs transition ${active ? 'bg-cyan-400/25 text-cyan-50 ring-1 ring-cyan-300/40' : 'bg-white/5 text-slate-400 ring-1 ring-white/10 hover:bg-white/10'}`}>
-                              {option.label}
-                            </button>
-                          );
-                        })}
-                      </div>
+                      {([
+                        { key: 'allowed' as const, titleDe: 'Colo möglich in (je Schicht und Tag)', titleEn: 'Colo possible in (per shift and day)', presets: true },
+                        ...(isDbsMember ? [{ key: 'dbs_cover' as const, titleDe: 'Übernimmt Colo, solange die Person DBS hat', titleEn: 'Covers Colo while the person has DBS', presets: true }] : []),
+                      ]).map((section) => {
+                        const matrix = coloMatrixOf(employee, section.key);
+                        return (
+                          <div key={section.key} className="mt-2 rounded-lg border border-white/10 bg-slate-950/40 p-2">
+                            <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">{isGerman ? section.titleDe : section.titleEn}</span>
+                              <span className="flex flex-wrap gap-1">
+                                {section.key === 'allowed' ? (
+                                  <button type="button" onClick={() => setColoMatrix(employee, 'allowed', fullColoMatrix())} className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-300 ring-1 ring-white/10 hover:bg-white/10">{isGerman ? 'Alles erlaubt' : 'Allow all'}</button>
+                                ) : null}
+                                <button type="button" onClick={() => setColoMatrix(employee, section.key, emptyColoMatrix())} className="rounded-full bg-white/5 px-2 py-0.5 text-[10px] text-slate-300 ring-1 ring-white/10 hover:bg-white/10">{isGerman ? 'Nichts' : 'None'}</button>
+                                {section.key === 'dbs_cover' ? (
+                                  <button type="button" onClick={() => setColoMatrix(employee, 'dbs_cover', { early: [...COLO_WORKWEEK, 0], late: [], night: [] })} className="rounded-full bg-cyan-400/15 px-2 py-0.5 text-[10px] text-cyan-100 ring-1 ring-cyan-300/30 hover:bg-cyan-400/25">{isGerman ? 'Früh Mo–Fr + So' : 'Early Mon–Fri + Sun'}</button>
+                                ) : null}
+                              </span>
+                            </div>
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-center text-[11px]">
+                                <thead>
+                                  <tr className="text-slate-400">
+                                    <th className="px-1 py-0.5 text-left font-medium" />
+                                    {weekdayOptions.map((option) => <th key={option.value} className="px-1 py-0.5 font-medium">{option.label}</th>)}
+                                    <th className="px-1 py-0.5 font-medium" />
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {COLO_SHIFT_TYPE_OPTIONS.map((type) => (
+                                    <tr key={type.value}>
+                                      <td className="px-1 py-0.5 text-left text-slate-300">{isGerman ? type.labelDe : type.labelEn}</td>
+                                      {weekdayOptions.map((option) => {
+                                        const active = matrix[type.value].includes(option.value);
+                                        return (
+                                          <td key={option.value} className="px-0.5 py-0.5">
+                                            <button type="button" aria-pressed={active} aria-label={`${isGerman ? type.labelDe : type.labelEn} ${option.label}`} onClick={() => toggleColoCell(employee, section.key, type.value, option.value)} className={`h-6 w-7 rounded-md text-[10px] transition ${active ? 'bg-cyan-400/30 text-cyan-50 ring-1 ring-cyan-300/50' : 'bg-white/5 text-slate-600 ring-1 ring-white/10 hover:bg-white/10'}`}>{active ? '✓' : ''}</button>
+                                          </td>
+                                        );
+                                      })}
+                                      <td className="whitespace-nowrap px-1 py-0.5 text-left">
+                                        <button type="button" onClick={() => setColoRow(employee, section.key, type.value, COLO_WORKWEEK)} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/10">Mo–Fr</button>{' '}
+                                        <button type="button" onClick={() => setColoRow(employee, section.key, type.value, COLO_WEEKEND)} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/10">Sa+So</button>{' '}
+                                        <button type="button" onClick={() => setColoRow(employee, section.key, type.value, COLO_ALL_DAYS)} className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-300 hover:bg-white/10">{isGerman ? 'Alle' : 'All'}</button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        );
+                      })}
                       <div className="mt-1.5 text-[11px] text-slate-400">
                         {limited
-                          ? (isGerman ? 'Wird nur für die markierten Schichten und Tage für Colo eingeplant.' : 'Only planned for Colo in the marked shifts and days.')
+                          ? (isGerman ? 'Wird nur für die markierten Kombinationen aus Schicht und Tag für Colo eingeplant.' : 'Only planned for Colo in the marked shift and day combinations.')
                           : (isGerman ? 'Keine Einschränkung: alle Schichten und Tage möglich.' : 'No limit: all shifts and days possible.')}
+                        {hasDbsCover ? (isGerman ? ' Während der DBS-Schicht übernimmt die Person zusätzlich die markierten Colo-Aufgaben, dafür wird keine weitere Person eingeplant.' : ' While on DBS the person also covers the marked Colo tasks; no further person is planned for them.') : ''}
                       </div>
                     </div>
                   );
