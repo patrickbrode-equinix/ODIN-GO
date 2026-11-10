@@ -129,11 +129,14 @@ export function evaluateShiftWishViolations({
 } = {}) {
   const s = strengths || DEFAULT_STRENGTHS;
   const violations = [];
+  // Wishes for one specific month are an explicit decision of the employee: absolute, whatever the general strength is.
+  const monthlyOverride = Boolean(prefs?.monthly_override);
   const add = (type, strengthKey) => {
-    const strength = s[strengthKey] ?? DEFAULT_STRENGTHS[strengthKey];
+    const monthly = monthlyOverride && (type === 'unwanted' || type === 'not_preferred');
+    const strength = monthly ? 100 : (s[strengthKey] ?? DEFAULT_STRENGTHS[strengthKey]);
     if (isIgnoredStrength(strength)) return;
     const hard = isHardStrength(strength);
-    violations.push({ type, strengthKey, hard, penalty: hard ? 0 : softPenalty(strength) });
+    violations.push({ type, strengthKey, hard, monthly, penalty: hard ? 0 : softPenalty(strength) });
   };
 
   const { unwanted, notPreferred } = classifyPreferenceViolation(prefs, code, respectWishes);

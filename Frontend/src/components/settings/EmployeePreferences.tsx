@@ -292,6 +292,9 @@ export default function EmployeePreferences() {
   const [blockedDaysEnabled, setBlockedDaysEnabled] = useState(false);
   const [colleagueOptions, setColleagueOptions] = useState<Array<{ id: number; name: string }>>([]);
   const [preferredColleaguesEnabled, setPreferredColleaguesEnabled] = useState(false);
+  // Personal "do not work with" list: the server only offers it to one person (allowed: false for everybody else).
+  const [avoidList, setAvoidList] = useState<{ allowed: boolean; selected: number[]; options: Array<{ id: number; name: string }> }>({ allowed: false, selected: [], options: [] });
+  const [avoidSaving, setAvoidSaving] = useState(false);
 
   const refreshShiftOptions = useCallback(async () => {
     try {
@@ -307,9 +310,30 @@ export default function EmployeePreferences() {
     setTimeout(() => setToast(null), 3000);
   };
 
+  const saveAvoidList = async (selected: number[]) => {
+    const previous = avoidList.selected;
+    setAvoidList((current) => ({ ...current, selected }));
+    setAvoidSaving(true);
+    try {
+      const response = await api.put('/shift-config/personal-avoid-colleagues', { colleagues: selected });
+      setAvoidList((current) => ({ ...current, selected: Array.isArray(response.data?.selected) ? response.data.selected : selected }));
+      showToast(copy.saved);
+    } catch (e: any) {
+      setAvoidList((current) => ({ ...current, selected: previous }));
+      showToast(e?.response?.data?.error || copy.saveFailed, 'err');
+    } finally {
+      setAvoidSaving(false);
+    }
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
+      api.get('/shift-config/personal-avoid-colleagues')
+        .then((response) => setAvoidList(response.data?.allowed === true
+          ? { allowed: true, selected: Array.isArray(response.data.selected) ? response.data.selected : [], options: Array.isArray(response.data.options) ? response.data.options : [] }
+          : { allowed: false, selected: [], options: [] }))
+        .catch(() => setAvoidList({ allowed: false, selected: [], options: [] }));
       const [prefRes, definitionsRes] = await Promise.all([
         api.get('/shift-config/employee-preferences'),
         api.get('/shift-config/definitions').catch(() => ({ data: { definitions: [] } })),
@@ -717,6 +741,48 @@ export default function EmployeePreferences() {
           })}
         </div>
       </EnterpriseCard>
+
+      {/* Personal list: only visible for the one person the server allows */}
+      {avoidList.allowed && (
+        <EnterpriseCard>
+          <h3 className="text-sm font-bold text-foreground flex items-center gap-2 mb-1">
+            <Heart className="w-4 h-4 text-rose-400" />
+            {isGerman ? 'Nicht planen mit' : 'Do not plan together with'}
+          </h3>
+          <p className="mb-3 text-[11px] leading-5 text-muted-foreground">
+            {isGerman
+              ? 'Mit diesen Kollegen möchtest du weder in der Nachtschicht noch am Wochenende (Samstag/Sonntag) arbeiten. An allen anderen Tagen ist es egal. Die Auswahl wird sofort gespeichert und bei der Planung fest beachtet.'
+              : 'You do not want to work with these colleagues on night shifts or on weekends (Saturday/Sunday). Other days do not matter. The selection is saved immediately and always respected by the planning.'}
+          </p>
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {avoidList.selected.length === 0 && <span className="text-xs text-muted-foreground">{isGerman ? 'Noch niemand ausgewählt' : 'Nobody selected yet'}</span>}
+            {avoidList.selected.map((id) => (
+              <button
+                key={id}
+                type="button"
+                disabled={avoidSaving}
+                onClick={() => void saveAvoidList(avoidList.selected.filter((entry) => entry !== id))}
+                title={isGerman ? 'Entfernen' : 'Remove'}
+                className="inline-flex items-center gap-1 rounded-full border border-rose-400/30 bg-rose-500/15 px-2.5 py-1 text-xs text-rose-100 transition hover:bg-rose-500/25 disabled:opacity-50"
+              >
+                {avoidList.options.find((option) => option.id === id)?.name || `#${id}`} <span aria-hidden="true">×</span>
+              </button>
+            ))}
+          </div>
+          <SearchableSelect
+            value=""
+            onChange={(value) => {
+              const id = Number.parseInt(value, 10);
+              if (Number.isInteger(id) && !avoidList.selected.includes(id)) void saveAvoidList([...avoidList.selected, id]);
+            }}
+            disabled={avoidSaving}
+            emptyLabel={isGerman ? 'Kollegen hinzufügen …' : 'Add colleague …'}
+            searchPlaceholder={isGerman ? 'Kollegen suchen…' : 'Search colleagues…'}
+            noResultsLabel={isGerman ? 'Keine Treffer' : 'No matches'}
+            options={avoidList.options.filter((option) => !avoidList.selected.includes(option.id)).map((option) => ({ value: String(option.id), label: option.name }))}
+          />
+        </EnterpriseCard>
+      )}
 
       {/* Save */}
       <div className="flex justify-end">

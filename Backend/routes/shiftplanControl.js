@@ -79,7 +79,7 @@ import {
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, focusCostControl } from '../lib/costControl.js';
-import { getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
+import { PERSONAL_AVOID_KEY_PREFIX, PERSONAL_AVOID_RULE, mayKeepPersonalAvoidList, getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
 import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
@@ -463,7 +463,14 @@ async function loadPreviousMonthShiftCarryState({ year, month, employees, shiftD
       return weekday === 0 || weekday === 6;
     });
     const lastWeekendRow = weekendRows[weekendRows.length - 1];
+    // The last days themselves (offset 0 = last day of the month): the rules for neighbouring days, rest times and one
+    // shift type per week look across the month change with them.
+    const recentCodes = {};
+    for (const row of employeeRows) {
+      if (row.day > previousMonthDays - 7) recentCodes[row.day - previousMonthDays] = row.code;
+    }
     carry[employee] = {
+      recentCodes,
       lastWeekendKey: lastWeekendRow ? getWeekendBlockKey(previousYear, previousMonth, lastWeekendRow.day) : null,
       consecutiveWork,
       lastShiftType: lastDefinition.shift_type || null,
@@ -1197,7 +1204,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const employeeName = resolveUserPlanName(row);
     if (!employeeName) continue;
     // Saved weekday exclusions apply to every employee, including catch-up work.
-    empPrefsMap.set(employeeName, blockedDaysEnabled ? row : { ...row, blocked_days: [] });
+    // Wishes for exactly this month replace the general ones everywhere (also in the passes that read the map directly).
+    empPrefsMap.set(employeeName, mergeMonthlyPreferences(blockedDaysEnabled ? row : { ...row, blocked_days: [] }, month));
   }
 
   // Preferred colleagues stay stored per user and are used while their strength is
@@ -1513,13 +1521,14 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const isEarlyShiftCode = (code) => earlyShiftCodes.includes(String(code || '').trim().toUpperCase());
   const isHardBlockedForPass = (evaluation, code = null) => {
     if (earlyFallbackPass && isEarlyShiftCode(code)) {
-      return evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred' && violation.type !== 'unwanted');
+      return evaluation.violations.some((violation) => violation.hard && (violation.monthly || (violation.type !== 'not_preferred' && violation.type !== 'unwanted')));
     }
     return relaxedWishPass
-      ? evaluation.violations.some((violation) => violation.hard && violation.type !== 'not_preferred')
+      ? evaluation.violations.some((violation) => violation.hard && (violation.monthly || violation.type !== 'not_preferred'))
       : evaluation.hardBlocked;
   };
-  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesNeverTogetherOnDate(employee, dateStr, code)
+  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesCrossMonthWeekType(employee, dateStr, code)
+    || violatesNeverTogetherOnDate(employee, dateStr, code)
     || violatesInexperiencedOnDate(employee, dateStr, code)
     || isHardBlockedForPass(getShiftWishEvaluation(employee, dateStr, code), code);
   const getShiftWishPenaltyOnDate = (employee, dateStr, code) => getShiftWishEvaluation(employee, dateStr, code).penalty;
@@ -1537,7 +1546,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     .map((definition) => String(definition.code || '').trim().toUpperCase());
   const lateNightOnlyEmployees = new Set(activeEmployees.filter((employee) => {
     if (earlyShiftCodes.length === 0) return false;
-    const prefs = preferencesForDate(employee, `-01`);
+    const prefs = preferencesForDate(employee, `${month}-01`);
     return earlyShiftCodes.every((code) => evaluateShiftWishForPrefs(prefs, code).hardBlocked);
   }));
   planReport.lateNightOnlyEmployees = [...lateNightOnlyEmployees];
@@ -1547,7 +1556,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const lateCodes = shiftDefs.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'late').map((definition) => definition.code);
     const nightCodes = shiftDefs.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'night').map((definition) => definition.code);
     for (const employee of activeEmployees) {
-      const prefs = preferencesForDate(employee, `-01`);
+      const prefs = preferencesForDate(employee, `${month}-01`);
       if (lateCodes.some((code) => isShiftPreferredByEmployeePreference(prefs, code))
         && nightCodes.some((code) => isShiftPreferredByEmployeePreference(prefs, code))) lateOverflowEligible.add(employee);
     }
@@ -1582,7 +1591,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const preferredTypesCache = new Map();
   const getPreferredTypes = (employee) => {
     if (!preferredTypesCache.has(employee)) {
-      const prefs = preferencesForDate(employee, `-01`);
+      const prefs = preferencesForDate(employee, `${month}-01`);
       preferredTypesCache.set(employee, new Set(shiftDefs
         .filter((definition) => isShiftPreferredByEmployeePreference(prefs, definition.code))
         .map((definition) => normalizePlanningShiftTypeKey(definition.shift_type))));
@@ -1597,6 +1606,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return own.size > 0 ? own : other;
   };
   let violatesNeverTogetherOnDate = () => false;
+  let violatesCrossMonthWeekType = () => false;
   let violatesInexperiencedOnDate = () => false;
   let planningCursorDay = 0;
   const totalWeekendBlocks = countWeekendBlocks(year, mon, numDays);
@@ -1612,6 +1622,12 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empStats[employee] = { nights: 0, weekends: 0, workedWeekendBlocks: new Set(), shiftTypeChanges: 0, earlyCount: 0, lateCount: 0, total: 0, actualHours: 0, targetHours: employeeTargetHours[employee], specialShiftCounts: {} };
     empDayAssignment[employee] = {};
     const carried = carryState[employee] || {};
+    // Days of the previous month (0, -1, -2 ...) are readable like planned days, but invisible for loops over the month.
+    for (const [offset, code] of Object.entries(carried.recentCodes || {})) {
+      const dayOffset = Number.parseInt(offset, 10);
+      if (!Number.isInteger(dayOffset) || dayOffset > 0 || dayOffset <= -7 || !code) continue;
+      Object.defineProperty(empDayAssignment[employee], dayOffset, { value: String(code).trim().toUpperCase(), enumerable: false, writable: true, configurable: true });
+    }
     empConsecutiveWork[employee] = Math.max(Number.parseInt(carried.consecutiveWork, 10) || 0, 0);
     empLastShiftType[employee] = carried.lastShiftType || null;
     empRequiredFreeDays[employee] = Math.max(Number.parseInt(carried.requiredFreeDays, 10) || 0, 0);
@@ -2033,6 +2049,51 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       neverTogetherByEmployee.get(employee).push({ partner: other, rule });
     }
   }
+  // Personal list of the one person who has the menu (wish list): the same rule as a fixed pair, per chosen colleague.
+  try {
+    const avoidRows = (await pool.query('SELECT key, value FROM app_settings WHERE key LIKE $1', [`${PERSONAL_AVOID_KEY_PREFIX}%`])).rows;
+    const lists = avoidRows.map((row) => {
+      let ids = [];
+      try { const parsed = JSON.parse(String(row.value || '[]')); ids = Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : []; } catch { ids = []; }
+      return { ownerId: Number.parseInt(String(row.key).slice(PERSONAL_AVOID_KEY_PREFIX.length), 10), ids };
+    }).filter((entry) => Number.isInteger(entry.ownerId) && entry.ids.length > 0);
+    if (lists.length > 0) {
+      const wanted = [...new Set(lists.flatMap((entry) => [entry.ownerId, ...entry.ids]))];
+      const userRows = (await pool.query('SELECT id, first_name, last_name, provisioned_employee_name FROM users WHERE id = ANY($1::int[])', [wanted])).rows;
+      const planNameById = new Map(userRows.map((row) => [Number(row.id), resolveUserPlanName(row)]));
+      const ownerMayKeep = new Map(userRows.map((row) => [Number(row.id), mayKeepPersonalAvoidList(row.provisioned_employee_name, [row.first_name, row.last_name].filter(Boolean).join(' '))]));
+      planReport.personalAvoid = [];
+      for (const entry of lists) {
+        const owner = planNameById.get(entry.ownerId);
+        if (!owner || !ownerMayKeep.get(entry.ownerId) || !activeEmployees.includes(owner)) continue;
+        for (const partnerId of entry.ids) {
+          const partner = planNameById.get(partnerId);
+          if (!partner || partner === owner || !activeEmployees.includes(partner)) continue;
+          for (const [a, b] of [[owner, partner], [partner, owner]]) {
+            if (!neverTogetherByEmployee.has(a)) neverTogetherByEmployee.set(a, []);
+            if (!neverTogetherByEmployee.get(a).some((existing) => existing.partner === b)) neverTogetherByEmployee.get(a).push({ partner: b, rule: PERSONAL_AVOID_RULE });
+          }
+          planReport.personalAvoid.push({ owner, partner });
+        }
+      }
+    }
+  } catch (error) {
+    console.warn('Personal avoid list unavailable:', error.message);
+  }
+  // One shift type per week across the month change: whoever worked early (late) in the first days of a week that began
+  // in the previous month does not get the other type (late / early) in the rest of that week.
+  violatesCrossMonthWeekType = (employee, dateStr, code) => {
+    const dayNumber = Number.parseInt(String(dateStr).split('-').pop(), 10);
+    if (!Number.isInteger(dayNumber) || dayNumber < 1 || dayNumber > 6) return false;
+    const ownType = coloShiftTypeByCode.get(String(code || '').trim().toUpperCase());
+    if (ownType !== 'early' && ownType !== 'late') return false;
+    const daysSinceMonday = (dayOfWeek(year, mon, dayNumber) + 6) % 7;
+    for (let previousDay = dayNumber - daysSinceMonday; previousDay <= 0; previousDay++) {
+      const earlierType = coloShiftTypeByCode.get(String(empDayAssignment[employee]?.[previousDay] || '').trim().toUpperCase());
+      if ((earlierType === 'early' || earlierType === 'late') && earlierType !== ownType) return true;
+    }
+    return false;
+  };
   // Inexperienced employees (admin setting): never two of them in the same shift type on one day.
   const isInexperienced = (employee) => inexperiencedKeys.has(coloNameKey(employee));
   const inexperiencedEmployees = activeEmployees.filter(isInexperienced);
@@ -3780,7 +3841,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         let weekTypeBonus = 0;
         const weekStartDay = day - ((dow + 6) % 7);
         for (let weekDay = weekStartDay; weekDay < weekStartDay + 7; weekDay++) {
-          if (weekDay === day || weekDay < 1 || weekDay > numDays) continue;
+          if (weekDay === day || weekDay > numDays) continue;
           const assignedType = getAssignedShiftType(employee, weekDay);
           if (!assignedType || assignedType === 'special') continue;
           weekTypeBonus = assignedType === catchupType ? 120 : -200;
@@ -4676,7 +4737,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             const weekStartDay = day - ((dow + 6) % 7);
             let otherTypeInWeek = false;
             for (let weekDay = weekStartDay; weekDay < weekStartDay + 7; weekDay++) {
-              if (weekDay === day || weekDay < 1 || weekDay > numDays) continue;
+              if (weekDay === day || weekDay > numDays) continue;
               const assignedType = getAssignedShiftType(employee, weekDay);
               if (assignedType && assignedType !== 'special') { otherTypeInWeek = assignedType !== type; break; }
             }
@@ -5064,6 +5125,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     fairness,
     planReport,
     carryState: Object.fromEntries(activeEmployees.map((employee) => [employee, {
+      recentCodes: Object.fromEntries(Array.from({ length: 7 }, (_, index) => numDays - index)
+        .filter((dayNumber) => dayNumber >= 1 && empDayAssignment[employee]?.[dayNumber])
+        .map((dayNumber) => [dayNumber - numDays, String(empDayAssignment[employee][dayNumber]).trim().toUpperCase()])),
       consecutiveWork: empConsecutiveWork[employee],
       lastShiftType: empLastShiftType[employee],
       requiredFreeDays: empRequiredFreeDays[employee],

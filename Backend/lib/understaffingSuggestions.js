@@ -267,6 +267,8 @@ export function mergeMonthlyPreferences(base, monthKey) {
   const unwantedSet = new Set(unwanted.map((code) => String(code || '').trim().toUpperCase()));
   return {
     ...base,
+    // Marks wishes chosen for this month: they overrule the general wishes and no pass of the generator relaxes them.
+    monthly_override: true,
     preferred_shifts: preferred.filter((code) => !unwantedSet.has(String(code || '').trim().toUpperCase())),
     unwanted_shifts: [...unwantedSet].filter(Boolean),
   };

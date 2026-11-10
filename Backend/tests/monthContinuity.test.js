@@ -102,3 +102,25 @@ test('a single month planned from the saved plan equals the chained plan for the
     }
   }
 });
+
+test('one shift type per week also across the month change: early in December stays early in the same week of January', async () => {
+  const { db, names } = buildTeam(34);
+  const december = [];
+  // 16 people worked early Mon-Wed (28.-30.12.), Thursday 31.12. free: Friday 1.1. must not turn into a late shift.
+  const earlyGroup = names.slice(0, 16);
+  for (const name of earlyGroup) for (const day of [28, 29, 30]) december.push({ employee_name: name, day, shift_code: 'E1' });
+  // and 14 people worked late Mon-Wed: no early shift may follow within the same week.
+  const lateGroup = names.slice(16, 30);
+  for (const name of lateGroup) for (const day of [28, 29, 30]) december.push({ employee_name: name, day, shift_code: 'L1' });
+  db.shiftHistory.set(formatShiftMonthLabel(2026, 12), december);
+
+  const result = await generateShiftPlan(2027, 1, 31, 'test', {});
+  for (const name of earlyGroup) {
+    const cells = cellsOf(result, name);
+    for (const day of [1, 2, 3]) if (cells.has(day)) assert.notEqual(typeOf(cells.get(day)), 'late', `${name}: early week continues as late on ${day}.1. (${cells.get(day)})`);
+  }
+  for (const name of lateGroup) {
+    const cells = cellsOf(result, name);
+    for (const day of [1, 2, 3]) if (cells.has(day)) assert.notEqual(typeOf(cells.get(day)), 'early', `${name}: late week continues as early on ${day}.1. (${cells.get(day)})`);
+  }
+});

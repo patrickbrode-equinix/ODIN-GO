@@ -8,6 +8,7 @@ import express from 'express';
 import { requireAuth, requireVerifiedIdentity } from '../middleware/authMiddleware.js';
 import { requirePageAccess } from '../middleware/requirePageAccess.js';
 import pool from '../db.js';
+import { PERSONAL_AVOID_KEY_PREFIX, mayKeepPersonalAvoidList } from '../lib/fixedEmployeeRules.js';
 import { ensureShiftplanSchema } from '../lib/ensureShiftplanSchema.js';
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { analyzePlanningHealth } from '../lib/planningHealth.js';
@@ -886,6 +887,61 @@ router.get('/employee-preferences', requireVerifiedIdentity, async (req, res) =>
       })),
       preferences: preference,
     });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* Personal "does not want to work with" list: only for the one person who has the menu (not part of the normal wishes,
+   not shown in the user management). Effect in the generator: never together on night shifts and weekend days. */
+async function loadAvoidOwner(userId) {
+  const { rows } = await pool.query('SELECT first_name, last_name, provisioned_employee_name FROM users WHERE id = $1', [userId]);
+  const user = rows[0];
+  if (!user) return false;
+  return mayKeepPersonalAvoidList(user.provisioned_employee_name, [user.first_name, user.last_name].filter(Boolean).join(' '));
+}
+
+router.get('/personal-avoid-colleagues', requireVerifiedIdentity, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
+    if (!(await loadAvoidOwner(userId))) return res.json({ ok: true, allowed: false });
+    const [stored, options] = await Promise.all([
+      pool.query('SELECT value FROM app_settings WHERE key = $1', [`${PERSONAL_AVOID_KEY_PREFIX}${userId}`]),
+      pool.query(
+        `SELECT id, first_name, last_name FROM users
+          WHERE approved = TRUE AND is_root = FALSE AND id <> $1 AND (COALESCE(first_name, '') <> '' OR COALESCE(last_name, '') <> '')
+          ORDER BY last_name, first_name`,
+        [userId]
+      ),
+    ]);
+    let selected = [];
+    try { const parsed = JSON.parse(String(stored.rows[0]?.value || '[]')); selected = Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : []; } catch { selected = []; }
+    res.json({
+      ok: true,
+      allowed: true,
+      selected,
+      options: options.rows.map((row) => ({ id: row.id, name: [row.last_name, row.first_name].filter(Boolean).join(', ') })),
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+router.put('/personal-avoid-colleagues', requireVerifiedIdentity, async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ ok: false, error: 'Nicht autorisiert' });
+    if (!(await loadAvoidOwner(userId))) return res.status(403).json({ ok: false, error: 'Diese Auswahl ist für dich nicht verfügbar.' });
+    const requested = Array.isArray(req.body?.colleagues) ? [...new Set(req.body.colleagues.map((id) => Number.parseInt(String(id), 10)).filter((id) => Number.isInteger(id) && id > 0 && id !== userId))] : [];
+    if (requested.length > 30) return res.status(400).json({ ok: false, error: 'Zu viele Kollegen ausgewählt.' });
+    const valid = requested.length === 0 ? [] : (await pool.query('SELECT id FROM users WHERE id = ANY($1::int[]) AND approved = TRUE AND is_root = FALSE', [requested])).rows.map((row) => Number(row.id));
+    await pool.query(
+      `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()`,
+      [`${PERSONAL_AVOID_KEY_PREFIX}${userId}`, JSON.stringify(valid), String(userId)]
+    );
+    res.json({ ok: true, selected: valid });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }
