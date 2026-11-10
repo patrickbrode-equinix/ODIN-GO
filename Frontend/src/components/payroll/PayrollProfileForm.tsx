@@ -7,6 +7,8 @@ import { DEFAULT_PROFILE, validateProfile, type ExtraItem, type PayrollProfile }
 interface Props {
   initial: PayrollProfile | null;
   saving: boolean;
+  /** error of the last save attempt (shown right at the save button) */
+  saveError?: string;
   onSave: (profile: PayrollProfile) => void;
   onCancel?: () => void;
 }
@@ -60,8 +62,8 @@ function NumberInput({ value, onChange, step = 1, suffix, min = 0 }: { value: nu
   );
 }
 
-export function PayrollProfileForm({ initial, saving, onSave, onCancel }: Props) {
-  const [profile, setProfile] = useState<PayrollProfile>(initial ?? { ...DEFAULT_PROFILE, annualGross: Number.NaN });
+export function PayrollProfileForm({ initial, saving, saveError, onSave, onCancel }: Props) {
+  const [profile, setProfile] = useState<PayrollProfile>(initial ? { ...DEFAULT_PROFILE, ...initial } : { ...DEFAULT_PROFILE, annualGross: Number.NaN });
   const [errors, setErrors] = useState<string[]>([]);
   const patch = <K extends keyof PayrollProfile>(key: K, value: PayrollProfile[K]) => setProfile((current) => ({ ...current, [key]: value }));
 
@@ -79,10 +81,19 @@ export function PayrollProfileForm({ initial, saving, onSave, onCancel }: Props)
         <Field label="Monatsstunden laut Vertrag" hint="Standard im Betrieb: 174 h"><NumberInput value={profile.monthlyHours} onChange={(value) => patch("monthlyHours", value)} step={0.5} suffix="h" /></Field>
       </Section>
 
+      <Section title="Bundesland" hint="Bestimmt die Feiertage (Zuschläge) und den Kirchensteuersatz.">
+        <Field label="Bundesland" hint={profile.state === "BY" ? "Bayern: Kirchensteuer 8 %, Feiertage inkl. Heilige Drei Könige, Mariä Himmelfahrt und Allerheiligen" : "Hessen: Kirchensteuer 9 %, Feiertage inkl. Fronleichnam"}>
+          <select value={profile.state} onChange={(event) => patch("state", event.target.value as PayrollProfile["state"])} className={field}>
+            <option value="HE">Hessen</option>
+            <option value="BY">Bayern</option>
+          </select>
+        </Field>
+      </Section>
+
       <Section title="Persönliches" hint="Für Pflegeversicherung (Kinderlosenzuschlag ab 23, Abschlag bei mehreren Kindern) und Lohnsteuer.">
         <Field label="Geburtsjahr"><NumberInput value={profile.birthYear} onChange={(value) => patch("birthYear", value)} min={1940} /></Field>
         <Field label="Kinder unter 25 Jahren" hint="Anzahl der Kinder (für die Pflegeversicherung)"><NumberInput value={profile.childrenUnder25} onChange={(value) => patch("childrenUnder25", value)} /></Field>
-        <Field label="Konfession" hint="Kirchensteuer Hessen: 9 %">
+        <Field label="Konfession" hint={profile.state === "BY" ? "Kirchensteuer Bayern: 8 %" : "Kirchensteuer Hessen: 9 %"}>
           <select value={profile.confession} onChange={(event) => patch("confession", event.target.value as PayrollProfile["confession"])} className={field}>
             <option value="none">keine / nicht kirchensteuerpflichtig</option>
             <option value="ev">evangelisch</option>
@@ -123,7 +134,7 @@ export function PayrollProfileForm({ initial, saving, onSave, onCancel }: Props)
         </div>
       </Section>
 
-      <Section title="Zuschläge laut Arbeitsvertrag" hint="Prozent vom Grundstundenlohn. Steuerfrei sind (Betriebsregel) 25 % Nacht, 40 % Sonntag und 100 % Feiertag je Stunde; nur der Teil darüber ist steuerpflichtig.">
+      <Section title="Zuschläge laut Arbeitsvertrag" hint="Prozent vom Grundstundenlohn. Alle Zuschläge sind steuerfrei: 25 % je Stunde für Spät/Nacht ab 20 Uhr, 40 % für Sonntage (ganztägig) und 100 % für Feiertage (24.12. und 31.12. nur der halbe Tag).">
         <Field label="Nacht- / Spätzuschlag (20–6 Uhr)"><NumberInput value={profile.nightRatePercent} onChange={(value) => patch("nightRatePercent", value)} suffix="%" /></Field>
         <Field label="Sonntagszuschlag"><NumberInput value={profile.sundayRatePercent} onChange={(value) => patch("sundayRatePercent", value)} suffix="%" /></Field>
         <Field label="Feiertagszuschlag"><NumberInput value={profile.holidayRatePercent} onChange={(value) => patch("holidayRatePercent", value)} suffix="%" /></Field>
@@ -140,8 +151,8 @@ export function PayrollProfileForm({ initial, saving, onSave, onCancel }: Props)
       <section className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-bold text-white">Weitere Zulagen und Abzüge (monatlich)</h3>
-            <p className="mt-1 text-xs text-slate-400">Zum Beispiel Schichtzulage, Jobticket, Fahrtkosten oder Vorschuss. Sie fließen in jede Monatsabrechnung ein.</p>
+            <h3 className="text-sm font-bold text-white">Abzüge und zusätzliche Einnahmen (pro Monat)</h3>
+            <p className="mt-1 text-xs text-slate-400">Zusätzliche Einnahmen (z. B. Schichtzulage, Fahrtkostenerstattung) und Abzüge (z. B. Vorschuss, vermögenswirksame Leistungen). Sie fließen in jede Monatsabrechnung ein.</p>
           </div>
           <button type="button" onClick={() => patch("extras", [...profile.extras, { id: `x${Date.now()}`, label: "", amount: 0, kind: "gross-taxable" }])}
             className="inline-flex h-9 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.06] px-3 text-xs font-semibold text-slate-100 hover:bg-white/10"><Plus className="h-4 w-4" />Hinzufügen</button>
@@ -170,6 +181,7 @@ export function PayrollProfileForm({ initial, saving, onSave, onCancel }: Props)
         </div>
       ) : null}
 
+      {saveError ? <div role="alert" className="rounded-2xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">{saveError}</div> : null}
       <div className="flex flex-wrap justify-end gap-3">
         {onCancel ? <button type="button" onClick={onCancel} className="h-10 rounded-xl border border-white/10 px-4 text-sm font-semibold text-slate-200 hover:bg-white/10">Abbrechen</button> : null}
         <button type="button" onClick={submit} disabled={saving} className="h-10 rounded-xl bg-gradient-to-b from-blue-400 to-blue-600 px-6 text-sm font-bold text-white shadow-lg shadow-blue-900/40 disabled:opacity-60">{saving ? "Verschlüssele und speichere …" : "Verschlüsselt speichern"}</button>

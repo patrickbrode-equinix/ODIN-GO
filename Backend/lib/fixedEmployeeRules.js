@@ -61,3 +61,48 @@ export function violatesNeverTogether(rule, typeA, typeB, weekday) {
   if (rule.weekendDays && (weekday === 0 || weekday === 6)) return true;
   return false;
 }
+
+/* ------------------------------------------------ */
+/* Groups who are planned together when possible     */
+/* ------------------------------------------------ */
+
+// Fixed in code (soft: "if it works"): the generator rewards every shift that puts these people into the
+// same shift type as a partner who is already planned. Matching uses first and last name tokens
+// (order and "Last, First" notation do not matter).
+const TOGETHER_GROUPS = [
+  {
+    label: 'Marco / Mustafar',
+    members: [[['marco', 'dessi']], [['mustafa', 'sherzai'], ['mustafar', 'sherzai']]],
+    shiftTypes: ['early', 'late', 'night'],
+    nightTeam: false,
+  },
+  {
+    label: 'Nachtteam Noah Schauer / Marco Dessi / Mustafa Sherzai / Patrick Brode',
+    members: [[['noah', 'schauer']], [['marco', 'dessi']], [['mustafa', 'sherzai'], ['mustafar', 'sherzai']], [['patrick', 'brode']]],
+    shiftTypes: ['night'],
+    nightTeam: true,
+  },
+];
+
+function matchesMember(name, alternatives) {
+  const own = nameTokens(name);
+  return alternatives.some((tokens) => tokens.every((token) => own.includes(token)));
+}
+
+/** Partners of `name` (taken from `candidates`) with the shift types in which they should be together. */
+export function getTogetherPartners(name, candidates) {
+  const result = [];
+  for (const group of TOGETHER_GROUPS) {
+    if (!group.members.some((member) => matchesMember(name, member))) continue;
+    for (const other of candidates) {
+      if (other === name || !group.members.some((member) => matchesMember(other, member))) continue;
+      result.push({ partner: other, shiftTypes: group.shiftTypes, label: group.label });
+    }
+  }
+  return result;
+}
+
+/** True for the people of the preferred night team (Noah, Marco, Mustafar, Patrick Brode). */
+export function isNightTeamMember(name) {
+  return TOGETHER_GROUPS.some((group) => group.nightTeam && group.members.some((member) => matchesMember(name, member)));
+}

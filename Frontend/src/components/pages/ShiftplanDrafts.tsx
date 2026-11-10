@@ -425,6 +425,7 @@ export default function ShiftplanDrafts() {
           if (activeDraft) void exportDraft(activeDraft, "management", include);
         }}
       />
+      <div className="sticky top-0 z-30 rounded-xl border border-slate-700 bg-slate-900/95 px-4 py-2 backdrop-blur-md"><ShiftTimeLegend shiftTimes={shiftTimes} showTitle /></div>
       <section className="rounded-xl border border-slate-700 bg-slate-900 p-6 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div className="max-w-3xl">
@@ -498,7 +499,6 @@ export default function ShiftplanDrafts() {
                     </div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2" aria-label="Farblegende Schichten">{SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-bold"><strong>{item.code}</strong>{item.label}</span>)}<ColoLegend isGerman />{activeDraft.config_snapshot?.planReport?.colo?.enabled ? <span className="inline-flex items-center gap-2 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-xs font-bold text-cyan-100"><strong>Colo</strong>{activeDraft.config_snapshot.planReport.colo.assigned}/{activeDraft.config_snapshot.planReport.colo.requiredAssignments} besetzt</span> : (activeDraft.config_snapshot?.planReport?.colo ? <span className="inline-flex items-center gap-2 rounded-md border border-amber-400/40 bg-amber-500/10 px-2.5 py-1 text-xs font-bold text-amber-100"><strong>Colo</strong>Colo-Planung ist in den Admin-Einstellungen ausgeschaltet, deshalb gibt es keine COLO-Markierungen</span> : null)}<span className="inline-flex items-center gap-2 rounded-md border border-orange-400/40 bg-orange-500/10 px-2.5 py-1 text-xs font-bold text-orange-100"><strong>Ü</strong>= Überbesetzung Spätschicht (Do/Fr)</span><span className="inline-flex items-center gap-2 rounded-md border border-sky-400/40 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-100"><strong>✎</strong>= manuell geändert</span></div>
-                  <ShiftTimeLegend shiftTimes={shiftTimes} className="mt-2" />
                   <DraftSettingsPanel settings={activeDraft.config_snapshot?.planningSettings} isGerman />
                 </section>
 

@@ -9,6 +9,7 @@
 /* until they are updated), church tax Hessen 9 %.  */
 /* ================================================ */
 
+export type FederalState = "HE" | "BY";
 export type Confession = "none" | "ev" | "rk";
 export type HealthInsurance = "statutory" | "private";
 
@@ -23,6 +24,8 @@ export interface ExtraItem {
 
 export interface PayrollProfile {
   version: 1;
+  /** federal state: decides the public holidays and the church tax rate (Hessen 9 %, Bayern 8 %) */
+  state: FederalState;
   /** yearly gross salary in EUR */
   annualGross: number;
   /** contractual monthly hours the hourly basic wage is derived from (default 174) */
@@ -62,6 +65,7 @@ export interface MonthHours {
 
 export const DEFAULT_PROFILE: PayrollProfile = {
   version: 1,
+  state: "HE",
   annualGross: 0,
   monthlyHours: 174,
   taxClass: 1,
@@ -96,6 +100,7 @@ export const PARAMS = {
   soliThresholdSplit: 40700,
   soliRate: 0.055,
   churchTaxRateHessen: 0.09,
+  churchTaxRateBayern: 0.08,
   contributionCeilingPensionMonthly: 8450,
   contributionCeilingHealthMonthly: 5812.5,
   pensionEmployee: 0.093,
@@ -228,7 +233,7 @@ export function calculateMonth(profile: PayrollProfile, hours: MonthHours, year:
   const sundayOnly = Math.max(hours.sundayHours - hours.holidayHours, 0);
 
   const supplements = [
-    supplementLine("night", "Nachtzuschlag (20–6 Uhr)", hours.nightHours, hourlyWage, profile.nightRatePercent, profile.nightFreePercent),
+    supplementLine("night", "Spät-/Nachtzuschlag (ab 20 Uhr)", hours.nightHours, hourlyWage, profile.nightRatePercent, profile.nightFreePercent),
     supplementLine("sunday", "Sonntagszuschlag", sundayOnly, hourlyWage, profile.sundayRatePercent, profile.sundayFreePercent),
     supplementLine("holiday", "Feiertagszuschlag", hours.holidayHours, hourlyWage, profile.holidayRatePercent, profile.holidayFreePercent),
   ];
@@ -281,7 +286,7 @@ export function calculateMonth(profile: PayrollProfile, hours: MonthHours, year:
     : yearlyTax;
   const incomeTaxMonthly = yearlyTax / 12;
   const soliMonthly = soli(taxBaseForSurcharges, profile.taxClass) / 12;
-  const churchMonthly = profile.confession === "none" ? 0 : (taxBaseForSurcharges * PARAMS.churchTaxRateHessen) / 12;
+  const churchMonthly = profile.confession === "none" ? 0 : (taxBaseForSurcharges * (profile.state === "BY" ? PARAMS.churchTaxRateBayern : PARAMS.churchTaxRateHessen)) / 12;
   const taxesTotal = incomeTaxMonthly + soliMonthly + churchMonthly;
 
   const netPay = grossTotal - taxesTotal - socialTotal + netExtrasAdd - netExtrasDeduct;

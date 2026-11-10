@@ -4,11 +4,11 @@
 /* ------------------------------------------------ */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ChevronLeft, ChevronRight, Lock, LockKeyhole, Pencil, ShieldCheck, Trash2, Wallet } from "lucide-react";
+import { AlertTriangle, FileText, Lock, LockKeyhole, ShieldCheck, Trash2, UserRound, Wallet } from "lucide-react";
 import { api } from "../../api/api";
 import { PayrollProfileForm } from "../payroll/PayrollProfileForm";
 import { PayrollStatement, type MonthShift, type MonthTotals } from "../payroll/PayrollStatement";
-import { calculateMonth, type PayrollProfile } from "../../utils/payrollEngine";
+import { DEFAULT_PROFILE, calculateMonth, type PayrollProfile } from "../../utils/payrollEngine";
 import {
   decryptProfile, deriveKey, encryptProfile, forgetKeyForTab, fromBase64, KDF_ITERATIONS, rememberKeyForTab, restoreKeyForTab, type EncryptedProfile,
 } from "../../utils/payrollCrypto";
@@ -16,16 +16,18 @@ import {
 const MONTHS = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
 const REFRESH_MS = 60_000;
 
-type Phase = "loading" | "unavailable" | "create-password" | "setup" | "locked" | "ready" | "edit";
+type Phase = "loading" | "unavailable" | "create-password" | "locked" | "ready";
+type Tab = "data" | "statement";
 
-const Disclaimer = () => (
-  <div role="note" className="flex gap-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-xs leading-relaxed text-amber-100">
-    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+const Disclaimer = ({ state }: { state: PayrollProfile["state"] }) => (
+  <div role="note" className="flex gap-3 rounded-2xl border border-amber-400/40 bg-amber-500/10 p-4 text-sm leading-relaxed text-amber-100">
+    <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
     <p>
-      <b>Wichtiger Hinweis:</b> Diese Abrechnung ist eine reine <b>Näherung</b> und keine Gehaltsabrechnung. Sie rechnet vereinfacht mit den Werten für Hessen
-      (Einkommensteuertarif und Sozialversicherung 2026, Kirchensteuer 9 %, Zuschlagsbegrenzungen nach Betriebsvorgabe). Abweichungen durch individuelle Merkmale,
-      Einmalzahlungen, Besonderheiten der Steuerklassen 5 und 6, Beitragsbemessungsgrenzen oder spätere Gesetzesänderungen sind möglich. Verbindlich ist allein die
-      Abrechnung der Entgeltabrechnung des Arbeitgebers.
+      <b>Wichtiger Hinweis: Das ist eine Näherung und keine 100-prozentige Aussage.</b> Die Abrechnung ist keine Gehaltsabrechnung. Sie rechnet vereinfacht
+      mit den Werten für {state === "BY" ? "Bayern (Kirchensteuer 8 %)" : "Hessen (Kirchensteuer 9 %)"}, dem Einkommensteuertarif und der Sozialversicherung 2026.
+      Zuschläge: Feiertage 100 % (24.12. und 31.12. nur der halbe Tag), Sonntage 40 % je Stunde ganztägig, Spät/Nacht 25 % je Stunde ab 20 Uhr, alle steuerfrei.
+      Abweichungen durch individuelle Merkmale, Einmalzahlungen, Besonderheiten der Steuerklassen 5 und 6 oder spätere Gesetzesänderungen sind möglich.
+      Verbindlich ist allein die Abrechnung der Entgeltabrechnung des Arbeitgebers.
     </p>
   </div>
 );
@@ -56,6 +58,10 @@ export default function PayrollPage() {
   const [passwordRepeat, setPasswordRepeat] = useState("");
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
+  const [tab, setTab] = useState<Tab>("data");
+  const [availableMonths, setAvailableMonths] = useState<string[]>([]);
+  const [monthsLoaded, setMonthsLoaded] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [hours, setHours] = useState<{ totals: MonthTotals | null; shifts: MonthShift[]; matched: boolean; planned: boolean }>({ totals: null, shifts: [], matched: true, planned: true });
 
   /* ---- load the encrypted profile and try the key of this tab ---- */
@@ -74,7 +80,8 @@ export default function PayrollPage() {
           try {
             const decrypted = await decryptProfile(payload, remembered);
             keyRef.current = remembered;
-            setProfile(decrypted);
+            setProfile({ ...DEFAULT_PROFILE, ...decrypted });
+            setTab("statement");
             setPhase("ready");
             return;
           } catch { /* key of an old profile: ask for the password */ }
@@ -92,18 +99,37 @@ export default function PayrollPage() {
   /* ---- plan hours: reloaded every minute and when the tab is focused again (swapped shifts, new supplements) ---- */
   const loadHours = useCallback(async () => {
     try {
-      const response = await api.get("/payroll/month-hours", { params: { year, month } });
+      const response = await api.get("/payroll/month-hours", { params: { year, month, state: profile?.state ?? "HE" } });
       setHours({ totals: response.data?.totals ?? null, shifts: response.data?.shifts ?? [], matched: response.data?.matched !== false, planned: response.data?.planned !== false });
     } catch { /* keep the last values */ }
-  }, [year, month]);
+  }, [year, month, profile?.state]);
   useEffect(() => {
-    if (phase !== "ready") return;
+    if (phase !== "ready" || !profile || tab !== "statement") return;
     void loadHours();
     const timer = window.setInterval(() => void loadHours(), REFRESH_MS);
     const onVisible = () => { if (document.visibilityState === "visible") void loadHours(); };
     document.addEventListener("visibilitychange", onVisible);
     return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
-  }, [phase, loadHours]);
+  }, [phase, profile, tab, loadHours]);
+
+  /* ---- months that have a plan for this person ---- */
+  useEffect(() => {
+    if (phase !== "ready") return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await api.get("/payroll/months");
+        if (cancelled) return;
+        const months: string[] = Array.isArray(response.data?.months) ? response.data.months : [];
+        setAvailableMonths(months);
+        const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+        const pick = months.includes(current) ? current : (months.find((id) => id <= current) ?? months[0]);
+        if (pick) { setYear(Number(pick.slice(0, 4))); setMonth(Number(pick.slice(5, 7))); }
+      } catch { /* the selection stays empty */ } finally { if (!cancelled) setMonthsLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   const result = useMemo(() => {
     if (!profile) return null;
@@ -128,7 +154,10 @@ export default function PayrollPage() {
       keyRef.current = await deriveKey(password, salt);
       saltRef.current = salt;
       setPassword(""); setPasswordRepeat("");
-      setPhase("setup");
+      await rememberKeyForTab(keyRef.current);
+      setProfile(null);
+      setTab("data");
+      setPhase("ready");
     } catch { setError("Die Verschlüsselung steht in diesem Browser nicht zur Verfügung."); }
     finally { setBusy(false); }
   };
@@ -142,8 +171,9 @@ export default function PayrollPage() {
       const decrypted = await decryptProfile(stored, key);
       keyRef.current = key;
       await rememberKeyForTab(key);
-      setProfile(decrypted);
+      setProfile({ ...DEFAULT_PROFILE, ...decrypted });
       setPassword("");
+      setTab("statement");
       setPhase("ready");
     } catch { setError("Falsches Passwort."); }
     finally { setBusy(false); }
@@ -152,18 +182,20 @@ export default function PayrollPage() {
   const save = async (next: PayrollProfile) => {
     if (!keyRef.current || !saltRef.current) return;
     setBusy(true);
-    setError("");
+    setSaveError("");
     try {
       await persist(next, keyRef.current, saltRef.current);
       await rememberKeyForTab(keyRef.current);
       setProfile(next);
-      setPhase("ready");
+      setTab("statement");
     } catch (requestError: any) {
-      setError(requestError?.response?.data?.message || "Das Profil konnte nicht gespeichert werden.");
+      const status = requestError?.response?.status;
+      setSaveError(requestError?.response?.data?.message
+        || (status === 403 ? "Die Abrechnung ist nur mit dem persönlichen Jarvis-Login verfügbar." : status ? `Das Profil konnte nicht gespeichert werden (Serverfehler ${status}). Bitte melde das der Administration.` : "Das Profil konnte nicht gespeichert werden (keine Verbindung zum Server)."));
     } finally { setBusy(false); }
   };
 
-  const lock = () => { forgetKeyForTab(); keyRef.current = null; setProfile(null); setPassword(""); setPhase("locked"); };
+  const lock = () => { forgetKeyForTab(); keyRef.current = null; setProfile(null); setPassword(""); setTab("data"); setPhase(stored ? "locked" : "create-password"); };
 
   const resetProfile = async () => {
     if (!window.confirm("Dein verschlüsseltes Abrechnungsprofil wird gelöscht. Du kannst danach neu beginnen. Fortfahren?")) return;
@@ -171,14 +203,9 @@ export default function PayrollPage() {
       await api.delete("/payroll/profile");
       forgetKeyForTab();
       keyRef.current = null; saltRef.current = null; setStored(null); setProfile(null); setPassword(""); setPasswordRepeat("");
+      setTab("data");
       setPhase("create-password");
     } catch { setError("Das Profil konnte nicht gelöscht werden."); }
-  };
-
-  const shiftMonth = (delta: number) => {
-    const date = new Date(year, month - 1 + delta, 1);
-    setYear(date.getFullYear());
-    setMonth(date.getMonth() + 1);
   };
 
   const shell = "mx-auto w-full max-w-6xl space-y-5 px-4 py-5 lg:px-6";
@@ -226,37 +253,64 @@ export default function PayrollPage() {
     );
   }
 
-  if (phase === "setup" || phase === "edit") {
-    return (
-      <div className={shell}>
-        {header}
-        <PrivacyNote />
-        {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
-        <PayrollProfileForm initial={phase === "edit" ? profile : null} saving={busy} onSave={(next) => void save(next)} onCancel={phase === "edit" ? () => setPhase("ready") : undefined} />
-        <Disclaimer />
-      </div>
-    );
-  }
+  const monthId = `${year}-${String(month).padStart(2, "0")}`;
+  const tabButton = (id: Tab, label: string, icon: React.ReactNode, disabled = false) => (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={tab === id}
+      disabled={disabled}
+      onClick={() => setTab(id)}
+      className={`inline-flex h-11 items-center gap-2 rounded-xl px-5 text-sm font-bold transition ${tab === id ? "bg-gradient-to-b from-blue-400 to-blue-600 text-white shadow-lg shadow-blue-900/40" : "border border-white/10 bg-white/[0.05] text-slate-200 hover:bg-white/10"} disabled:cursor-not-allowed disabled:opacity-40`}
+    >{icon}{label}</button>
+  );
 
   return (
     <div className={shell}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         {header}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex items-center rounded-xl border border-white/10 bg-white/[0.05]">
-            <button type="button" aria-label="Vormonat" onClick={() => shiftMonth(-1)} className="grid h-10 w-10 place-items-center text-slate-300 hover:text-white"><ChevronLeft className="h-4 w-4" /></button>
-            <span className="min-w-36 text-center text-sm font-bold text-white">{MONTHS[month - 1]} {year}</span>
-            <button type="button" aria-label="Folgemonat" onClick={() => shiftMonth(1)} className="grid h-10 w-10 place-items-center text-slate-300 hover:text-white"><ChevronRight className="h-4 w-4" /></button>
-          </div>
-          <button type="button" onClick={() => setPhase("edit")} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-3 text-xs font-semibold text-slate-100 hover:bg-white/10"><Pencil className="h-4 w-4" />Daten bearbeiten</button>
           <button type="button" onClick={lock} className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.05] px-3 text-xs font-semibold text-slate-100 hover:bg-white/10"><Lock className="h-4 w-4" />Sperren</button>
           <button type="button" onClick={() => void resetProfile()} aria-label="Profil löschen" title="Profil löschen" className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 text-red-300 hover:bg-red-500/10"><Trash2 className="h-4 w-4" /></button>
         </div>
       </div>
+
+      <div role="tablist" aria-label="Abrechnung" className="flex flex-wrap gap-2">
+        {tabButton("data", "Meine Daten", <UserRound className="h-4 w-4" />)}
+        {tabButton("statement", "Abrechnung", <FileText className="h-4 w-4" />, !profile)}
+      </div>
       {error ? <p role="alert" className="text-sm text-red-300">{error}</p> : null}
-      {result ? <PayrollStatement result={result} totals={hours.totals} shifts={hours.shifts} monthLabel={`${MONTHS[month - 1]} ${year}`} matched={hours.matched} planned={hours.planned} /> : null}
-      <Disclaimer />
-      <PrivacyNote />
+
+      {tab === "data" || !profile ? (
+        <div className="space-y-4">
+          {!profile ? <div role="status" className="rounded-2xl border border-blue-400/30 bg-blue-500/10 p-4 text-sm text-blue-100">Dein Passwort ist festgelegt. Trage jetzt deine Daten ein (Jahresbrutto, Steuerklasse, Kinder, Bundesland, Abzüge und zusätzliche Einnahmen) und speichere sie ganz unten mit „Verschlüsselt speichern“. Danach siehst du deine Abrechnung.</div> : null}
+          <PrivacyNote />
+          <PayrollProfileForm key={profile ? "edit" : "new"} initial={profile} saving={busy} saveError={saveError} onSave={(next) => void save(next)} onCancel={profile ? () => setTab("statement") : undefined} />
+        </div>
+      ) : (
+        <div className="space-y-5">
+          <Disclaimer state={profile.state} />
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+            <label htmlFor="payroll-month" className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">Monat</label>
+            <select
+              id="payroll-month"
+              value={availableMonths.includes(monthId) ? monthId : ""}
+              onChange={(event) => { const id = event.target.value; if (id) { setYear(Number(id.slice(0, 4))); setMonth(Number(id.slice(5, 7))); } }}
+              disabled={availableMonths.length === 0}
+              className="h-10 min-w-48 rounded-xl border border-white/10 bg-slate-950/70 px-3 text-sm font-semibold text-slate-100"
+            >
+              {availableMonths.length === 0 ? <option value="">{monthsLoaded ? "Kein Monat verfügbar" : "Lade …"}</option> : null}
+              {availableMonths.map((id) => <option key={id} value={id}>{MONTHS[Number(id.slice(5, 7)) - 1]} {id.slice(0, 4)}</option>)}
+            </select>
+            <span className="text-xs text-slate-400">{profile.state === "BY" ? "Bayern" : "Hessen"} · Monate, für die ein Dienstplan mit deinen Schichten vorliegt</span>
+          </div>
+          {monthsLoaded && availableMonths.length === 0 ? (
+            <div role="status" className="rounded-2xl border border-amber-400/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">Für dich liegt noch kein Dienstplan vor. Sobald Schichten für dich geplant sind, erscheint der Monat hier.</div>
+          ) : result && availableMonths.includes(monthId) ? (
+            <PayrollStatement result={result} totals={hours.totals} shifts={hours.shifts} monthLabel={`${MONTHS[month - 1]} ${year}`} matched={hours.matched} planned={hours.planned} state={profile.state} />
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

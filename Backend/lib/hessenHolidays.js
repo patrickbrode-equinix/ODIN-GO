@@ -54,3 +54,23 @@ export function buildHessenHolidayMap(year) {
 
   return map;
 }
+
+/**
+ * Public holidays of Bayern (plus the same company holidays as Hessen). Mariä Himmelfahrt (15.8.) applies in
+ * communities with a mainly Catholic population only; it is counted here as the estimate is for the larger part.
+ */
+export function buildBayernHolidayMap(year) {
+  const easter = easterSunday(year);
+  const map = buildHessenHolidayMap(year);
+  map[toIsoDate(new Date(year, 0, 6))] = 'Heilige Drei Könige';
+  map[toIsoDate(new Date(year, 7, 15))] = 'Mariä Himmelfahrt';
+  map[toIsoDate(new Date(year, 10, 1))] = 'Allerheiligen';
+  void easter;
+  return map;
+}
+
+export const HOLIDAY_STATES = ['HE', 'BY'];
+
+export function buildHolidayMap(year, state = 'HE') {
+  return state === 'BY' ? buildBayernHolidayMap(year) : buildHessenHolidayMap(year);
+}

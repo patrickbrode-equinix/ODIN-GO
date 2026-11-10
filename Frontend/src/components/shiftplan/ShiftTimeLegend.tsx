@@ -16,12 +16,19 @@ type ShiftTimeLegendProps = {
   shiftTimes?: ShiftTimeMap;
   className?: string;
   compact?: boolean;
+  /** show the heading "Schichtzeiten" before the chips */
+  showTitle?: boolean;
 };
 
-export function ShiftTimeLegend({ shiftTimes = {}, className = "", compact = false }: ShiftTimeLegendProps) {
-  const visibleCodes = shiftTimes.NK ? CORE_SHIFT_CODES : CORE_SHIFT_CODES.filter((code) => code !== "NK");
+export function ShiftTimeLegend({ shiftTimes = {}, className = "", compact = false, showTitle = false }: ShiftTimeLegendProps) {
+  const loaded = Object.keys(shiftTimes).length > 0;
+  // Times come from the shift definitions (admin settings). The built-in defaults are shown only while nothing is loaded.
+  const visibleCodes = loaded
+    ? CORE_SHIFT_CODES.filter((code) => Boolean(shiftTimes[code]))
+    : CORE_SHIFT_CODES.filter((code) => code !== "NK");
   return (
     <div className={`flex flex-wrap items-center gap-1.5 ${className}`} aria-label="Schichtzeiten">
+      {showTitle ? <span className="text-[10px] font-bold uppercase tracking-[0.14em] text-muted-foreground">Schichtzeiten (aktuell):</span> : null}
       {visibleCodes.map((code) => (
         <span
           key={code}
@@ -29,7 +36,7 @@ export function ShiftTimeLegend({ shiftTimes = {}, className = "", compact = fal
           className={`inline-flex items-center gap-1 rounded-md border font-bold ${compact ? "px-1.5 py-0.5 text-[9px]" : "px-2 py-1 text-[10px]"}`}
         >
           <strong>{code}</strong>
-          <span className="whitespace-nowrap opacity-90">{shiftTimes[code] || DEFAULT_SHIFT_TIMES[code]}</span>
+          <span className="whitespace-nowrap opacity-90">{loaded ? shiftTimes[code] : DEFAULT_SHIFT_TIMES[code]}</span>
         </span>
       ))}
     </div>

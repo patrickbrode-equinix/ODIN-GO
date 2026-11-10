@@ -32,3 +32,23 @@ test('supplement hours come from the real shift times (night 20-6, Sunday, holid
   assert.equal(result.totals.workedShifts, 4);
   assert.equal(result.totals.absenceDays, 1);
 });
+
+test('federal state decides the holidays: 6.1. and 1.11. are holidays in Bayern only', () => {
+  // 2027-01-06 is a Wednesday, 2027-11-01 a Monday
+  const he = buildEmployeeMonthHours({ year: 2027, month: 1, shifts: [{ day: 6, shift_code: 'E1' }], definitions, state: 'HE' });
+  const by = buildEmployeeMonthHours({ year: 2027, month: 1, shifts: [{ day: 6, shift_code: 'E1' }], definitions, state: 'BY' });
+  assert.equal(he.totals.holidayHours, 0);
+  assert.ok(by.totals.holidayHours >= 7.9, 'Heilige Drei Könige counts in Bayern');
+  const allSaints = buildEmployeeMonthHours({ year: 2027, month: 11, shifts: [{ day: 1, shift_code: 'E1' }], definitions, state: 'BY' });
+  assert.ok(allSaints.totals.holidayHours >= 7.9, 'Allerheiligen counts in Bayern');
+});
+
+test('24.12. and 31.12. count as holiday only from 12:00 (half day), 25.12. fully', () => {
+  const late = [{ code: 'L1', duration_hours: 8, start_time: '13:00', end_time: '21:00', start_day_offset: 0, end_day_offset: 0 }, ...definitions];
+  const early = buildEmployeeMonthHours({ year: 2027, month: 12, shifts: [{ day: 24, shift_code: 'E1' }, { day: 25, shift_code: 'E1' }], definitions });
+  const byDate = Object.fromEntries(early.shifts.map((row) => [row.date, row]));
+  assert.ok(byDate['2027-12-24'].holiday < 4, '24.12. morning shift: mostly before noon, only a small part is holiday');
+  assert.ok(byDate['2027-12-25'].holiday >= 7.9, '25.12. is a full holiday');
+  const afternoon = buildEmployeeMonthHours({ year: 2027, month: 12, shifts: [{ day: 31, shift_code: 'L1' }], definitions: late });
+  assert.ok(afternoon.totals.holidayHours >= 7.9, '31.12. afternoon shift is fully after noon');
+});

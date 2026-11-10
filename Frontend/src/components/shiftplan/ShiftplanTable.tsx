@@ -294,7 +294,7 @@ export function ShiftplanTable({
         {/* One scrollbar only: the page (outer) scrolls both axes; the date header sticks to its top and the name column to its left. */}
         <div className="shiftplan-schedule-table rounded-xl border border-white/10 bg-[#0f111a]">
           <table ref={tableRef} className="w-full border-collapse text-left">
-            <thead className="sticky top-0 bg-[#0f111a]/95 backdrop-blur-md z-40 border-b border-white/10 shadow-sm">
+            <thead className="sticky top-[var(--shiftplan-month-bar,0px)] bg-[#0f111a]/95 backdrop-blur-md z-40 border-b border-white/10 shadow-sm">
               {/* KW GROUPS */}
               {/* wir überspringen die KW Gruppe, weil das im Screenshot nicht mehr drin ist, aber wir behalten es falls gewünscht - minimal invasiv: wir machen es extrem flach / borderles */}
               <tr className="border-b border-white/5 bg-white/[0.02]">

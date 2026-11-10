@@ -20,7 +20,7 @@ function pad2(value) {
  * Returns { shifts: [{ date, code, hours, night, sunday, holiday }], totals }.
  * Hours that are Sunday AND holiday are kept in both fields; the payroll engine counts them as holiday only.
  */
-export function buildEmployeeMonthHours({ year, month, shifts = [], definitions = [] }) {
+export function buildEmployeeMonthHours({ year, month, shifts = [], definitions = [], state = 'HE' }) {
   const byCode = new Map(definitions.map((definition) => [String(definition.code || '').trim().toUpperCase(), definition]));
   const rows = [];
   const totals = { workedShifts: 0, workedHours: 0, nightHours: 0, sundayHours: 0, holidayHours: 0, absenceDays: 0 };
@@ -40,7 +40,7 @@ export function buildEmployeeMonthHours({ year, month, shifts = [], definitions 
     const paid = Number(definition?.duration_hours);
     const hours = Number.isFinite(paid) ? paid : 0;
     const supplement = definition
-      ? getSupplementHours({ year, month, day, definition, paidHours: hours })
+      ? getSupplementHours({ year, month, day, definition, paidHours: hours, state })
       : null;
     rows.push({ date, code, hours, night: supplement?.night ?? 0, sunday: supplement?.sunday ?? 0, holiday: supplement?.holiday ?? 0, worked: true });
     totals.workedShifts += 1;

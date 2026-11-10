@@ -95,3 +95,12 @@ describe("validation", () => {
     expect(validateProfile({ ...base, healthInsurance: "statutory", additionalContributionPercent: Number.NaN }).length).toBeGreaterThan(0);
   });
 });
+
+describe("federal state", () => {
+  it("church tax is 8 % in Bayern and 9 % in Hessen", () => {
+    const he = calculateMonth({ ...base, confession: "ev", state: "HE" }, none, 2027);
+    const by = calculateMonth({ ...base, confession: "ev", state: "BY" }, none, 2027);
+    expect(by.churchTax).toBeCloseTo(by.incomeTax * 0.08, 0);
+    expect(by.churchTax).toBeLessThan(he.churchTax);
+  });
+});

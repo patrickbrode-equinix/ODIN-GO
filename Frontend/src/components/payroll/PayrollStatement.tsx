@@ -75,8 +75,8 @@ function Donut({ net, taxes, social }: { net: number; taxes: number; social: num
   );
 }
 
-export function PayrollStatement({ result, totals, shifts, monthLabel, matched, planned }: {
-  result: PayrollResult; totals: MonthTotals | null; shifts: MonthShift[]; monthLabel: string; matched: boolean; planned: boolean;
+export function PayrollStatement({ result, totals, shifts, monthLabel, matched, planned, state }: {
+  result: PayrollResult; totals: MonthTotals | null; shifts: MonthShift[]; monthLabel: string; matched: boolean; planned: boolean; state: "HE" | "BY";
 }) {
   const animated = useCountUp(result.netPay);
   const [showShifts, setShowShifts] = useState(false);
@@ -131,7 +131,7 @@ export function PayrollStatement({ result, totals, shifts, monthLabel, matched, 
           <Block title="Steuern">
             <Row label="Lohnsteuer" value={`− ${euro(result.incomeTax)}`} tone="minus" />
             <Row label="Solidaritätszuschlag" value={`− ${euro(result.soli)}`} tone="minus" />
-            <Row label="Kirchensteuer (Hessen 9 %)" value={`− ${euro(result.churchTax)}`} tone="minus" />
+            <Row label={state === "BY" ? "Kirchensteuer (Bayern 8 %)" : "Kirchensteuer (Hessen 9 %)"} value={`− ${euro(result.churchTax)}`} tone="minus" />
             <div className="border-t border-white/10"><Row label="Steuern gesamt" value={`− ${euro(result.taxesTotal)}`} tone="minus" strong /></div>
           </Block>
           <Block title="Sozialversicherung (Arbeitnehmeranteil)">

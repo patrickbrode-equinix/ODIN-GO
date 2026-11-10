@@ -79,7 +79,7 @@ import {
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, focusCostControl } from '../lib/costControl.js';
-import { getNeverTogetherRule, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
+import { getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
 import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
@@ -1221,6 +1221,18 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // 1 = switched off). A single Saturday already counts as a weekend.
   const weekendGapSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.min_weekend_gap_weeks' LIMIT 1");
   const minWeekendGapWeeks = Math.min(Math.max(Math.trunc(parseNumberAppSetting(String(weekendGapSetting.rows[0]?.value ?? '').replace(/^"|"$/g, ''), 3)) || 3, 1), 6);
+  // Admin setting: employees who are not yet experienced. They are never planned into the same shift together and,
+  // in late and night shifts (little staff), always with an experienced colleague.
+  const inexperiencedSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.inexperienced_employees' LIMIT 1");
+  const inexperiencedKeys = new Set((() => {
+    try {
+      const raw = inexperiencedSetting.rows[0]?.value;
+      const list = Array.isArray(raw) ? raw : JSON.parse(String(raw || '[]'));
+      return Array.isArray(list) ? list.map((name) => coloNameKey(name)).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  })());
   const lateOverflowSetting = await pool.query("SELECT value FROM app_settings WHERE key = 'shiftplan.late_overflow_thu_fri' LIMIT 1");
   const lateOverflowEnabled = parseBooleanAppSetting(typeof lateOverflowSetting.rows[0]?.value === 'string'
     ? lateOverflowSetting.rows[0].value.replace(/^"|"$/g, '')
@@ -1508,6 +1520,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       : evaluation.hardBlocked;
   };
   const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesNeverTogetherOnDate(employee, dateStr, code)
+    || violatesInexperiencedOnDate(employee, dateStr, code)
     || isHardBlockedForPass(getShiftWishEvaluation(employee, dateStr, code), code);
   const getShiftWishPenaltyOnDate = (employee, dateStr, code) => getShiftWishEvaluation(employee, dateStr, code).penalty;
   // Month-level variant for the catch-up passes (no date / night count context).
@@ -1584,6 +1597,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return own.size > 0 ? own : other;
   };
   let violatesNeverTogetherOnDate = () => false;
+  let violatesInexperiencedOnDate = () => false;
   let planningCursorDay = 0;
   const totalWeekendBlocks = countWeekendBlocks(year, mon, numDays);
   // Last worked weekend of the previous month (Monday key) per employee, for the weekend spacing.
@@ -1663,7 +1677,18 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     return false;
   };
 
-  const wouldExceedEmployeeWeekendLimit = (employee, days) => {
+  // Weekend keys that the given days would add to the employee.
+  const newWeekendKeysFor = (employee, days) => {
+    const worked = empStats[employee].workedWeekendBlocks;
+    const keys = [];
+    for (const day of days) {
+      if (!isWeekend(year, mon, day)) continue;
+      const key = getWeekendBlockKey(year, mon, day);
+      if (!worked.has(key) && !keys.includes(key)) keys.push(key);
+    }
+    return keys;
+  };
+  const wouldExceedEmployeeWeekendLimit = (employee, days, { skipSpacing = false } = {}) => {
     const projected = new Set(empStats[employee].workedWeekendBlocks);
     const newKeys = [];
     for (const day of days) {
@@ -1673,7 +1698,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         projected.add(key);
       }
     }
-    if (violatesWeekendSpacing(employee, newKeys)) return true;
+    if (!skipSpacing && violatesWeekendSpacing(employee, newKeys)) return true;
     // The individual limit only blocks while its strength is 100 %; softer
     // strengths are penalised in the candidate scoring (max_weekends).
     const individualLimit = isHardStrength(prefStrength.max_weekends)
@@ -2007,6 +2032,31 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (!neverTogetherByEmployee.has(employee)) neverTogetherByEmployee.set(employee, []);
       neverTogetherByEmployee.get(employee).push({ partner: other, rule });
     }
+  }
+  // Inexperienced employees (admin setting): never two of them in the same shift type on one day.
+  const isInexperienced = (employee) => inexperiencedKeys.has(coloNameKey(employee));
+  const inexperiencedEmployees = activeEmployees.filter(isInexperienced);
+  // Shift type an employee works on a day: planned cell, or the running block of the employee (future days).
+  const shiftTypeOnDay = (employee, dayNumber) => {
+    let code = empDayAssignment[employee]?.[dayNumber] || null;
+    if (!code && dayNumber > planningCursorDay && empSeriesRemaining[employee] > 0 && dayNumber - planningCursorDay <= empSeriesRemaining[employee]) code = empSeriesCode[employee];
+    return code ? coloShiftTypeByCode.get(String(code).trim().toUpperCase()) : null;
+  };
+  violatesInexperiencedOnDate = (employee, dateStr, code) => {
+    if (inexperiencedEmployees.length < 2 || !isInexperienced(employee)) return false;
+    const dayNumber = Number.parseInt(String(dateStr).split('-').pop(), 10);
+    if (!Number.isInteger(dayNumber)) return false;
+    const ownType = coloShiftTypeByCode.get(String(code || '').trim().toUpperCase());
+    // Hard only where staff is scarce (late, night); in the large early shift it is a preference (see mentorRank).
+    if (ownType !== 'late' && ownType !== 'night') return false;
+    return inexperiencedEmployees.some((other) => other !== employee && shiftTypeOnDay(other, dayNumber) === ownType);
+  };
+
+  // Fixed groups who are planned together when possible (Marco + Mustafar, night team with Noah and Patrick Brode).
+  const togetherPartnersByEmployee = new Map();
+  for (const employee of activeEmployees) {
+    const partners = getTogetherPartners(employee, activeEmployees);
+    if (partners.length > 0) togetherPartnersByEmployee.set(employee, partners);
   }
   violatesNeverTogetherOnDate = (employee, dateStr, code) => {
     const partners = neverTogetherByEmployee.get(employee);
@@ -2370,7 +2420,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (rosterMismatch
         || !availableEmployeeSet.has(employee)
         || !availableShiftCodes.has(empSeriesCode[employee])
-        || wouldExceedEmployeeWeekendLimit(employee, [day])
+        || wouldExceedEmployeeWeekendLimit(employee, [day], { skipSpacing: coloShiftTypeByCode.get(String(empSeriesCode[employee] || '').trim().toUpperCase()) === 'night' })
         || isEmployeeShiftBlockedOnDate(employee, dateStr, empSeriesCode[employee])) {
         empSeriesCode[employee] = null;
         empSeriesRemaining[employee] = 0;
@@ -2658,11 +2708,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           }
 
           const individualWeekendLimit = Number.parseInt(String(prefs?.max_weekends_per_month ?? ''), 10);
-          if (wouldExceedEmployeeWeekendLimit(employee, Array.from(
-            { length: Math.min(seriesDays, planningEndDay - day + 1) }, (_, offset) => day + offset
-          ))) {
+          const blockDays = Array.from({ length: Math.min(seriesDays, planningEndDay - day + 1) }, (_, offset) => day + offset);
+          const isNightBlock = normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night';
+          if (wouldExceedEmployeeWeekendLimit(employee, blockDays, { skipSpacing: isNightBlock })) {
             hardBlocked = true;
             reasons.push('Harte Wochenendgrenze würde durch den geplanten Block überschritten');
+          } else if (isNightBlock && violatesWeekendSpacing(employee, newWeekendKeysFor(employee, blockDays))) {
+            // Every night block contains a weekend. The night minimum must hold, so the spacing only counts as a
+            // strong penalty here: people without a recent weekend are taken first, the others only when needed.
+            score -= 4000;
+            reasons.push(`Wochenendabstand unterschritten (Nachtblock): nur wenn die Nachtbesetzung sonst nicht erreicht wird`);
           }
           if (plannedWeekendKey
             && Number.isInteger(individualWeekendLimit)
@@ -2960,6 +3015,50 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             }
           }
 
+          // Fixed groups (lib/fixedEmployeeRules.js): same shift type as a partner who is already planned today or
+          // in a running block. Soft, so wishes, rest rules and the staffing limits still win.
+          // Late and night have little staff: an inexperienced person goes there only with an experienced colleague.
+          // Without one yet, experienced people are taken first (and the inexperienced one waits).
+          let mentorRank = 0;
+          if (!hardBlocked && inexperiencedEmployees.length > 0) {
+            const ownType = normalizePlanningShiftTypeKey(shiftDef.shift_type);
+            if (ownType === 'early') {
+              if (isInexperienced(employee) && activeEmployees.some((other) => other !== employee && isInexperienced(other) && shiftTypeOnDay(other, day) === 'early')) mentorRank = 1;
+            } else if (ownType === 'late' || ownType === 'night') {
+              const peers = activeEmployees.filter((other) => other !== employee && shiftTypeOnDay(other, day) === ownType);
+              const hasExperienced = peers.some((other) => !isInexperienced(other));
+              if (isInexperienced(employee) && !hasExperienced) {
+                mentorRank = 1;
+                reasons.push('Wenig Erfahrung: wird in Spät/Nacht erst nach einer erfahrenen Person eingeplant');
+              } else if (!isInexperienced(employee) && !hasExperienced && peers.some(isInexperienced)) {
+                mentorRank = -1;
+                reasons.push('Erfahrene Person für die Begleitung eines Kollegen mit wenig Erfahrung (Spät/Nacht)');
+              }
+            }
+          }
+          let togetherCount = 0;
+          const togetherPartners = togetherPartnersByEmployee.get(employee);
+          if (togetherPartners && !hardBlocked) {
+            const currentType = normalizePlanningShiftTypeKey(shiftDef.shift_type);
+            const together = togetherPartners.filter(({ partner, shiftTypes }) => {
+              if (!shiftTypes.includes(currentType)) return false;
+              const todayCode = String(empDayAssignment[partner]?.[day] || '').trim().toUpperCase();
+              if (todayCode) return coloShiftTypeByCode.get(todayCode) === currentType;
+              const runningCode = String(empSeriesCode[partner] || '').trim().toUpperCase();
+              return Boolean(runningCode) && empSeriesRemaining[partner] > 0 && coloShiftTypeByCode.get(runningCode) === currentType;
+            });
+            if (together.length > 0) {
+              score += together.length * 600;
+              colleagueMatches += together.length;
+              togetherCount = new Set(together.map(({ partner }) => partner)).size; // decides before the hour balance (see sort)
+              reasons.push(`Feste Gruppe: gemeinsam mit ${[...new Set(together.map(({ partner }) => partner))].join(', ')}`);
+            }
+          }
+          if (!hardBlocked && normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night' && isNightTeamMember(employee)) {
+            score += 250;
+            reasons.push('Festes Nachtteam (Noah, Marco, Mustafar, Patrick Brode): bevorzugt in der Nacht');
+          }
+
           // Mutual colleague wish: the shift type both prefer (or the one preferred by the one who has a wish) fits this shift.
           let mutualShared = false;
           const mutualColleagues = mutualColleagueMap.get(employee);
@@ -2981,6 +3080,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             hardBlocked,
             weekTypeConflict,
             mutualShared,
+            togetherCount,
+            mentorRank,
             preferenceMatch: preferenceMatch && !preferredWishIgnored,
             preferencePenalty,
             coloBoost,
@@ -3024,6 +3125,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (left.preferencePenalty !== right.preferencePenalty) return left.preferencePenalty - right.preferencePenalty;
           // Continuity: nobody gets a second shift type within the same week while another candidate is available.
           if (left.weekTypeConflict !== right.weekTypeConflict) return left.weekTypeConflict ? 1 : -1;
+          // Fixed groups (Marco + Mustafa, night team): the free place next to a partner goes to the group member.
+          if (left.togetherCount !== right.togetherCount) return right.togetherCount - left.togetherCount;
+          if (left.mentorRank !== right.mentorRank) return left.mentorRank - right.mentorRank;
           // Late/night slots go to the people who can work nothing else first; everybody else has early
           // as the overflow pool.
           if (left.lateNightPriority !== right.lateNightPriority) return left.lateNightPriority ? -1 : 1;
@@ -3324,7 +3428,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const dateStr = `${month}-${String(day).padStart(2, '0')}`;
     selectStaffingForDay(dayOfWeek(year, mon, day), holidayMap[dateStr] || null, dateStr);
     if (isEmployeeShiftBlockedOnDate(employee, dateStr, definition.code)) return false;
-    if (wouldExceedEmployeeWeekendLimit(employee, [day])) return false;
+    if (wouldExceedEmployeeWeekendLimit(employee, [day], { skipSpacing: normalizePlanningShiftTypeKey(definition?.shift_type) === 'night' })) return false;
     // Upgrading an already planned day (E1SA -> E1WE) does not add a day outside DBS.
     if (!isOutsideDbsAllowed(employee, definition, empDayAssignment[employee]?.[day] ? 0 : 1)) return false;
     const maxStaff = Math.max(Number.parseInt(String(definition?.max_staff ?? 0), 10) || 0, 0);
@@ -4429,6 +4533,110 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     }
   }
 
+  // Night top-up: the night minimum must hold on every day. A new 7-day night block can only start on Monday, so a
+  // person who drops out in mid-week (absence, blocked day, recovery) leaves a gap until the next Monday. Free people
+  // take over the open nights for the rest of the week; every rule of the candidate tests stays in force.
+  planReport.nightTopUp = [];
+  {
+    relaxedWishPass = false;
+    guaranteePass = false;
+    earlyFallbackPass = false;
+    const nightDefinitions = shiftDefs.filter((definition) => normalizePlanningShiftTypeKey(definition.shift_type) === 'night');
+    const freeDaysAfterNight = Math.max(Number(rotation.free_days_after_night) || 0, 0);
+    const maxNightsPerMonth = Number(rotation.max_nights_per_month) > 0 ? Number(rotation.max_nights_per_month) : Infinity;
+    const nightCountOn = (day) => activeEmployees.filter((employee) => coloShiftTypeByCode.get(String(empDayAssignment[employee]?.[day] || '').trim().toUpperCase()) === 'night').length;
+    if (nightDefinitions.length > 0) {
+      for (let day = planningStartDay; day <= planningEndDay; day++) {
+        const dow = dayOfWeek(year, mon, day);
+        const dateOf = (targetDay) => `${month}-${String(targetDay).padStart(2, '0')}`;
+        selectStaffingForDay(dow, holidayMap[dateOf(day)] || null, dateOf(day));
+        const required = Math.max(Number(staffingRules.night) || 0, 0);
+        if (required === 0) continue;
+        let guard = 0;
+        while (nightCountOn(day) < required && guard++ < required) {
+          // the open run: from today until Sunday (or the end of the period) as long as the night is short
+          let runEnd = day;
+          while (runEnd < planningEndDay && dayOfWeek(year, mon, runEnd) !== 0) {
+            selectStaffingForDay(dayOfWeek(year, mon, runEnd + 1), holidayMap[dateOf(runEnd + 1)] || null, dateOf(runEnd + 1));
+            if (nightCountOn(runEnd + 1) >= Math.max(Number(staffingRules.night) || 0, 0)) break;
+            runEnd++;
+          }
+          selectStaffingForDay(dow, holidayMap[dateOf(day)] || null, dateOf(day));
+          let best = null;
+          for (const employee of activeEmployees) {
+            const fixedType = fixedShiftTypeByEmployee.get(employee);
+            if (fixedType && fixedType !== 'night') continue;
+            const length = runEnd - day + 1;
+            if (empStats[employee].nights + length > maxNightsPerMonth) continue;
+            const prefs = empPrefsMap.get(employee);
+            const ownNightLimit = Number.parseInt(String(prefs?.max_nights_per_month ?? ''), 10);
+            if (isHardStrength(prefStrength.max_nights) && Number.isInteger(ownNightLimit) && empStats[employee].nights + length > ownNightLimit) continue;
+            const definition = (getEmployeeNightModel(employee) === NIGHT_MODELS.SHORT && shortNightDefinition) ? shortNightDefinition : nightDefinitions[0];
+            if (!definition) continue;
+            const applicableDays = normalizeWeekdaySetting(definition.applicable_days, [0, 1, 2, 3, 4, 5, 6]);
+            const days = Array.from({ length }, (_, offset) => day + offset);
+            let possible = true;
+            for (const target of days) {
+              const targetDow = dayOfWeek(year, mon, target);
+              if (empDayAssignment[employee][target] || isEmployeeAbsentOnDate(employee, dateOf(target))
+                || isEmployeeBlockedByPreferenceOnDay(employee, targetDow)
+                || isDayBlockedByEmployeePreference(prefs, targetDow)
+                || isRecoveryProtectedDay(employee, target)
+                || !applicableDays.includes(targetDow)
+                || isEmployeeShiftBlockedOnDate(employee, dateOf(target), definition.code)) { possible = false; break; }
+            }
+            if (!possible) continue;
+            const before = getAssignedShiftType(employee, day - 1);
+            if (before && before !== 'night') continue; // would hang on to a different shift type
+            let connectedBefore = 0;
+            for (let previous = day - 1; previous >= 1 && empDayAssignment[employee][previous]; previous--) connectedBefore++;
+            if (connectedBefore + length > Math.max(rotation.max_consecutive_workdays || 6, 7)) continue;
+            // the free days after the block must be really free
+            let recoveryFree = true;
+            for (let offset = 1; offset <= freeDaysAfterNight; offset++) {
+              if (empDayAssignment[employee][runEnd + offset]) { recoveryFree = false; break; }
+            }
+            if (!recoveryFree) continue;
+            if (wouldViolateAdjacentTransition(employee, day, definition)) continue;
+            if (wouldExceedEmployeeWeekendLimit(employee, days, { skipSpacing: true })) continue;
+            if (!isOutsideDbsAllowed(employee, definition, length)) continue;
+            if (!days.every((target) => capacityWithin(employee, target, definition, 0) || capacityWithin(employee, target, definition, ELASTIC_EXTRA_STAFF))) continue;
+            const openHours = employeeTargetHours[employee] - empHours[employee];
+            const wantsNight = (prefs?.preferred_shifts || []).some((code) => normalizePlanningShiftTypeKey(shiftDefinitionByCode.get(String(code).trim().toUpperCase())?.shift_type) === 'night');
+            const score = openHours + (wantsNight ? 80 : 0) + (isNightTeamMember(employee) ? 120 : 0) - empStats[employee].nights * 8;
+            if (!best || score > best.score) best = { employee, definition, days, score };
+          }
+          if (!best) break;
+          for (const target of best.days) {
+            const targetDow = dayOfWeek(year, mon, target);
+            releaseHolidayCredit(best.employee, target);
+            shifts.push({ employee_name: best.employee, day: target, shift_code: best.definition.code });
+            empDayAssignment[best.employee][target] = best.definition.code;
+            empHours[best.employee] += getShiftHoursForDay(best.definition, target);
+            empStats[best.employee].total++;
+            empStats[best.employee].nights++;
+            empStats[best.employee].actualHours = Number(empHours[best.employee].toFixed(2));
+            if (targetDow === 6 || targetDow === 0) {
+              empStats[best.employee].weekends++;
+              empStats[best.employee].workedWeekendBlocks.add(getWeekendBlockKey(year, mon, target));
+            }
+            planReport.totalShiftsPlanned++;
+            explanations[`${best.employee}_${target}`] = {
+              employee: best.employee,
+              day: target,
+              code: best.definition.code,
+              reasons: [
+                `Nachtbesetzung aufgefüllt: ${best.definition.code} bis zur Mindestbesetzung (${required} Personen)`,
+                'Wünsche, Abwesenheiten, Ruhezeiten, Wochenendabstand und Nachtlimits geprüft',
+              ],
+            };
+          }
+          planReport.nightTopUp.push({ employee: best.employee, from: day, to: best.days.at(-1), code: best.definition.code });
+        }
+      }
+    }
+  }
+
   // Colo repair pass: the admin demand (early / late tasks per weekday) is covered by pool members who are still
   // free that day. Every rule stays in force (wishes, absences, rest, week continuity, limits); only people
   // from the Colo list are used, the one with the biggest hour deficit first.
@@ -4628,6 +4836,60 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             'Wünsche, Abwesenheiten, Ruhezeiten und Wochenendabstand geprüft',
           ],
         };
+      }
+    }
+  }
+
+  // Check of the experience rule: never two inexperienced people in one shift, and in late / night not without an experienced colleague.
+  planReport.inexperienced = { employees: inexperiencedEmployees.length, together: 0, alone: 0 };
+  if (inexperiencedEmployees.length > 0) {
+    for (let day = planningStartDay; day <= planningEndDay; day++) {
+      for (const type of ['early', 'late', 'night']) {
+        const people = activeEmployees.filter((employee) => coloShiftTypeByCode.get(String(empDayAssignment[employee]?.[day] || '').trim().toUpperCase()) === type);
+        const newcomers = people.filter(isInexperienced);
+        const dateLabel = `${month}-${String(day).padStart(2, '0')}`;
+        if (newcomers.length >= 2 && type === 'early') {
+          planReport.inexperienced.togetherEarly = (planReport.inexperienced.togetherEarly || 0) + 1; // only a preference in the large early shift
+        } else if (newcomers.length >= 2) {
+          planReport.inexperienced.together += 1;
+          conflicts.push({ day, date: dateLabel, shift: type, severity: 'warning', type: 'inexperienced_together', message: `${dateLabel}: ${newcomers.join(', ')} haben wenig Erfahrung und sind in derselben Schicht (${type}) geplant.` });
+        } else if (newcomers.length === 1 && type !== 'early' && people.length === 1) {
+          planReport.inexperienced.alone += 1;
+          conflicts.push({ day, date: dateLabel, shift: type, severity: 'warning', type: 'inexperienced_alone', message: `${dateLabel}: ${newcomers[0]} hat wenig Erfahrung und ist in der ${type === 'night' ? 'Nacht' : 'Spätschicht'} ohne erfahrenen Kollegen geplant.` });
+        } else if (newcomers.length === 1 && type !== 'early' && people.length > 1 && people.every(isInexperienced)) {
+          planReport.inexperienced.alone += 1;
+        }
+      }
+    }
+  }
+
+  // Weekend variants (E1SA, E1WE, E2SA, E2WE, L1WE ...) are only shown when the block really contains the weekend.
+  // A run of working days without Saturday / Sunday (e.g. the first block after a night shift, or a block whose weekend
+  // was dropped) gets the plain code (E1 / E2 / L1 / L2). Runs that touch the edge of the planned period stay as they
+  // are, because their weekend may lie in the neighbouring month.
+  planReport.weekendCodeRenamed = [];
+  for (const employee of activeEmployees) {
+    const days = Object.keys(empDayAssignment[employee] || {}).map(Number).filter((day) => empDayAssignment[employee][day]).sort((a, b) => a - b);
+    let index = 0;
+    while (index < days.length) {
+      let end = index;
+      while (end + 1 < days.length && days[end + 1] === days[end] + 1) end++;
+      const run = days.slice(index, end + 1);
+      index = end + 1;
+      if (run[0] <= planningStartDay || run[run.length - 1] >= planningEndDay) continue;
+      if (run.some((day) => isWeekend(year, mon, day))) continue;
+      for (const day of run) {
+        const code = String(empDayAssignment[employee][day] || '').trim().toUpperCase();
+        const match = /^([EL]\d)(SA|WE)$/.exec(code);
+        if (!match) continue;
+        const plainDefinition = shiftDefinitionByCode.get(match[1]);
+        const currentDefinition = shiftDefinitionByCode.get(code);
+        if (!plainDefinition || !currentDefinition || normalizePlanningShiftTypeKey(plainDefinition.shift_type) !== normalizePlanningShiftTypeKey(currentDefinition.shift_type)) continue;
+        empDayAssignment[employee][day] = plainDefinition.code;
+        const cell = shifts.find((entry) => entry.employee_name === employee && Number(entry.day) === day);
+        if (cell) cell.shift_code = plainDefinition.code;
+        if (explanations[`${employee}_${day}`]) explanations[`${employee}_${day}`].code = plainDefinition.code;
+        planReport.weekendCodeRenamed.push({ employee, day, from: code, to: plainDefinition.code });
       }
     }
   }

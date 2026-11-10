@@ -15,6 +15,7 @@ import db from "../db.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { normalizeName } from "../lib/nameNorm.js";
 import { formatShiftMonthLabel } from "../lib/shiftplanMonth.js";
+import { parseMonthLabel } from "../lib/monthParser.js";
 import { buildEmployeeMonthHours } from "../lib/payrollHours.js";
 
 const router = express.Router();
@@ -114,11 +115,32 @@ router.get("/month-hours", async (req, res) => {
       db.query(`SELECT code, duration_hours, start_time, end_time, start_day_offset, end_day_offset FROM shift_definitions`),
     ]);
     const own = shiftRows.rows.filter((row) => keys.has(normalizeName(String(row.employee_name || ""))));
-    const hours = buildEmployeeMonthHours({ year, month, shifts: own, definitions: definitionRows.rows });
+    const state = String(req.query.state || "HE").toUpperCase() === "BY" ? "BY" : "HE";
+    const hours = buildEmployeeMonthHours({ year, month, shifts: own, definitions: definitionRows.rows, state });
     res.json({ year, month, matched: own.length > 0, planned: shiftRows.rows.length > 0, ...hours });
   } catch (error) {
     console.error("PAYROLL MONTH HOURS ERROR:", error);
     res.status(500).json({ error: "Hours could not be loaded" });
+  }
+});
+
+/** Months for which the logged-in person has planned shifts (newest first): the months the payroll can show. */
+router.get("/months", async (req, res) => {
+  try {
+    const keys = await ownPlanNameKeys(req.user.id);
+    const { rows } = await db.query(`SELECT DISTINCT month, employee_name FROM shifts`);
+    const seen = new Set();
+    for (const row of rows) {
+      if (!keys.has(normalizeName(String(row.employee_name || "")))) continue;
+      const text = String(row.month || "");
+      const id = /^(d{4})-(d{2})$/.exec(text);
+      const parsed = id ? { year: Number(id[1]), month: Number(id[2]) } : parseMonthLabel(text);
+      if (parsed?.year && parsed?.month) seen.add(`${parsed.year}-${String(parsed.month).padStart(2, "0")}`);
+    }
+    res.json({ months: [...seen].sort().reverse() });
+  } catch (error) {
+    console.error("PAYROLL MONTHS ERROR:", error);
+    res.status(500).json({ error: "Months could not be loaded" });
   }
 });
 

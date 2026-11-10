@@ -97,6 +97,13 @@ type WeatherSnapshot = {
   stale?: boolean;
 };
 
+/**
+ * The web version (browser, outside the Jarvis extension) is for supervisors only: they see and edit exactly these
+ * areas. Everything else (handover, other-team tickets, feedback, personal wishes, payroll, admin settings) stays in
+ * the extension. The data is the same, so changes made on the web are visible in the extension at once.
+ */
+const WEB_ALLOWED_TAB_IDS = new Set(["shiftplan", "week", "day", "generator", "drafts", "users", "notifications", "projects", "polls"]);
+
 const PRIMARY_TABS: WorkspaceTab[] = [
   { id: "shiftplan", label: { de: "Dienstplan", en: "Shift Plan" }, path: "/shiftplan", icon: CalendarDays, group: "primary" },
   { id: "week", label: { de: "Wochenplan", en: "Weekly Plan" }, path: "/week", icon: CalendarRange, group: "primary" },
@@ -212,6 +219,9 @@ function TemperatureRange({ day, days }: { day: WeatherDay; days: WeatherDay[] }
 
 export default function OdinGoWorkspace() {
   const { user, isWebSession } = useAuth();
+  const webBlocked = (tabId: string, element: JSX.Element) => (
+    isWebSession && !WEB_ALLOWED_TAB_IDS.has(tabId) ? <Navigate to={`../shiftplan${location.search}`} replace /> : element
+  );
   const { language, languages, setLanguage } = useLanguage();
   const { theme, setTheme } = useTheme();
   const location = useLocation();
@@ -612,13 +622,13 @@ export default function OdinGoWorkspace() {
 
       <nav className="liquid-tabbar shrink-0 border-b border-slate-700" aria-label="ODIN GO Anwendungen">
         <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-1.5">
-          {PRIMARY_TABS.map(renderWorkspaceTab)}
+          {PRIMARY_TABS.filter((tab) => !isWebSession || WEB_ALLOWED_TAB_IDS.has(tab.id)).map(renderWorkspaceTab)}
         </div>
         <div className="flex items-center gap-1.5 overflow-x-auto border-t border-slate-800/60 px-3 py-1.5">
-          {SUPPORT_TABS.filter((tab) => !(isWebSession && tab.id === "preferences")).map(renderWorkspaceTab)}
+          {SUPPORT_TABS.filter((tab) => !isWebSession || WEB_ALLOWED_TAB_IDS.has(tab.id)).map(renderWorkspaceTab)}
           <span aria-hidden="true" className="mx-2 h-5 w-px bg-slate-700" />
           <span className="flex shrink-0 items-center gap-1.5 px-1 text-xs font-medium text-slate-500"><LockKeyhole className="h-3 w-3" />{language === "de" ? "Administration" : "Administration"}</span>
-          {ADMIN_TABS.map(renderWorkspaceTab)}
+          {ADMIN_TABS.filter((tab) => !isWebSession || WEB_ALLOWED_TAB_IDS.has(tab.id)).map(renderWorkspaceTab)}
         </div>
       </nav>
 
@@ -630,16 +640,16 @@ export default function OdinGoWorkspace() {
             <Route path="drafts" element={<PageGuard pageKey="shiftplan_drafts"><ShiftplanDrafts /></PageGuard>} />
             <Route path="week" element={<PageGuard pageKey="shiftplan"><div className="h-full min-h-0 overflow-hidden"><Weekplan /></div></PageGuard>} />
             <Route path="day" element={<PageGuard pageKey="shiftplan"><div className="h-full min-h-0 overflow-hidden"><TagesplanungPage /></div></PageGuard>} />
-            <Route path="handover" element={<ShiftHandover />} />
-            <Route path="team-handovers" element={<TeamHandovers />} />
+            <Route path="handover" element={webBlocked("handover", <ShiftHandover />)} />
+            <Route path="team-handovers" element={webBlocked("team-handovers", <TeamHandovers />)} />
             <Route path="preferences" element={isWebSession ? <Navigate to={`../shiftplan${location.search}`} replace /> : <PageGuard pageKey="settings"><UserPreferencesPage /></PageGuard>} />
             <Route path="payroll" element={isWebSession ? <Navigate to={`../shiftplan${location.search}`} replace /> : <PageGuard pageKey="settings"><PayrollPage /></PageGuard>} />
-            <Route path="admin-settings" element={<PageGuard pageKey="admin_settings" min="write"><AdminSettings /></PageGuard>} />
+            <Route path="admin-settings" element={webBlocked("admin", <PageGuard pageKey="admin_settings" min="write"><AdminSettings /></PageGuard>)} />
             <Route path="generator" element={<PageGuard pageKey="shiftplan_control" min="write"><ShiftplanControlCenter /></PageGuard>} />
             <Route path="users" element={<PageGuard pageKey="user_management" min="write"><Users /></PageGuard>} />
             <Route path="projects" element={<ProjectsPage />} />
              <Route path="notifications" element={<JarvisNotifications />} />
-             <Route path="feedback" element={<FeedbackPage />} />
+             <Route path="feedback" element={webBlocked("feedback", <FeedbackPage />)} />
              <Route path="polls" element={<PollsPanel />} />
             <Route path="*" element={<Navigate to={`shiftplan${location.search}`} replace />} />
           </Routes>

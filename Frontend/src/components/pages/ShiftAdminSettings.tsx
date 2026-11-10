@@ -376,6 +376,7 @@ interface AdvancedPlanningSettings {
   ramadanLateEnabled: boolean;
   ramadanLateExtra: number;
   minWeekendGapWeeks: number;
+  inexperiencedEmployees: string[];
   planNotifyEnabled: boolean;
   planNotifyAdminIds: number[];
 }
@@ -442,6 +443,7 @@ const DEFAULT_ADVANCED_SETTINGS: AdvancedPlanningSettings = {
   ramadanLateEnabled: false,
   ramadanLateExtra: 2,
   minWeekendGapWeeks: 3,
+  inexperiencedEmployees: [],
   planNotifyEnabled: true,
   planNotifyAdminIds: [],
 };
@@ -596,6 +598,7 @@ function extractAdvancedPlanningSettings(settings: Record<string, string>): Adva
         return Array.isArray(parsed) ? parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0) : [];
       } catch { return []; }
     })(),
+    inexperiencedEmployees: parseEmployeePoolSetting(settings['shiftplan.inexperienced_employees']),
     minWeekendGapWeeks: Math.min(6, Math.max(1, Number.parseInt(String(settings['shiftplan.min_weekend_gap_weeks'] ?? ''), 10) || DEFAULT_ADVANCED_SETTINGS.minWeekendGapWeeks)),
     ramadanLateExtra: Math.min(10, Math.max(0, Number.parseInt(String(settings['shiftplan.ramadan_late_extra'] ?? ''), 10) || DEFAULT_ADVANCED_SETTINGS.ramadanLateExtra)),
   };
@@ -1076,6 +1079,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.ramadan_late_enabled': advancedSettings.ramadanLateEnabled,
         'shiftplan.ramadan_late_extra': advancedSettings.ramadanLateExtra,
         'shiftplan.min_weekend_gap_weeks': advancedSettings.minWeekendGapWeeks,
+        'shiftplan.inexperienced_employees': JSON.stringify(advancedSettings.inexperiencedEmployees),
         'shiftplan.plan_notifications_enabled': advancedSettings.planNotifyEnabled,
         'shiftplan.plan_notify_admin_user_ids': JSON.stringify(advancedSettings.planNotifyAdminIds),
         ...wishStrengthPayload(wishStrengths),
@@ -1332,6 +1336,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.ramadan_late_enabled': advancedSettings.ramadanLateEnabled,
         'shiftplan.ramadan_late_extra': advancedSettings.ramadanLateExtra,
         'shiftplan.min_weekend_gap_weeks': advancedSettings.minWeekendGapWeeks,
+        'shiftplan.inexperienced_employees': JSON.stringify(advancedSettings.inexperiencedEmployees),
         'shiftplan.plan_notifications_enabled': advancedSettings.planNotifyEnabled,
         'shiftplan.plan_notify_admin_user_ids': JSON.stringify(advancedSettings.planNotifyAdminIds),
         ...wishStrengthPayload(wishStrengths),
@@ -2228,6 +2233,40 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               isGerman={isGerman}
               onChange={(next) => setAdvancedSettings({ ...advancedSettings, planNotifyEnabled: next.enabled, planNotifyAdminIds: next.adminIds })}
             />
+
+            <div className="rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
+              <div className="font-medium">{isGerman ? 'Mitarbeitende mit wenig Erfahrung' : 'Employees with little experience'}</div>
+              <div className="mt-1 text-xs text-slate-400">{isGerman ? 'Diese Personen werden nie zusammen in dieselbe Spät- oder Nachtschicht geplant, sondern immer mit erfahrenen Kollegen. In der Frühschicht (viel Personal) wird es nur bevorzugt.' : 'These people are never planned together in the same late or night shift, always with experienced colleagues. In the large early shift this is only a preference.'}</div>
+              <div className="mt-3 flex flex-wrap items-center gap-1.5">
+                {advancedSettings.inexperiencedEmployees.length === 0 ? <span className="text-xs text-slate-500">{isGerman ? 'Noch niemand eingetragen' : 'Nobody entered yet'}</span> : advancedSettings.inexperiencedEmployees.map((name) => (
+                  <button
+                    key={name}
+                    type="button"
+                    onClick={() => setAdvancedSettings({ ...advancedSettings, inexperiencedEmployees: advancedSettings.inexperiencedEmployees.filter((entry) => entry !== name) })}
+                    className="inline-flex items-center gap-1 rounded-full bg-amber-400/15 px-2.5 py-1 text-xs text-amber-100 ring-1 ring-amber-300/30 transition hover:bg-red-500/15 hover:ring-red-300/30"
+                    title={isGerman ? 'Entfernen' : 'Remove'}
+                  >
+                    {name} <span aria-hidden="true">×</span>
+                  </button>
+                ))}
+              </div>
+              <select
+                aria-label={isGerman ? 'Mitarbeitende mit wenig Erfahrung hinzufügen' : 'Add employee with little experience'}
+                value=""
+                onChange={(event) => {
+                  const name = event.target.value;
+                  if (name && !advancedSettings.inexperiencedEmployees.includes(name)) {
+                    setAdvancedSettings({ ...advancedSettings, inexperiencedEmployees: [...advancedSettings.inexperiencedEmployees, name] });
+                  }
+                }}
+                className="mt-3 rounded-lg border border-white/10 bg-slate-950/70 px-2 py-1 text-sm text-slate-100"
+              >
+                <option value="">{isGerman ? 'Mitarbeitenden hinzufügen …' : 'Add employee …'}</option>
+                {employees.filter((name) => !advancedSettings.inexperiencedEmployees.includes(name)).map((name) => (
+                  <option key={name} value={name}>{name}</option>
+                ))}
+              </select>
+            </div>
 
             <div className="rounded-2xl border border-white/10 bg-slate-900/55 px-4 py-3 text-sm text-slate-200">
               <div className="font-medium">{isGerman ? 'Abstand zwischen zwei Wochenenden' : 'Distance between two weekends'}</div>

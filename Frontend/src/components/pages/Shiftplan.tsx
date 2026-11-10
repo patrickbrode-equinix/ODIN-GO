@@ -3,7 +3,7 @@
 /* FINAL stabile Version (Restored Layout)          */
 /* ------------------------------------------------ */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, RefreshCw, Calendar, Plus, Trash2, Users, Heart, AlertTriangle } from "lucide-react";
 import { EnterprisePageShell, EnterpriseCard, EnterpriseHeader, ENT_SECTION_TITLE } from "../layout/EnterpriseLayout";
 
@@ -203,6 +203,21 @@ export default function Shiftplan() {
   // The shown month travels along between the planning views (see planningDateStore).
   const [selectedYear, setSelectedYear] = useState(() => getPlanningMonth().year);
   const [selectedMonthIndex, setSelectedMonthIndex] = useState(() => getPlanningMonth().month - 1);
+  // Height of the sticky month bar: the sticky date header of the table starts right below it.
+  const monthBarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const element = monthBarRef.current;
+    const root = document.documentElement;
+    if (!element) return undefined;
+    const apply = () => root.style.setProperty("--shiftplan-month-bar", `${Math.ceil(element.getBoundingClientRect().height)}px`);
+    apply();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+    observer?.observe(element);
+    return () => {
+      observer?.disconnect();
+      root.style.removeProperty("--shiftplan-month-bar");
+    };
+  }, []);
   const setSharedPlanningMonth = usePlanningDateStore((state) => state.setMonth);
   useEffect(() => { setSharedPlanningMonth(selectedYear, selectedMonthIndex + 1); }, [selectedYear, selectedMonthIndex, setSharedPlanningMonth]);
 
@@ -1699,7 +1714,6 @@ export default function Shiftplan() {
               {SHIFT_COLOR_LEGEND.map((item) => <span key={item.kind} style={getShiftKindStyle(item.kind)} className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold"><strong>{item.code}</strong><span className="hidden 2xl:inline">{item.label}</span></span>)}
               <ColoLegend isGerman={isGerman} />
             </div>
-            <ShiftTimeLegend shiftTimes={shiftTimes} />
             <div className="theme-divider mx-1 h-5 w-px" />
             {/* FEIERTAGE BUTTON: left-click toggles overlay, right-click shows list */}
             <div className="relative">
@@ -1828,7 +1842,8 @@ export default function Shiftplan() {
       {/* ── PLAN VIEW ── */}
       {(<>
 
-      {/* MONTH NAVIGATION */}
+      {/* MONTH NAVIGATION: sticks to the top while scrolling (the date header sticks right below it) */}
+      <div ref={monthBarRef} className="sticky top-0 z-[60] rounded-2xl bg-background/90 backdrop-blur-md">
       <EnterpriseCard className="theme-glass-panel relative flex items-center justify-center px-4! py-2!" noPadding={false}>
         <div className="theme-glass-inset absolute left-4 flex items-center gap-2 rounded-md border p-1">
           <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:bg-accent hover:text-foreground" onClick={() => handleShiftplanYearChange(-1)}>
@@ -1872,6 +1887,8 @@ export default function Shiftplan() {
           })}
         </div>
       </EnterpriseCard>
+      <ShiftTimeLegend shiftTimes={shiftTimes} showTitle className="px-4 pb-2 pt-1.5" />
+      </div>
 
       {false && viewMode === "month" && (
         <EnterpriseCard className="theme-glass-panel relative overflow-hidden">

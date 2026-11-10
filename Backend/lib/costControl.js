@@ -20,7 +20,7 @@
 /* ================================================ */
 
 import { CREDITED_SHIFT_CODES } from './shiftHours.js';
-import { buildHessenHolidayMap } from './hessenHolidays.js';
+import { buildHolidayMap } from './hessenHolidays.js';
 
 const NON_WORK_CODES = new Set(['FS', 'S', ...CREDITED_SHIFT_CODES]);
 const DAY_MINUTES = 1440;
@@ -76,9 +76,10 @@ function overlap(startA, endA, startB, endB) {
 }
 
 const holidayCache = new Map();
-function holidaysOfYear(year) {
-  if (!holidayCache.has(year)) holidayCache.set(year, buildHessenHolidayMap(year));
-  return holidayCache.get(year);
+function holidaysOfYear(year, state = 'HE') {
+  const key = `${state}-${year}`;
+  if (!holidayCache.has(key)) holidayCache.set(key, buildHolidayMap(year, state));
+  return holidayCache.get(key);
 }
 
 /**
@@ -86,7 +87,7 @@ function holidaysOfYear(year) {
  * definition: { type, durationHours, startTime, endTime, startDayOffset, endDayOffset }; paidHours already
  * includes weekday overrides. Returns { night, sunday, holiday } in hours, or null without usable times.
  */
-export function getSupplementHours({ year, month, day, definition, paidHours }) {
+export function getSupplementHours({ year, month, day, definition, paidHours, state = 'HE' }) {
   const startClock = toMinutes(definition?.startTime ?? definition?.start_time);
   const endClock = toMinutes(definition?.endTime ?? definition?.end_time);
   if (startClock === null || endClock === null) return null;
@@ -113,7 +114,7 @@ export function getSupplementHours({ year, month, day, definition, paidHours }) 
     for (const [from, to] of NIGHT_WINDOWS) night += paidMinutes(dateStart + from, dateStart + to);
     if (date.getUTCDay() === 0) sunday += paidMinutes(dateStart, dateStart + DAY_MINUTES);
     const iso = `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
-    if (holidaysOfYear(date.getUTCFullYear())[iso]) {
+    if (holidaysOfYear(date.getUTCFullYear(), state)[iso]) {
       const halfDay = date.getUTCMonth() === 11 && (date.getUTCDate() === 24 || date.getUTCDate() === 31);
       holiday += paidMinutes(dateStart + (halfDay ? HALF_DAY_HOLIDAY_FROM : 0), dateStart + DAY_MINUTES);
     }

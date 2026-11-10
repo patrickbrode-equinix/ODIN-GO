@@ -44,7 +44,7 @@ function buildEmployees() {
     const harsh = args.mix === 'harsh';
     let preferred = [];
     let unwanted = [];
-    let nightModel = rng.chance(harsh ? 0.5 : 0.2) ? 'SHORT' : 'SEVEN_DAY';
+    let nightModel = rng.chance(harsh ? 0.5 : 0.2) && !args.seven ? 'SHORT' : 'SEVEN_DAY';
     let maxNights = null;
     // typical: most people are flexible; harsh: many hard wishes (stress test)
     const limits = harsh ? [0.12, 0.40, 0.55] : [0.03, 0.16, 0.26];
@@ -156,6 +156,7 @@ for (const [type, key] of [['late', 'late'], ['night', 'night']]) {
     if (rule) { rule.min_count = Number(args[key]); rule.max_count = Number(args[key]); }
   }
 }db.settings.set('shiftplan.dbs_enabled', 'true');
+if (args.inexp) db.settings.set('shiftplan.inexperienced_employees', JSON.stringify(employees.filter((employee) => !dbsPool.some((entry) => entry.employee.name === employee.name) && employee.preferred.length === 0).slice(0, Number(args.inexp)).map((employee) => employee.name)));
 if (args.gap) db.settings.set('shiftplan.min_weekend_gap_weeks', String(args.gap));
 if (args.colo !== 'off') {
   db.settings.set('shiftplan.colo_enabled', 'true');
@@ -434,8 +435,29 @@ function auditStructure(result, year, month) {
     const night = typeByCode.get(first.get(day)) === 'night' && typeByCode.get(second.get(day)) === 'night';
     if (night || dow === 0 || dow === 6) pairViolations.push(`${month}/${day} ${first.get(day)}+${second.get(day)}`);
   }
+  // night coverage: how many days of the month have fewer night workers than asked (--night N, default 4)
+  const nightWanted = Number(args.night || 4);
+  const nightShort = [];
+  for (let day = 1; day <= numDays; day++) {
+    const count = [...cells.values()].filter((own) => typeByCode.get(own.get(day)) === 'night').length;
+    if (count > 0 && count < nightWanted) nightShort.push(`${month}/${day}:${count}`);
+  }
+  // weekend codes (SA/WE) on a run of working days without any weekend day
+  let weCodesWithoutWeekend = 0;
+  for (const own of cells.values()) {
+    const days = [...own.keys()].sort((x, y) => x - y);
+    for (let i = 0; i < days.length;) {
+      let j = i;
+      while (j + 1 < days.length && days[j + 1] === days[j] + 1) j++;
+      const run = days.slice(i, j + 1);
+      i = j + 1;
+      if (run[0] === 1 || run.at(-1) === numDays) continue;
+      if (run.some((d) => [0, 6].includes(new Date(year, month - 1, d).getDay()))) continue;
+      weCodesWithoutWeekend += run.filter((d) => /(SA|WE)$/.test(own.get(d))).length;
+    }
+  }
   const histogram = weekendsPerEmployee.reduce((map, value) => ({ ...map, [value]: (map[value] || 0) + 1 }), {});
-  return { holes: holes.length, holeList: holes, weekendHistogram: histogram, weekendsInConsecutiveWeeks: tooFrequentWeekends.length, pairViolations };
+  return { holes: holes.length, holeList: holes, weekendHistogram: histogram, weekendsInConsecutiveWeeks: tooFrequentWeekends.length, pairViolations, nightShort, weCodesWithoutWeekend };
 }
 
 /* ---------- run ---------- */
@@ -460,6 +482,7 @@ for (let index = 0; index < monthCount; index++) {
   }
   report.months.push(audit(result, year, month));
   report.months.at(-1).structure = auditStructure(result, year, month);
+  report.months.at(-1).structure.inexperienced = result.planReport.inexperienced;
   const label = formatShiftMonthLabel(year, month);
   db.shiftHistory.set(label, result.shifts.map((shift) => ({ employee_name: shift.employee_name, day: shift.day, shift_code: shift.shift_code })));
   month += 1;
@@ -497,7 +520,9 @@ if (!args.quiet) {
     }
   }
 }
-originalConsole.log(`Struktur: Lücken im Block=${report.months.map((entry) => entry.structure.holes).join('/')} | Wochenenden direkt hintereinander=${report.months.map((entry) => entry.structure.weekendsInConsecutiveWeeks).join('/')} | Paar-Verstöße=${report.months.map((entry) => entry.structure.pairViolations.length).join('/')} | Wochenenden pro Person ${JSON.stringify(report.months.map((entry) => entry.structure.weekendHistogram))}`);
+originalConsole.log(`Struktur: Lücken im Block=${report.months.map((entry) => entry.structure.holes).join('/')} | Wochenenden direkt hintereinander=${report.months.map((entry) => entry.structure.weekendsInConsecutiveWeeks).join('/')} | Paar-Verstöße=${report.months.map((entry) => entry.structure.pairViolations.length).join('/')} | WE-Code ohne Wochenende=${report.months.map((entry) => entry.structure.weCodesWithoutWeekend).join('/')} | Nacht<Soll=${report.months.map((entry) => entry.structure.nightShort.length).join('/')} | Wochenenden pro Person ${JSON.stringify(report.months.map((entry) => entry.structure.weekendHistogram))}`);
+if (args.inexp) originalConsole.log('  Wenig Erfahrung: ' + JSON.stringify(report.months.map((entry) => entry.structure.inexperienced)));
+if (args.nights) originalConsole.log('  Nacht zu klein: ' + report.months.flatMap((entry) => entry.structure.nightShort).join(' '));
 if (args.holes) originalConsole.log('  Lücken:\n    ' + report.months.flatMap((entry) => entry.structure.holeList).join('\n    '));
 const tolerance = (predicate) => report.months.map((entry) => entry.perEmployee.filter(predicate).length).join('/');
 originalConsole.log(`Abweichung > 10h unter Soll: ${tolerance((row) => row.target - row.actual > 10)}  | > 10h über Soll: ${tolerance((row) => row.actual - row.target > 10)}`);
