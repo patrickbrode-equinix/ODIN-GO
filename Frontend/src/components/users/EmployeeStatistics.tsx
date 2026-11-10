@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Activity, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Clock, Moon, Palmtree, RefreshCw, Search, Sun, Sunrise, Sunset, TrendingDown, TrendingUp } from "lucide-react";
 import { api } from "../../api/api";
 import { useLanguage } from "../../context/LanguageContext";
+import { ShiftCombinations } from "./ShiftCombinations";
 
 interface MonthStat { month: number; actual_hours: number; target_hours: number; diff_hours: number }
 interface EmployeeStat {
@@ -333,6 +334,7 @@ export function EmployeeStatistics() {
             })}
             {people.length === 0 && !loading ? <div className="px-4 py-10 text-center text-sm text-slate-500">{de ? "Keine Daten für dieses Jahr." : "No data for this year."}</div> : null}
           </div>
+          <ShiftCombinations year={year} employees={all.filter((entry) => entry.total_shifts > 0).map((entry) => entry.employee_name).sort((left, right) => left.localeCompare(right, "de"))} de={de} />
         </>
       ) : loading ? (
         <div className="grid h-48 place-items-center text-sm text-slate-400"><RefreshCw className="mr-2 inline h-4 w-4 animate-spin" />{de ? "Statistik wird geladen …" : "Loading statistics …"}</div>

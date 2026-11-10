@@ -289,7 +289,8 @@ export default function OdinGoWorkspace() {
 
   useEffect(() => {
     void refreshHeader();
-    void loadMarketHistory();
+    // The 12-month history only feeds the small header chart: it loads after the workspace is usable, not in competition with it.
+    const historyTimer = window.setTimeout(() => { void loadMarketHistory(); }, 2500);
     // Polling pauses while the extension panel is closed and catches up when it opens.
     const staffingTimer = window.setInterval(() => { if (isPanelVisible()) void loadStaffing(); }, 60_000);
     const externalTimer = window.setInterval(() => { if (isPanelVisible()) void loadMarketAndWeather(); }, 5 * 60_000);
@@ -301,6 +302,7 @@ export default function OdinGoWorkspace() {
     window.addEventListener("message", refreshOnShow);
     return () => {
       window.removeEventListener("message", refreshOnShow);
+      window.clearTimeout(historyTimer);
       window.clearInterval(staffingTimer);
       window.clearInterval(externalTimer);
     };

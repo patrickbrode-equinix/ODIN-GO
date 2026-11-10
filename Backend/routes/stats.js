@@ -3,6 +3,7 @@ import { query } from "../db.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { requirePageAccess } from "../middleware/requirePageAccess.js";
 import { buildEmployeeOverview } from "../lib/employeeStats.js";
+import { buildCombinationStats } from "../lib/shiftCombinations.js";
 import { aggregateYearlyHours, buildShiftHoursLookup, buildShiftTimesLookup } from "../lib/shiftHours.js";
 
 const router = express.Router();
@@ -93,6 +94,37 @@ router.get("/employee-overview", requirePageAccess("user_management", "write"), 
         });
     } catch (err) {
         console.error("Stats Employee Overview Error:", err);
+        res.status(500).json({ error: "Internal Server Error" });
+    }
+});
+
+/* ------------------------------------------------ */
+/* COMBINATIONS: pairs / triples / quads per shift    */
+/* ------------------------------------------------ */
+router.get("/combinations", requirePageAccess("user_management", "write"), async (req, res) => {
+    try {
+        const requestedYear = Number.parseInt(String(req.query.year || ""), 10);
+        const year = Number.isInteger(requestedYear) && requestedYear >= 2000 && requestedYear <= 2100 ? requestedYear : new Date().getFullYear();
+        const [definitionsRes, shiftsRes] = await Promise.all([
+            query(`SELECT code, shift_type FROM shift_definitions`),
+            query(`SELECT month, employee_name, day, shift_code FROM shifts WHERE employee_name IS NOT NULL AND btrim(employee_name) <> ''`),
+        ]);
+        res.json({
+            ok: true,
+            ...buildCombinationStats({
+                shifts: shiftsRes.rows,
+                definitions: definitionsRes.rows,
+                year,
+                size: req.query.size,
+                shiftType: String(req.query.shiftType || "all"),
+                days: String(req.query.days || "all"),
+                month: Number.parseInt(String(req.query.month || ""), 10),
+                employee: String(req.query.employee || ""),
+                limit: req.query.limit,
+            }),
+        });
+    } catch (err) {
+        console.error("Stats Combinations Error:", err);
         res.status(500).json({ error: "Internal Server Error" });
     }
 });

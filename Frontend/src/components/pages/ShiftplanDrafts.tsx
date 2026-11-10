@@ -108,13 +108,15 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
   // Late shifts above the weekday maximum (admin option) and manually changed cells.
   const overflowMarks = useMemo(() => new Set((draft.config_snapshot?.planReport?.lateOverflow || []).map((entry) => `${entry.employee}|${Number(entry.day)}`)), [draft.config_snapshot?.planReport?.lateOverflow]);
   const manualMarks = useMemo(() => new Set((draft.shifts_json || []).filter((shift) => shift.manual_override === true).map((shift) => `${shift.employee_name}|${Number(shift.day)}`)), [draft.shifts_json]);
+  // Click on a name highlights the row (second click removes it), the other rows fade out.
+  const [selectedEmployee, setSelectedEmployee] = useState<string | null>(null);
 
   return (
     <div>
       <table className={`min-w-max border-collapse ${compact ? "text-[10px]" : "text-xs"}`}>
         <thead>
           <tr>
-            <th className={`${compact ? "min-w-40 p-2" : "min-w-48 p-3"} sticky left-0 top-0 z-30 bg-[#0a1424] text-left`}>{isGerman ? "Mitarbeiter" : "Employee"}</th>
+            <th className={`${compact ? "min-w-40 p-2" : "min-w-48 p-3"} sticky left-0 top-[var(--shiftplan-month-bar,0px)] z-30 bg-[#0a1424] text-left`}>{isGerman ? "Mitarbeiter" : "Employee"}</th>
             {days.map((value) => {
               const date = new Date(year, month - 1, value);
               const weekend = date.getDay() === 0 || date.getDay() === 6;
@@ -122,7 +124,7 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
               return (
                 <th
                   key={value}
-                  className={`${compact ? "min-w-8 p-1.5" : "min-w-11 p-2"} sticky top-0 z-20 border-l border-white/6 text-center ${weekend ? "bg-[#1a1810] text-amber-300/90" : "bg-[#0a1424] text-muted-foreground"}`}
+                  className={`${compact ? "min-w-8 p-1.5" : "min-w-11 p-2"} sticky top-[var(--shiftplan-month-bar,0px)] z-20 border-l border-white/6 text-center ${weekend ? "bg-[#1a1810] text-amber-300/90" : "bg-[#0a1424] text-muted-foreground"}`}
                 >
                   <span className="block text-[9px] font-bold uppercase tracking-wide">{weekday}</span>
                   <span className="mt-0.5 block text-[11px] font-black text-foreground">{value}</span>
@@ -141,8 +143,8 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
             const deltaCandidate = Number(hours?.deltaHours ?? actualHours - targetHours);
             const deltaHours = Number.isFinite(deltaCandidate) ? deltaCandidate : actualHours - targetHours;
             return (
-            <tr key={employee} className="border-t border-white/6">
-              <th className={`${compact ? "p-2" : "p-3"} sticky left-0 z-10 bg-[#081321]/95 text-left font-semibold text-foreground`}>
+            <tr key={employee} className={`border-t border-white/6 transition-colors ${selectedEmployee === employee ? "bg-indigo-500/15 ring-1 ring-inset ring-indigo-400/50" : selectedEmployee ? "opacity-40" : "hover:bg-white/[0.04]"}`}>
+              <th onClick={() => setSelectedEmployee((current) => (current === employee ? null : employee))} aria-pressed={selectedEmployee === employee} className={`${compact ? "p-2" : "p-3"} sticky left-0 z-10 cursor-pointer ${selectedEmployee === employee ? "bg-[#1b2250]" : "bg-[#081321]/95"} text-left font-semibold text-foreground`}>
                 <div>{employee}{dispatcherPool.length > 0 && isColoEmployee(employee, [dispatcherPool[0]]) && Array.from(shiftsByEmployee.get(employee)?.values() || []).some((code) => String(code).startsWith("E")) ? <span className="ml-2 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1.5 py-px text-[9px] font-black text-pink-200">DP</span> : null}</div>
                 <div className="mt-1 flex flex-wrap gap-1 text-[9px] font-bold uppercase tracking-wide">
                   <span className="rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-sky-200">{isGerman ? "Soll" : "Target"} {targetHours.toFixed(1)}h</span>
@@ -178,6 +180,18 @@ export default function ShiftplanDrafts() {
   const { user, canWrite } = useAuth();
   const canEditDrafts = canWrite("shiftplan_control");
   const initialParams = new URLSearchParams(window.location.search);
+  // Height of the sticky shift-time bar: the sticky date row of the tables starts right below it.
+  const stickyBarRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const element = stickyBarRef.current;
+    const root = document.documentElement;
+    if (!element) return undefined;
+    const apply = () => root.style.setProperty("--shiftplan-month-bar", `${Math.ceil(element.getBoundingClientRect().height)}px`);
+    apply();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(apply) : null;
+    observer?.observe(element);
+    return () => { observer?.disconnect(); root.style.removeProperty("--shiftplan-month-bar"); };
+  }, []);
   const [drafts, setDrafts] = useState<DraftSummary[]>([]);
   const [draftGroups, setDraftGroups] = useState<PlanningDraftGroup<DraftSummary>[]>([]);
   const draftListLoaded = useRef(false);
@@ -213,7 +227,7 @@ export default function ShiftplanDrafts() {
   }, []);
 
   // Manual changes of a draft (same endpoints as the generator page): set a shift, swap two cells, mark Colo.
-  const applyEditedDraft = (edited: any) => setActiveDraft((current) => (current ? { ...current, ...edited } : edited));
+  const applyEditedDraft = (edited: any) => { if (edited?.id) draftCache.current.delete(edited.id); setActiveDraft((current) => (current ? { ...current, ...edited } : edited)); };
   const editDraftCell = async (employeeName: string, day: number, shiftCode: string) => {
     if (!activeDraft) return;
     try {
@@ -248,24 +262,35 @@ export default function ShiftplanDrafts() {
     }
   };
 
+  // Already opened drafts are shown at once (and refreshed in the background); only the latest click counts.
+  const draftCache = useRef(new Map<number, Draft>());
+  const latestDraftRequest = useRef(0);
   const loadDraft = async (id: number) => {
-    setLoading(true);
+    const request = ++latestDraftRequest.current;
     setError("");
+    const cached = draftCache.current.get(id);
+    if (cached) { setActiveDraft(cached); setEditingMeta(false); } else setLoading(true);
     try {
-      const [draftResult, feedbackResult, voteResult] = await Promise.all([
-        api.get(`/shiftplan-control/drafts/${id}`),
+      // The draft itself is shown as soon as it arrives; comments and votes follow without blocking it.
+      const draftResult = await api.get(`/shiftplan-control/drafts/${id}`);
+      if (request !== latestDraftRequest.current) return;
+      draftCache.current.set(id, draftResult.data.draft);
+      if (draftCache.current.size > 6) draftCache.current.delete(draftCache.current.keys().next().value as number);
+      setActiveDraft(draftResult.data.draft);
+      setEditingMeta(false);
+      setLoading(false);
+      const [feedbackResult, voteResult] = await Promise.all([
         api.get(`/shiftplan-control/drafts/${id}/feedback`),
         api.get(`/shiftplan-control/drafts/${id}/votes`),
       ]);
-      setActiveDraft(draftResult.data.draft);
-      setEditingMeta(false);
+      if (request !== latestDraftRequest.current) return;
       setFeedback(feedbackResult.data.feedback || []);
       setVotes(voteResult.data.votes || { approve: 0, needs_changes: 0, total: 0 });
       setCurrentVote(voteResult.data.currentVote || null);
     } catch (requestError: any) {
-      setError(requestError.response?.data?.error || "Der Draft konnte nicht geladen werden.");
+      if (request === latestDraftRequest.current) setError(requestError.response?.data?.error || "Der Draft konnte nicht geladen werden.");
     } finally {
-      setLoading(false);
+      if (request === latestDraftRequest.current) setLoading(false);
     }
   };
 
@@ -425,7 +450,7 @@ export default function ShiftplanDrafts() {
           if (activeDraft) void exportDraft(activeDraft, "management", include);
         }}
       />
-      <div className="sticky top-0 z-30 rounded-xl border border-slate-700 bg-slate-900/95 px-4 py-2 backdrop-blur-md"><ShiftTimeLegend shiftTimes={shiftTimes} showTitle /></div>
+      <div ref={stickyBarRef} className="sticky top-0 z-[60] rounded-xl border border-slate-700 bg-slate-900/95 px-4 py-2 backdrop-blur-md"><ShiftTimeLegend shiftTimes={shiftTimes} showTitle /></div>
       <section className="rounded-xl border border-slate-700 bg-slate-900 p-6 md:p-8">
         <div className="flex flex-wrap items-start justify-between gap-5">
           <div className="max-w-3xl">

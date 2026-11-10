@@ -1072,10 +1072,13 @@ export default function Shiftplan() {
   /* WELLBEING LOGIC (NEW)                            */
   /* ------------------------------------------------ */
   useEffect(() => {
-    if (viewMode === "month") {
+    if (viewMode !== "month") return undefined;
+    // Secondary data: loaded shortly after the table is shown; quick month switching cancels the pending load.
+    const timer = window.setTimeout(() => {
       wellbeingStore.loadConfig();
       wellbeingStore.loadMetrics(selectedYear, monthIndex1);
-    }
+    }, 400);
+    return () => window.clearTimeout(timer);
   }, [selectedYear, monthIndex1, viewMode]);
 
   const wellbeingMetrics = wellbeingStore.getMetricsForMonth(selectedYear, monthIndex1);
@@ -1132,13 +1135,11 @@ export default function Shiftplan() {
 
   // Load Violations when year/month changes
   useEffect(() => {
-    if (viewMode === "month") {
-      fetchViolations(selectedYear, selectedMonthIndex + 1)
-        .then(v => setViolations(Array.isArray(v) ? v : []))
-        .catch(err => console.error("Violations Load Error:", err));
-
-      loadData(selectedYear, selectedMonthIndex + 1);
-    }
+    if (viewMode !== "month") return undefined;
+    // The plan itself loads first (see loadSchedule); warnings, absences and constraints follow right after,
+    // and are skipped when the user already moved on to another month.
+    const timer = window.setTimeout(() => { void loadData(selectedYear, selectedMonthIndex + 1); }, 250);
+    return () => window.clearTimeout(timer);
   }, [selectedYear, selectedMonthIndex, viewMode]);
 
   // [NEW] Load Skills if toggle is ON

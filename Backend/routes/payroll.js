@@ -124,6 +124,40 @@ router.get("/month-hours", async (req, res) => {
   }
 });
 
+/** Plan hours of every month of a year with own shifts (one query): the data for the year chart. */
+router.get("/year-hours", async (req, res) => {
+  const year = Number.parseInt(String(req.query.year ?? ""), 10);
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) return res.status(400).json({ error: "year is required" });
+  try {
+    const keys = await ownPlanNameKeys(req.user.id);
+    const state = String(req.query.state || "HE").toUpperCase() === "BY" ? "BY" : "HE";
+    const labels = [];
+    for (let month = 1; month <= 12; month += 1) labels.push(formatShiftMonthLabel(year, month), `${year}-${String(month).padStart(2, "0")}`);
+    const [shiftRows, definitionRows] = await Promise.all([
+      db.query(`SELECT month, employee_name, day, shift_code FROM shifts WHERE month = ANY($1::text[])`, [labels]),
+      db.query(`SELECT code, duration_hours, start_time, end_time, start_day_offset, end_day_offset FROM shift_definitions`),
+    ]);
+    const byMonth = new Map();
+    for (const row of shiftRows.rows) {
+      if (!keys.has(normalizeName(String(row.employee_name || "")))) continue;
+      const text = String(row.month || "");
+      const id = /^(\d{4})-(\d{2})$/.exec(text);
+      const parsed = id ? { year: Number(id[1]), month: Number(id[2]) } : parseMonthLabel(text);
+      if (!parsed || parsed.year !== year || !parsed.month) continue;
+      if (!byMonth.has(parsed.month)) byMonth.set(parsed.month, []);
+      byMonth.get(parsed.month).push(row);
+    }
+    const months = [...byMonth.keys()].sort((x, y) => x - y).map((month) => ({
+      month,
+      totals: buildEmployeeMonthHours({ year, month, shifts: byMonth.get(month), definitions: definitionRows.rows, state }).totals,
+    }));
+    res.json({ year, months });
+  } catch (error) {
+    console.error("PAYROLL YEAR HOURS ERROR:", error);
+    res.status(500).json({ error: "Hours could not be loaded" });
+  }
+});
+
 /** Months for which the logged-in person has planned shifts (newest first): the months the payroll can show. */
 router.get("/months", async (req, res) => {
   try {
@@ -133,7 +167,7 @@ router.get("/months", async (req, res) => {
     for (const row of rows) {
       if (!keys.has(normalizeName(String(row.employee_name || "")))) continue;
       const text = String(row.month || "");
-      const id = /^(d{4})-(d{2})$/.exec(text);
+      const id = /^(\d{4})-(\d{2})$/.exec(text);
       const parsed = id ? { year: Number(id[1]), month: Number(id[2]) } : parseMonthLabel(text);
       if (parsed?.year && parsed?.month) seen.add(`${parsed.year}-${String(parsed.month).padStart(2, "0")}`);
     }

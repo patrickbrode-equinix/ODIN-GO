@@ -8,6 +8,7 @@ import { AlertTriangle, FileText, Lock, LockKeyhole, ShieldCheck, Trash2, UserRo
 import { api } from "../../api/api";
 import { PayrollProfileForm } from "../payroll/PayrollProfileForm";
 import { PayrollStatement, type MonthShift, type MonthTotals } from "../payroll/PayrollStatement";
+import { PayrollYearChart, type YearChartPoint } from "../payroll/PayrollYearChart";
 import { DEFAULT_PROFILE, calculateMonth, type PayrollProfile } from "../../utils/payrollEngine";
 import {
   decryptProfile, deriveKey, encryptProfile, forgetKeyForTab, fromBase64, KDF_ITERATIONS, rememberKeyForTab, restoreKeyForTab, type EncryptedProfile,
@@ -130,6 +131,27 @@ export default function PayrollPage() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
+
+  /* ---- year chart: plan hours of all planned months of the year, salary computed here from the own profile ---- */
+  const [yearHours, setYearHours] = useState<Array<{ month: number; totals: MonthTotals }>>([]);
+  const [yearLoading, setYearLoading] = useState(false);
+  useEffect(() => {
+    if (phase !== "ready" || !profile || tab !== "statement") return undefined;
+    let cancelled = false;
+    setYearLoading(true);
+    api.get("/payroll/year-hours", { params: { year, state: profile.state } })
+      .then((response) => { if (!cancelled) setYearHours(Array.isArray(response.data?.months) ? response.data.months : []); })
+      .catch(() => { if (!cancelled) setYearHours([]); })
+      .finally(() => { if (!cancelled) setYearLoading(false); });
+    return () => { cancelled = true; };
+  }, [phase, profile, tab, year, hours.totals]);
+  const yearPoints = useMemo<YearChartPoint[]>(() => {
+    if (!profile) return [];
+    return yearHours.map((entry) => {
+      const calculated = calculateMonth(profile, { nightHours: entry.totals?.nightHours ?? 0, sundayHours: entry.totals?.sundayHours ?? 0, holidayHours: entry.totals?.holidayHours ?? 0 }, year);
+      return { month: entry.month, net: calculated.netPay, gross: calculated.grossTotal };
+    });
+  }, [profile, yearHours, year]);
 
   const result = useMemo(() => {
     if (!profile) return null;
@@ -309,6 +331,7 @@ export default function PayrollPage() {
           ) : result && availableMonths.includes(monthId) ? (
             <PayrollStatement result={result} totals={hours.totals} shifts={hours.shifts} monthLabel={`${MONTHS[month - 1]} ${year}`} matched={hours.matched} planned={hours.planned} state={profile.state} />
           ) : null}
+          <PayrollYearChart year={year} points={yearPoints} selectedMonth={month} loading={yearLoading} onSelect={(picked) => { const id = `${year}-${String(picked).padStart(2, "0")}`; if (availableMonths.includes(id)) setMonth(picked); }} />
         </div>
       )}
     </div>
