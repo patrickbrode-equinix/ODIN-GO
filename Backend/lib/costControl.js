@@ -6,8 +6,9 @@
 /* are calculated from the real shift times:        */
 /*  - night supplement: 20:00-06:00                 */
 /*  - Sunday supplement: 00:00-24:00 of the Sunday  */
-/*  - holiday supplement: 00:00-24:00 of the        */
-/*    holiday, on 24.12. and 31.12. only from 12:00 */
+/*  - holiday supplement: 00:00-24:00 of a national */
+/*    or international bank holiday (no Fronleichnam,*/
+/*    no 24.12./31.12.), listed per holiday         */
 /* The unpaid break (presence minus paid duration,  */
 /* placed in the middle of the shift) is deducted   */
 /* from every supplement it falls into. A night     */
@@ -20,12 +21,13 @@
 /* ================================================ */
 
 import { CREDITED_SHIFT_CODES } from './shiftHours.js';
-import { buildHolidayMap } from './hessenHolidays.js';
+import { buildBankHolidayMap, buildHolidayMap } from './hessenHolidays.js';
+import { holidayCategory } from './staffingLimits.js';
 
 const NON_WORK_CODES = new Set(['FS', 'S', ...CREDITED_SHIFT_CODES]);
 const DAY_MINUTES = 1440;
+const HALF_DAY_HOLIDAY_FROM = 720; // payroll calendar only: 24.12. and 31.12. from 12:00
 const NIGHT_WINDOWS = [[0, 360], [1200, 1440]]; // 20:00-06:00 expressed per calendar day
-const HALF_DAY_HOLIDAY_FROM = 720; // 24.12. and 31.12.: supplement from 12:00
 
 function pad2(value) {
   return String(value).padStart(2, '0');
@@ -76,9 +78,11 @@ function overlap(startA, endA, startB, endB) {
 }
 
 const holidayCache = new Map();
-function holidaysOfYear(year, state = 'HE') {
-  const key = `${state}-${year}`;
-  if (!holidayCache.has(key)) holidayCache.set(key, buildHolidayMap(year, state));
+// state = null: bank holidays only (cost control). With a federal state ('HE', 'BY') the payroll calendar of that state
+// including the company days applies (24.12. and 31.12. from 12:00).
+function holidaysOfYear(year, state = null) {
+  const key = `${state || 'bank'}-${year}`;
+  if (!holidayCache.has(key)) holidayCache.set(key, state ? buildHolidayMap(year, state) : buildBankHolidayMap(year));
   return holidayCache.get(key);
 }
 
@@ -87,7 +91,7 @@ function holidaysOfYear(year, state = 'HE') {
  * definition: { type, durationHours, startTime, endTime, startDayOffset, endDayOffset }; paidHours already
  * includes weekday overrides. Returns { night, sunday, holiday } in hours, or null without usable times.
  */
-export function getSupplementHours({ year, month, day, definition, paidHours, state = 'HE' }) {
+export function getSupplementHours({ year, month, day, definition, paidHours, withParts = false, state = null }) {
   const startClock = toMinutes(definition?.startTime ?? definition?.start_time);
   const endClock = toMinutes(definition?.endTime ?? definition?.end_time);
   if (startClock === null || endClock === null) return null;
@@ -108,19 +112,25 @@ export function getSupplementHours({ year, month, day, definition, paidHours, st
   let night = 0;
   let sunday = 0;
   let holiday = 0;
+  const holidayParts = [];
   for (let offset = -1; offset <= 2; offset++) {
     const date = new Date(Date.UTC(year, month - 1, day + offset));
     const dateStart = date.getTime() / 60000;
     for (const [from, to] of NIGHT_WINDOWS) night += paidMinutes(dateStart + from, dateStart + to);
     if (date.getUTCDay() === 0) sunday += paidMinutes(dateStart, dateStart + DAY_MINUTES);
     const iso = `${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`;
-    if (holidaysOfYear(date.getUTCFullYear(), state)[iso]) {
-      const halfDay = date.getUTCMonth() === 11 && (date.getUTCDate() === 24 || date.getUTCDate() === 31);
-      holiday += paidMinutes(dateStart + (halfDay ? HALF_DAY_HOLIDAY_FROM : 0), dateStart + DAY_MINUTES);
+    const holidayName = holidaysOfYear(date.getUTCFullYear(), state)[iso];
+    if (holidayName) {
+      const halfDay = Boolean(state) && date.getUTCMonth() === 11 && (date.getUTCDate() === 24 || date.getUTCDate() === 31);
+      const minutes = paidMinutes(dateStart + (halfDay ? HALF_DAY_HOLIDAY_FROM : 0), dateStart + DAY_MINUTES);
+      holiday += minutes;
+      if (minutes > 0) holidayParts.push({ date: iso, name: holidayName, hours: Number((minutes / 60).toFixed(2)) });
     }
   }
   const hours = (minutes) => Number((Math.max(minutes, 0) / 60).toFixed(2));
-  return { night: hours(night), sunday: hours(sunday), holiday: hours(holiday) };
+  const result = { night: hours(night), sunday: hours(sunday), holiday: hours(holiday) };
+  if (withParts) Object.defineProperty(result, 'holidayParts', { value: holidayParts, enumerable: false });
+  return result;
 }
 
 const TOTAL_KEYS = ['nightHours', 'sundayHours', 'holidayHours', 'nightShifts', 'sundayShifts', 'holidayShifts'];
@@ -155,6 +165,7 @@ export function buildCostControl(drafts = [], { timesByCode = new Map() } = {}) 
   const months = new Map();
   const quarters = new Map();
   const employees = new Map();
+  const holidays = new Map(); // date -> { date, name, category, hours, shifts, employees: Map }
   const total = emptyTotals();
   const coveredMonths = new Set(drafts.map((draft) => draft.month));
 
@@ -176,7 +187,7 @@ export function buildCostControl(drafts = [], { timesByCode = new Map() } = {}) 
       if (!definition || !(paidHours > 0)) continue;
 
       const times = (definition.startTime ?? definition.start_time) ? definition : (timesByCode.get(code) || definition);
-      let supplement = getSupplementHours({ year, month: mon, day, definition: times, paidHours });
+      let supplement = getSupplementHours({ year, month: mon, day, definition: times, paidHours, withParts: true });
       if (!supplement) {
         // No shift times known (old draft without times): fall back to the whole paid duration for night shifts.
         const isNight = String(definition.type || definition.shift_type || '').toLowerCase() === 'night';
@@ -202,6 +213,16 @@ export function buildCostControl(drafts = [], { timesByCode = new Map() } = {}) 
       addTo(total, entry);
 
       const name = String(shift.employee_name || '').trim();
+      for (const part of supplement.holidayParts || []) {
+        if (!holidays.has(part.date)) holidays.set(part.date, { date: part.date, name: part.name, category: holidayCategory(part.name), hours: 0, shifts: 0, employees: new Map() });
+        const holidayEntry = holidays.get(part.date);
+        holidayEntry.hours += part.hours;
+        holidayEntry.shifts += 1;
+        const personal = holidayEntry.employees.get(name) || { employee: name, hours: 0, shifts: 0 };
+        personal.hours += part.hours;
+        personal.shifts += 1;
+        holidayEntry.employees.set(name, personal);
+      }
       if (!employees.has(name)) employees.set(name, { employee: name, months: {}, quarters: {}, total: emptyTotals() });
       const employeeEntry = employees.get(name);
       if (!employeeEntry.months[draft.month]) employeeEntry.months[draft.month] = emptyTotals();
@@ -237,6 +258,43 @@ export function buildCostControl(drafts = [], { timesByCode = new Map() } = {}) 
       }))
       .sort((left, right) => left.employee.localeCompare(right.employee, 'de')),
     total: round(total),
+    holidays: [...holidays.values()].sort((left, right) => left.date.localeCompare(right.date)).map((entry) => ({
+      date: entry.date,
+      name: entry.name,
+      category: entry.category,
+      hours: Number(entry.hours.toFixed(2)),
+      shifts: entry.shifts,
+      employees: [...entry.employees.values()]
+        .map((person) => ({ ...person, hours: Number(person.hours.toFixed(2)) }))
+        .sort((left, right) => right.hours - left.hours || left.employee.localeCompare(right.employee, 'de')),
+    })),
+  };
+}
+
+/**
+ * Distribution of the holiday hours over the employees: per employee the hours per holiday plus the total, and the
+ * spread (highest / lowest / average) so an uneven distribution is visible. employees = names that should appear even
+ * with 0 h (optional).
+ */
+export function buildHolidayDistribution(holidays = [], employeeNames = []) {
+  const perEmployee = new Map(employeeNames.map((name) => [name, { employee: name, hours: 0, shifts: 0, byHoliday: {} }]));
+  for (const holiday of holidays) {
+    for (const person of holiday.employees) {
+      if (!perEmployee.has(person.employee)) perEmployee.set(person.employee, { employee: person.employee, hours: 0, shifts: 0, byHoliday: {} });
+      const entry = perEmployee.get(person.employee);
+      entry.hours = Number((entry.hours + person.hours).toFixed(2));
+      entry.shifts += person.shifts;
+      entry.byHoliday[holiday.date] = Number(((entry.byHoliday[holiday.date] || 0) + person.hours).toFixed(2));
+    }
+  }
+  const list = [...perEmployee.values()].sort((left, right) => right.hours - left.hours || left.employee.localeCompare(right.employee, 'de'));
+  const totalHours = Number(list.reduce((sum, entry) => sum + entry.hours, 0).toFixed(2));
+  return {
+    employees: list,
+    totalHours,
+    maxHours: list[0]?.hours ?? 0,
+    minHours: list.length ? list[list.length - 1].hours : 0,
+    averageHours: list.length ? Number((totalHours / list.length).toFixed(2)) : 0,
   };
 }
 
@@ -244,7 +302,7 @@ export function buildCostControl(drafts = [], { timesByCode = new Map() } = {}) 
  * Cost control as shown next to one draft: its calendar weeks (also those without supplement hours), its month
  * and its quarter.
  */
-export function focusCostControl(full, month) {
+export function focusCostControl(full, month, { employeeNames = [] } = {}) {
   const [year, mon] = String(month).split('-').map(Number);
   const monthPrefix = `${year}-${pad2(mon)}`;
   const byKey = new Map(full.weeks.map((week) => [week.key, week]));
@@ -275,5 +333,8 @@ export function focusCostControl(full, month) {
     quarterTotals: full.quarters.find((entry) => entry.key === quarterKey) || { key: quarterKey, ...round(emptyTotals()) },
     quarterMonthsPlanned: quarterMonths.filter((entry) => monthsPresent.has(entry)).length,
     weeks,
+    holidays: full.holidays.filter((entry) => entry.date.startsWith(monthPrefix)),
+    quarterHolidays: full.holidays.filter((entry) => getQuarterKey(entry.date.slice(0, 7)) === quarterKey),
+    holidayDistribution: buildHolidayDistribution(full.holidays.filter((entry) => getQuarterKey(entry.date.slice(0, 7)) === quarterKey), [...new Set([...employeeNames, ...full.employees.map((entry) => entry.employee)])]),
   };
 }

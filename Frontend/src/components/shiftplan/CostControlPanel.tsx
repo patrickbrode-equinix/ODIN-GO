@@ -23,6 +23,21 @@ export interface CostControlData {
   quarterTotals: CostControlTotals;
   quarterMonthsPlanned: number;
   weeks: Array<CostControlTotals & { key: string; week: number; year: number; monday: string; partial: boolean }>;
+  holidays?: CostControlHoliday[];
+  quarterHolidays?: CostControlHoliday[];
+  holidayDistribution?: {
+    employees: Array<{ employee: string; hours: number; shifts: number; byHoliday: Record<string, number> }>;
+    totalHours: number; maxHours: number; minHours: number; averageHours: number;
+  };
+}
+
+export interface CostControlHoliday {
+  date: string;
+  name: string;
+  category: "holiday_national" | "holiday_international";
+  hours: number;
+  shifts: number;
+  employees: Array<{ employee: string; hours: number; shifts: number }>;
 }
 
 function formatHours(value: number, isGerman: boolean) {
@@ -57,6 +72,68 @@ function Tile({ title, totals, note, isGerman }: { title: string; totals: CostCo
   );
 }
 
+function HolidayBreakdown({ costControl, isGerman }: { costControl: CostControlData; isGerman: boolean }) {
+  const holidays = costControl.quarterHolidays ?? costControl.holidays ?? [];
+  const distribution = costControl.holidayDistribution;
+  if (holidays.length === 0) {
+    return <p className="mt-3 text-[11px] text-muted-foreground">{isGerman ? "Keine Bankfeiertage mit Schichten im Quartal." : "No bank holidays with shifts in this quarter."}</p>;
+  }
+  const people = (distribution?.employees ?? []).filter((entry) => entry.hours > 0);
+  const max = Math.max(distribution?.maxHours ?? 0, 1);
+  const dateText = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="text-xs font-bold text-foreground">{isGerman ? "Feiertagsstunden im Quartal nach Feiertag" : "Holiday hours in the quarter by holiday"}</div>
+      <p className="text-[11px] text-muted-foreground">
+        {isGerman ? "Nur nationale und internationale Bankfeiertage (kein Fronleichnam, Heiligabend, Silvester)." : "National and international bank holidays only (no Corpus Christi, Christmas Eve, New Year's Eve)."}
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] border-collapse text-xs">
+          <thead>
+            <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+              <th className="p-2">{isGerman ? "Feiertag" : "Holiday"}</th>
+              <th className="p-2">{isGerman ? "Art" : "Type"}</th>
+              <th className="p-2 text-right">{isGerman ? "Stunden" : "Hours"}</th>
+              <th className="p-2 text-right">{isGerman ? "Schichten" : "Shifts"}</th>
+              <th className="p-2">{isGerman ? "Eingesetzt (Stunden)" : "Worked by (hours)"}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {holidays.map((holiday) => (
+              <tr key={holiday.date} className="border-t border-white/6 align-top">
+                <td className="p-2 text-foreground">{holiday.name} <span className="text-muted-foreground">{dateText(holiday.date)}</span></td>
+                <td className="p-2 text-muted-foreground">{holiday.category === "holiday_international" ? (isGerman ? "international" : "international") : (isGerman ? "national" : "national")}</td>
+                <td className="p-2 text-right font-semibold text-rose-100">{formatHours(holiday.hours, isGerman)}</td>
+                <td className="p-2 text-right text-foreground">{holiday.shifts}</td>
+                <td className="p-2 text-muted-foreground">{holiday.employees.map((person) => `${person.employee} (${formatHours(person.hours, isGerman)})`).join(", ")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {distribution && people.length > 0 ? (
+        <div>
+          <div className="mb-1 text-xs font-bold text-foreground">{isGerman ? "Verteilung der Feiertagsstunden auf die Mitarbeiter" : "Distribution of the holiday hours"}</div>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            {isGerman
+              ? `Gesamt ${formatHours(distribution.totalHours, true)} · Ø ${formatHours(distribution.averageHours, true)} je Mitarbeiter · höchster Wert ${formatHours(distribution.maxHours, true)}, niedrigster ${formatHours(distribution.minHours, true)}`
+              : `Total ${formatHours(distribution.totalHours, false)} · avg ${formatHours(distribution.averageHours, false)} per employee · highest ${formatHours(distribution.maxHours, false)}, lowest ${formatHours(distribution.minHours, false)}`}
+          </p>
+          <ul className="space-y-1">
+            {people.map((entry) => (
+              <li key={entry.employee} className="grid grid-cols-[minmax(110px,1fr)_minmax(0,2fr)_64px] items-center gap-2 text-[11px]">
+                <span className="truncate text-foreground">{entry.employee}</span>
+                <span className="h-2 overflow-hidden rounded-full bg-white/10"><span className="block h-full rounded-full bg-rose-300/80" style={{ width: `${(entry.hours / max) * 100}%` }} /></span>
+                <span className="text-right font-semibold tabular-nums text-rose-100">{formatHours(entry.hours, isGerman)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function CostControlPanel({ costControl, isGerman }: { costControl?: CostControlData | null; isGerman: boolean }) {
   if (!costControl) return null;
   const quarterNote = costControl.quarterMonthsPlanned < 3
@@ -72,8 +149,8 @@ export function CostControlPanel({ costControl, isGerman }: { costControl?: Cost
       </summary>
       <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
         {isGerman
-          ? "Zuschlagsstunden aus den Schichtzeiten: Nacht 20-6 Uhr, Sonntag 0-24 Uhr, Feiertag 0-24 Uhr (24.12. und 31.12. ab 12 Uhr), jeweils ohne die unbezahlte Pausenstunde. Nachtschichten am Sonntag zählen als Nacht und Sonntag; ein Sonntag, der Feiertag ist, steht in beiden Spalten."
-          : "Supplement hours from the shift times: night 20-6, Sunday 0-24, holiday 0-24 (24 and 31 Dec from 12:00), without the unpaid break hour. Night shifts on a Sunday count as night and Sunday; a Sunday that is a holiday appears in both columns."}
+          ? "Zuschlagsstunden aus den Schichtzeiten: Nacht 20-6 Uhr, Sonntag 0-24 Uhr, Feiertag 0-24 Uhr (nur nationale und internationale Bankfeiertage), jeweils ohne die unbezahlte Pausenstunde. Nachtschichten am Sonntag zählen als Nacht und Sonntag; ein Sonntag, der Feiertag ist, steht in beiden Spalten."
+          : "Supplement hours from the shift times: night 20-6, Sunday 0-24, holiday 0-24 (national and international bank holidays only), without the unpaid break hour. Night shifts on a Sunday count as night and Sunday; a Sunday that is a holiday appears in both columns."}
       </p>
       <div className="mt-3 grid gap-3 md:grid-cols-2">
         <Tile title={isGerman ? "Dieser Monat" : "This month"} totals={costControl.monthTotals} isGerman={isGerman} />
@@ -111,6 +188,7 @@ export function CostControlPanel({ costControl, isGerman }: { costControl?: Cost
           </tbody>
         </table>
       </div>
+      <HolidayBreakdown costControl={costControl} isGerman={isGerman} />
     </details>
   );
 }

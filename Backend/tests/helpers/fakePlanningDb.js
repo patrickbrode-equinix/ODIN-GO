@@ -134,6 +134,9 @@ export function createFakePlanningDb(overrides = {}) {
       const draft = db.draftHistory.get(params[0]);
       return rows(draft ? [{ shifts_json: draft }] : []);
     }
+    if (/SELECT DISTINCT ON \(month\) month, shifts_json FROM shiftplan_drafts/.test(sql)) {
+      return rows((params[0] || []).filter((monthId) => db.draftHistory.has(monthId)).map((monthId) => ({ month: monthId, shifts_json: db.draftHistory.get(monthId) })));
+    }
     if (/FROM app_settings/.test(sql)) {
       if (/key = ANY\(\$1::text\[\]\)/.test(sql)) return rows((params[0] || []).flatMap(setting));
       if (/key LIKE \$1/.test(sql)) {

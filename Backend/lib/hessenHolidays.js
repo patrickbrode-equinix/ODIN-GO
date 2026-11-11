@@ -69,6 +69,25 @@ export function buildBayernHolidayMap(year) {
   return map;
 }
 
+/**
+ * Bank holidays that count for the supplement cost control and the fair holiday distribution: the national German
+ * bank holidays (incl. the ones that are bank holidays abroad too, see INTERNATIONAL_HOLIDAYS in staffingLimits.js).
+ * Regional (Fronleichnam) and company days (Heiligabend, Silvester) are not part of it.
+ */
+export const BANK_HOLIDAY_NAMES = Object.freeze([
+  'Neujahr', 'Karfreitag', 'Ostermontag', 'Tag der Arbeit', 'Christi Himmelfahrt', 'Pfingstmontag',
+  'Tag der Deutschen Einheit', '1. Weihnachtstag', '2. Weihnachtstag',
+]);
+
+export function isBankHolidayName(name) {
+  return BANK_HOLIDAY_NAMES.includes(String(name || '').trim());
+}
+
+export function buildBankHolidayMap(year) {
+  const all = buildHessenHolidayMap(year);
+  return Object.fromEntries(Object.entries(all).filter(([, name]) => isBankHolidayName(name)));
+}
+
 export const HOLIDAY_STATES = ['HE', 'BY'];
 
 export function buildHolidayMap(year, state = 'HE') {

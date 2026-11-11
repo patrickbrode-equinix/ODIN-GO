@@ -193,7 +193,7 @@ test('management Excel puts hours and wish sheets in front of the month sheets',
   const workbook = await buildExcelWorkbook(drafts, null, { variant: 'management' });
   const restored = new ExcelJS.Workbook();
   await restored.xlsx.load(await workbook.xlsx.writeBuffer());
-  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Stunden & Wünsche', 'Wunschdetails', 'Kostenkontrolle', 'Januar 2027', 'Einstellungen']);
+  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Stunden & Wünsche', 'Wunschdetails', 'Kostenkontrolle', 'Schichtverteilung', 'Januar 2027', 'Einstellungen']);
   const overview = restored.worksheets[0];
   assert.equal(overview.getCell(5, 2).value, 'Jane Doe');
   assert.equal(overview.getCell(5, 3).value, 160);

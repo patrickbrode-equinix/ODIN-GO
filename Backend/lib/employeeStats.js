@@ -5,7 +5,8 @@
 /* ================================================ */
 
 import { parseMonthLabel } from './monthParser.js';
-import { buildHessenHolidayMap } from './hessenHolidays.js';
+import { buildBankHolidayMap } from './hessenHolidays.js';
+import { addToDistribution, distributionSegment, emptyDistribution, withPercentages } from './shiftDistribution.js';
 import { CREDITED_SHIFT_CODES } from './shiftHours.js';
 
 function pad2(value) {
@@ -45,6 +46,7 @@ function emptyEntry(name, year) {
     saturday_days: 0,
     sunday_days: 0,
     holiday_days: 0,
+    distribution: emptyDistribution(),
     absence_days: { vacation: 0, sick: 0, training: 0, other: 0, total: 0 },
   };
 }
@@ -57,7 +59,8 @@ function emptyEntry(name, year) {
  */
 export function buildEmployeeOverview({ year, summary, shifts = [], absences = [], definitions = [] } = {}) {
   const typeByCode = new Map(definitions.map((definition) => [String(definition.code || '').trim().toUpperCase(), String(definition.shift_type || '').trim().toLowerCase()]));
-  const holidays = buildHessenHolidayMap(year);
+  // Holiday shifts: national and international bank holidays only (no Fronleichnam, no 24.12./31.12.).
+  const holidays = buildBankHolidayMap(year);
   const entries = new Map();
   const ensure = (name) => {
     const key = String(name || '').trim();
@@ -94,6 +97,7 @@ export function buildEmployeeOverview({ year, summary, shifts = [], absences = [
     const date = new Date(year, parsed.month - 1, day);
     const type = typeByCode.get(code) || 'special';
     entry.total_shifts += 1;
+    addToDistribution(entry.distribution, distributionSegment(type, date.getDay()));
     if (type === 'early') entry.early_shifts += 1;
     else if (type === 'late') entry.late_shifts += 1;
     else if (type === 'night') entry.night_shifts += 1;
@@ -123,7 +127,11 @@ export function buildEmployeeOverview({ year, summary, shifts = [], absences = [
     }
   }
 
-  const employees = [...entries.values()].sort((left, right) => left.employee_name.localeCompare(right.employee_name, 'de'));
+  const employees = [...entries.values()]
+    .map((entry) => ({ ...entry, distribution: withPercentages(entry.distribution) }))
+    .sort((left, right) => left.employee_name.localeCompare(right.employee_name, 'de'));
+  const teamDistribution = emptyDistribution();
+  for (const entry of employees) for (const key of Object.keys(teamDistribution)) teamDistribution[key] += entry.distribution[key];
   const count = employees.length || 1;
   const sum = (pick) => employees.reduce((total, entry) => total + pick(entry), 0);
   const totals = {
@@ -138,6 +146,7 @@ export function buildEmployeeOverview({ year, summary, shifts = [], absences = [
     absence_days: sum((entry) => entry.absence_days.total),
     avg_actual_hours: Number((sum((entry) => entry.actual_hours) / count).toFixed(1)),
     avg_diff_hours: Number((sum((entry) => entry.diff_hours) / count).toFixed(1)),
+    distribution: withPercentages(teamDistribution),
   };
   return { year, employees, totals };
 }

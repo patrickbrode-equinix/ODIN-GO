@@ -9,6 +9,7 @@ import { Activity, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, Clock, 
 import { api } from "../../api/api";
 import { useLanguage } from "../../context/LanguageContext";
 import { ShiftCombinations } from "./ShiftCombinations";
+import { ShiftDistributionChart, type DistributionValues } from "./ShiftDistributionChart";
 
 interface MonthStat { month: number; actual_hours: number; target_hours: number; diff_hours: number }
 interface EmployeeStat {
@@ -26,6 +27,7 @@ interface EmployeeStat {
   saturday_days: number;
   sunday_days: number;
   holiday_days: number;
+  distribution: DistributionValues;
   absence_days: { vacation: number; sick: number; training: number; other: number; total: number };
 }
 interface Overview {
@@ -34,6 +36,7 @@ interface Overview {
   totals: {
     employees: number; actual_hours: number; target_hours: number; night_shifts: number; early_shifts: number; late_shifts: number;
     weekend_days: number; holiday_days: number; absence_days: number; avg_actual_hours: number; avg_diff_hours: number;
+    distribution?: DistributionValues;
   };
 }
 
@@ -246,7 +249,7 @@ export function EmployeeStatistics() {
             <Kpi icon={<Clock className="h-3.5 w-3.5" />} label={de ? "Geleistete Stunden" : "Hours worked"} value={fmt(t.actual_hours)} sub={`${de ? "Soll" : "Target"} ${fmt(t.target_hours)} h · Ø ${fmt(t.avg_actual_hours)} h`} accent="#5b8def" />
             <Kpi icon={<Activity className="h-3.5 w-3.5" />} label={de ? "Ø Differenz" : "Avg. difference"} value={`${signed(t.avg_diff_hours)} h`} sub={de ? "je Mitarbeiter zum Soll" : "per employee vs. target"} accent={diffColor(t.avg_diff_hours)} />
             <Kpi icon={<Moon className="h-3.5 w-3.5" />} label={de ? "Nachtschichten" : "Night shifts"} value={fmt(t.night_shifts)} sub={`${de ? "Wochenendtage" : "Weekend days"} ${fmt(t.weekend_days)}`} accent={NIGHT} />
-            <Kpi icon={<CalendarDays className="h-3.5 w-3.5" />} label={de ? "Feiertagseinsätze" : "Holiday shifts"} value={fmt(t.holiday_days)} sub={de ? "bundesweit + Hessen" : "federal + Hesse"} accent={EARLY} />
+            <Kpi icon={<CalendarDays className="h-3.5 w-3.5" />} label={de ? "Feiertagseinsätze" : "Holiday shifts"} value={fmt(t.holiday_days)} sub={de ? "nationale + internationale Bankfeiertage" : "national + international bank holidays"} accent={EARLY} />
             <Kpi icon={<Palmtree className="h-3.5 w-3.5" />} label={de ? "Abwesenheitstage" : "Absence days"} value={fmt(t.absence_days)} sub={de ? "Urlaub, Krank, Seminar" : "vacation, sick, training"} accent={GOOD} />
             <div className="flex items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
               <ShiftDonut early={t.early_shifts} late={t.late_shifts} night={t.night_shifts} label={de ? "Schichten" : "Shifts"} />
@@ -334,6 +337,7 @@ export function EmployeeStatistics() {
             })}
             {people.length === 0 && !loading ? <div className="px-4 py-10 text-center text-sm text-slate-500">{de ? "Keine Daten für dieses Jahr." : "No data for this year."}</div> : null}
           </div>
+          <ShiftDistributionChart employees={all} team={t.distribution} de={de} />
           <ShiftCombinations year={year} employees={all.filter((entry) => entry.total_shifts > 0).map((entry) => entry.employee_name).sort((left, right) => left.localeCompare(right, "de"))} de={de} />
         </>
       ) : loading ? (

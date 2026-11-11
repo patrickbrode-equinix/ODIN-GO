@@ -975,15 +975,15 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
     [draft.wish_status]
   );
 
-  const employeeBadges = useMemo<Record<string, Array<{ label: string; tone?: 'success' | 'warning' | 'neutral' }>>>(() => {
+  const employeeBadges = useMemo<Record<string, Array<{ label: string; tone?: 'success' | 'warning' | 'neutral'; emphasis?: boolean }>>>(() => {
     return Object.fromEntries(
       employees.map((employee) => {
         const submitted = wishStatusByEmployee.get(employee)?.submitted;
-        const badges: Array<{ label: string; tone?: 'success' | 'warning' | 'neutral' }> = [];
+        const badges: Array<{ label: string; tone?: 'success' | 'warning' | 'neutral'; emphasis?: boolean }> = [];
         if (manualEmployeeNameSet.has(employee)) {
           badges.push({ label: isGerman ? 'MANUELL' : 'MANUAL', tone: 'warning' });
         }
-        badges.push({ label: submitted ? (isGerman ? 'Wunsch da' : 'Submitted') : (isGerman ? 'Offen' : 'Missing'), tone: submitted ? 'success' : 'warning' });
+        badges.push({ label: submitted ? (isGerman ? 'Wunsch da' : 'Submitted') : (isGerman ? 'Keine Wünsche' : 'No wishes'), tone: submitted ? 'success' : 'warning', emphasis: !submitted });
         return [employee, badges];
       })
     );

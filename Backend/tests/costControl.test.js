@@ -37,16 +37,36 @@ test('Sunday supplement 0-24: Sunday night shifts get Sunday and night supplemen
   assert.deepEqual(supplement(2027, 1, 3, 'L1'), { night: 2, sunday: 8, holiday: 0 });
 });
 
-test('holiday supplement; on 24.12. and 31.12. only from 12:00', () => {
+test('holiday supplement only for national and international bank holidays', () => {
   assert.deepEqual(supplement(2027, 1, 1, 'E1'), { night: 0, sunday: 0, holiday: 8 }); // New Year
-  assert.equal(supplement(2026, 12, 24, 'L1').holiday, 8, 'Heiligabend late shift is fully after 12:00');
-  assert.equal(supplement(2026, 12, 24, 'E1').holiday, 3.5, 'Heiligabend early shift: only 12:00-15:30');
-  assert.equal(supplement(2026, 12, 31, 'L2').holiday, 8);
-  assert.equal(supplement(2026, 12, 31, 'E1').holiday, 3.5);
   assert.equal(supplement(2026, 12, 25, 'E1').holiday, 8, '1. Weihnachtstag: whole day');
-  // Night from Heiligabend to Weihnachten: 21:15-24:00 (after 12:00) + 0:00-6:45 minus the break = 8.5 h
-  assert.equal(supplement(2026, 12, 24, 'N').holiday, 8.5);
-  assert.equal(supplement(2027, 1, 6, 'E1').holiday, 8 * 0, '06.01. is no holiday in Hesse');
+  assert.equal(supplement(2026, 12, 24, 'L1').holiday, 0, 'Heiligabend is a company day, no bank holiday');
+  assert.equal(supplement(2026, 12, 31, 'L2').holiday, 0, 'Silvester is no bank holiday');
+  assert.equal(supplement(2026, 6, 4, 'E1').holiday, 0, 'Fronleichnam is regional');
+  // Night from Heiligabend to Weihnachten: 0:00-6:45 of the 25th minus the break (01:30-02:30)
+  assert.equal(supplement(2026, 12, 24, 'N').holiday, 5.75);
+  assert.equal(supplement(2027, 1, 6, 'E1').holiday, 0, '06.01. is no holiday in Hesse');
+});
+
+test('holidays are listed by name with the hours of every employee', () => {
+  const control = buildCostControl([{
+    month: '2026-12', config_snapshot: { shiftDefinitions: definitions },
+    shifts_json: [
+      { employee_name: 'Anna', day: 25, shift_code: 'E1' },
+      { employee_name: 'Ben', day: 25, shift_code: 'L1' },
+      { employee_name: 'Ben', day: 26, shift_code: 'E1' },
+      { employee_name: 'Cara', day: 24, shift_code: 'E1' },
+    ],
+  }]);
+  assert.deepEqual(control.holidays.map((entry) => [entry.date, entry.name, entry.category, entry.hours, entry.shifts]), [
+    ['2026-12-25', '1. Weihnachtstag', 'holiday_international', 16, 2],
+    ['2026-12-26', '2. Weihnachtstag', 'holiday_international', 8, 1],
+  ]);
+  assert.deepEqual(control.holidays[0].employees.map((entry) => entry.employee).sort(), ['Anna', 'Ben']);
+  const focus = focusCostControl(control, '2026-12', { employeeNames: ['Anna', 'Ben', 'Cara'] });
+  assert.equal(focus.holidayDistribution.totalHours, 24);
+  assert.equal(focus.holidayDistribution.employees.find((entry) => entry.employee === 'Ben').hours, 16);
+  assert.equal(focus.holidayDistribution.employees.find((entry) => entry.employee === 'Cara').hours, 0);
 });
 
 const january = {
@@ -153,4 +173,58 @@ test('month sheet marks Colo and late overstaffing in the cell (not in the team 
   assert.match(teamSheet.getCell(5, 4).border.top.color.argb, /06B6D4$/, 'Colo stays visible for the team');
   assert.doesNotMatch(String(teamSheet.getCell(5, 5).border?.top?.color?.argb), /F97316$/, 'overstaffing is internal');
   assert.equal(team.getWorksheet('Kostenkontrolle'), undefined);
+});
+
+test('management workbook: holiday breakdown by name and shift distribution with weekend segment', async () => {
+  const { allocateBarCells, addShiftDistributionSheet } = await import('../routes/shiftplanControl.js');
+  assert.equal(allocateBarCells([1, 1, 1]).reduce((sum, value) => sum + value, 0), 50);
+  assert.equal(allocateBarCells([3, 1, 0, 6, 0]).reduce((sum, value) => sum + value, 0), 50);
+  assert.equal(allocateBarCells([0, 0, 0, 0, 0]).reduce((sum, value) => sum + value, 0), 0);
+  const december = {
+    month: '2026-12', config_snapshot: { shiftDefinitions: definitions },
+    shifts_json: [
+      { employee_name: 'Anna', day: 25, shift_code: 'E1' }, // Friday, 1. Weihnachtstag
+      { employee_name: 'Anna', day: 28, shift_code: 'L1' }, // Monday
+      { employee_name: 'Anna', day: 26, shift_code: 'E1' }, // Saturday: weekend
+      { employee_name: 'Ben', day: 29, shift_code: 'N' },
+    ],
+  };
+  const workbook = new ExcelJS.Workbook();
+  addCostControlSheet(workbook, [december]);
+  const cost = [];
+  workbook.getWorksheet('Kostenkontrolle').eachRow((row) => cost.push(row.values.filter((value) => value !== undefined && value !== null).join('|')));
+  const text = cost.join('\n');
+  assert.match(text, /Feiertage im Detail/);
+  assert.match(text, /25\.12\.2026\|1\. Weihnachtstag\|international\|8\|1\|Anna \(8 h\)/);
+  assert.match(text, /26\.12\.2026\|2\. Weihnachtstag\|international\|8\|1\|Anna \(8 h\)/);
+  assert.match(text, /Verteilung der Feiertagsstunden pro Mitarbeiter/);
+  assert.doesNotMatch(text, /24\.12\.2026\|/);
+
+  const { employees, team } = addShiftDistributionSheet(workbook, [december]);
+  const anna = employees.find((entry) => entry.employee === 'Anna');
+  assert.deepEqual([anna.early, anna.late, anna.night, anna.weekend, anna.total], [1, 1, 0, 1, 3]);
+  assert.equal(anna.percent.weekend, 33.3);
+  assert.equal(team.total, 4);
+  const sheet = workbook.getWorksheet('Schichtverteilung');
+  assert.ok(sheet);
+  assert.equal(sheet.getCell(5, 1).value, 'Anna');
+  assert.equal(sheet.getCell(5, 2).value, 3);
+});
+
+test('employees without wishes are highlighted on the cost control and distribution sheets', async () => {
+  const { addShiftDistributionSheet } = await import('../routes/shiftplanControl.js');
+  const draft = { month: '2026-12', config_snapshot: { shiftDefinitions: definitions }, shifts_json: [{ employee_name: 'Anna', day: 25, shift_code: 'E1' }, { employee_name: 'Ben', day: 25, shift_code: 'E1' }] };
+  const workbook = new ExcelJS.Workbook();
+  const missing = new Set(['Ben']);
+  addCostControlSheet(workbook, [draft], { missingWishEmployees: missing });
+  addShiftDistributionSheet(workbook, [draft], { missingWishEmployees: missing });
+  const argbOfName = (sheetName, name) => {
+    let found = null;
+    workbook.getWorksheet(sheetName).eachRow((row) => { if (row.getCell(1).value === name) found = row.getCell(1).fill?.fgColor?.argb ?? null; });
+    return found;
+  };
+  assert.equal(argbOfName('Schichtverteilung', 'Ben'), 'FDE68A');
+  assert.notEqual(argbOfName('Schichtverteilung', 'Anna'), 'FDE68A');
+  assert.equal(argbOfName('Kostenkontrolle', 'Ben'), 'FDE68A');
+  assert.notEqual(argbOfName('Kostenkontrolle', 'Anna'), 'FDE68A');
 });

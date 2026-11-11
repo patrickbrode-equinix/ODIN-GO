@@ -44,7 +44,7 @@ interface ShiftplanTableProps {
   onCellClick?: (employeeName: string, day: number, modifiers: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) => void;
   onHideEmployee?: (name: string) => void;
   onCellContextMenu?: (e: React.MouseEvent, args: { employeeName: string; day: number; current: string }) => void;
-  employeeBadges?: Record<string, Array<{ label: string; tone?: 'success' | 'warning' | 'neutral' }>>;
+  employeeBadges?: Record<string, Array<{ label: string; tone?: 'success' | 'warning' | 'neutral'; emphasis?: boolean }>>;
 
   // 2027
   employeeHours?: Map<string, EmployeeMonthlyStats>; // Type mismatch fixed below? No, it was EmployeeMonthlyStats in import?
@@ -435,6 +435,8 @@ export function ShiftplanTable({
                 const isSelected = selectedRow === name;
                 const hasRowSelected = selectedRow !== null;
                 const monthlyStats = employeeHours?.get(name) || null;
+                // Employees without submitted wishes stand out (amber name cell with a left bar).
+                const missingWishes = (employeeBadges[name] || []).some((badge) => badge.emphasis);
                 return (
                   <Fragment key={name}>
                     <tr
@@ -447,6 +449,7 @@ export function ShiftplanTable({
                       <td
                         className={`sticky left-0 border-r border-white/5 p-3 min-w-[220px] bg-background transition-colors dark:bg-[#0f111a] group-hover:bg-accent dark:group-hover:bg-[#1a1c23]
                         ${isSelected ? "border-indigo-500/30 bg-accent dark:bg-[#1a1c23]" : ""}
+                        ${missingWishes && !isSelected ? "!bg-amber-400/15 border-l-4 border-l-amber-400" : ""}
                         z-30
                       `}
                         onClick={(e) => {
@@ -459,7 +462,7 @@ export function ShiftplanTable({
                           {/* Name + Hide Button */}
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className={`text-[13px] font-semibold tracking-wide transition-colors ${isSelected ? "text-indigo-700 dark:text-indigo-300" : "text-foreground group-hover:text-indigo-700 dark:text-white dark:group-hover:text-indigo-300"}`}>{name}</span>
+                              <span className={`text-[13px] font-semibold tracking-wide transition-colors ${isSelected ? "text-indigo-700 dark:text-indigo-300" : missingWishes ? "text-amber-700 dark:text-amber-300" : "text-foreground group-hover:text-indigo-700 dark:text-white dark:group-hover:text-indigo-300"}`}>{name}</span>
                               {(employeeBadges[name] || []).map((badge, index) => {
                                 const tone = badge.tone || 'neutral';
                                 const toneClass = tone === 'success'

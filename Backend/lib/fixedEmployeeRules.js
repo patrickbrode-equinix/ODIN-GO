@@ -54,6 +54,11 @@ export function requiresFullWeekend(...names) {
   return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));
 }
 
+/** Employees who get more of the public holidays than the others (they count 1.25 holidays lower in the distribution). */
+export function isHolidayFavored(...names) {
+  return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));
+}
+
 /** True when the name belongs to the one person who may keep a personal avoid list. */
 export function mayKeepPersonalAvoidList(...names) {
   return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));
