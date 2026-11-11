@@ -110,11 +110,13 @@ test('quarter and year Excel exports retain monthly versions in chronological wo
     const workbook = await buildExcelWorkbook([...drafts].reverse(), { type: quarter ? 'quarter' : 'year', year: 2027, quarter });
     const restored = new ExcelJS.Workbook();
     await restored.xlsx.load(await workbook.xlsx.writeBuffer());
-    assert.equal(restored.worksheets.length, months.length + 2); // months + settings + summary
-    assert.deepEqual(restored.worksheets.slice(0, months.length).map(sheet => sheet.name), months.map(month => new Date(2027, Number(month.slice(5)) - 1, 1).toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })));
+    assert.equal(restored.worksheets.length, months.length + 4); // cover + continuous plan + months + settings + summary
+    assert.equal(restored.worksheets[0].name, 'Übersicht');
+    assert.equal(restored.worksheets[1].name, 'Fortlaufender Plan');
+    assert.deepEqual(restored.worksheets.slice(2, months.length + 2).map(sheet => sheet.name), months.map(month => new Date(2027, Number(month.slice(5)) - 1, 1).toLocaleDateString('de-DE', { month: 'long', year: 'numeric' })));
     assert.equal(restored.worksheets.at(-1).name, quarter ? 'Quartalsübersicht' : 'Jahresübersicht');
     assert.equal(restored.worksheets.at(-1).getCell(4, 2).value, 2);
-    assert.equal(restored.worksheets[0].getCell(5, 2).value, 'E1');
+    assert.equal(restored.worksheets[2].getCell(5, 2).value, 'E1');
   }
 });
 
@@ -163,16 +165,16 @@ test('Excel month sheets and summary show title and description', async () => {
   const workbook = await buildExcelWorkbook(drafts, { type: 'quarter', year: 2027, quarter: 1, title: 'Gruppe', description: 'Gruppenbeschreibung' });
   const restored = new ExcelJS.Workbook();
   await restored.xlsx.load(await workbook.xlsx.writeBuffer());
-  assert.equal(restored.worksheets.length, 5); // 3 months + settings + summary
-  assert.match(String(restored.worksheets[0].getCell(1, 1).value), /^Gruppe – /);
-  assert.match(String(restored.worksheets[0].getCell(2, 1).value), /^Beschreibung\nVersion 1/);
+  assert.equal(restored.worksheets.length, 7); // cover + continuous plan + 3 months + settings + summary
+  assert.match(String(restored.worksheets[2].getCell(1, 1).value), /^Gruppe – /);
+  assert.match(String(restored.worksheets[2].getCell(2, 1).value), /^Beschreibung\nVersion 1/);
   assert.equal(restored.worksheets.at(-1).getCell(1, 1).value, 'Gruppe');
   assert.equal(restored.worksheets.at(-1).getCell(2, 1).value, 'Gruppenbeschreibung');
   const single = await buildExcelWorkbook([drafts[0]]);
   const one = new ExcelJS.Workbook();
   await one.xlsx.load(await single.xlsx.writeBuffer());
-  assert.match(String(one.worksheets[0].getCell(1, 1).value), /^Q1 Plan – /);
-  assert.equal(one.worksheets.length, 2); // month + settings sheet
+  assert.match(String(one.worksheets[1].getCell(1, 1).value), /^Q1 Plan – /);
+  assert.equal(one.worksheets.length, 3); // cover + month + settings sheet
 });
 
 test('team Excel shows only the shifts: no version line, no hours column, short summary', async () => {
@@ -181,7 +183,7 @@ test('team Excel shows only the shifts: no version line, no hours column, short 
   const workbook = await buildExcelWorkbook(drafts, { type: 'quarter', year: 2027, quarter: 1 }, { variant: 'team' });
   const restored = new ExcelJS.Workbook();
   await restored.xlsx.load(await workbook.xlsx.writeBuffer());
-  const month = restored.worksheets[0];
+  const month = restored.worksheets[2];
   assert.doesNotMatch(String(month.getCell(2, 1).value), /Version|secret-author/);
   assert.equal(month.getCell(4, 33).value, null); // no "Stunden" column behind the name column and the 31 days
   assert.equal(restored.worksheets.at(-1).getCell(3, 2).value, 'Schichten');
@@ -193,8 +195,8 @@ test('management Excel puts hours and wish sheets in front of the month sheets',
   const workbook = await buildExcelWorkbook(drafts, null, { variant: 'management' });
   const restored = new ExcelJS.Workbook();
   await restored.xlsx.load(await workbook.xlsx.writeBuffer());
-  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Stunden & Wünsche', 'Wunschdetails', 'Kostenkontrolle', 'Schichtverteilung', 'Januar 2027', 'Einstellungen']);
-  const overview = restored.worksheets[0];
+  assert.deepEqual(restored.worksheets.map(sheet => sheet.name), ['Übersicht', 'Stunden & Wünsche', 'Wunschdetails', 'Kostenkontrolle', 'Schichtverteilung', 'Januar 2027', 'Einstellungen']);
+  const overview = restored.worksheets[1];
   assert.equal(overview.getCell(5, 2).value, 'Jane Doe');
   assert.equal(overview.getCell(5, 3).value, 160);
   assert.equal(overview.getCell(5, 4).value, 8);

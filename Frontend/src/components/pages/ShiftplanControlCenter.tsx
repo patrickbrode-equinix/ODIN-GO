@@ -24,6 +24,7 @@ import { describeCellIssues, type DraftIssueContext } from '../shiftplan/draftCe
 import { PLANNING_YEARS } from '../../api/planningPeriods';
 import { getPlanningMonth, usePlanningDateStore } from '../../store/planningDateStore';
 import { CostControlPanel, type CostControlData } from '../shiftplan/CostControlPanel';
+import { getHessenHolidayMap } from '../../utils/deHolidays';
 
 /* ------------------------------------------------ */
 /* TYPES                                            */
@@ -918,6 +919,9 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
   const [year, mon] = draft.month.split('-').map(Number);
   const numDays = daysInMonth(year, mon);
   const [editMode, setEditMode] = useState(false);
+  // Holidays in the date bar (with their name); switchable like on the shift plan page.
+  const [showHolidays, setShowHolidays] = useState(true);
+  const holidayMap = useMemo(() => (showHolidays ? getHessenHolidayMap(year, isGerman ? 'de' : 'en') : {}), [isGerman, showHolidays, year]);
   const [savingCell, setSavingCell] = useState<string | null>(null);
   const shiftOptions = useMemo(() => {
     const fromConfig = Array.isArray(draft.config_snapshot?.shiftDefinitions)
@@ -991,7 +995,10 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
 
   const employeeHours = useMemo(() => {
     const map = new Map<string, EmployeeMonthlyStats>();
+    // Employees who are not planned (do-not-plan list): no Soll/Ist, they would only distort the hour lists.
+    const notPlanned = new Set<string>(Array.isArray(draft.config_snapshot?.excludedEmployeeNames) ? draft.config_snapshot.excludedEmployeeNames : []);
     for (const employee of employees) {
+      if (notPlanned.has(employee)) continue;
       const fairness = draft.fairness?.[employee] || {};
       const soll = Number(fairness.targetHours ?? draft.config_snapshot?.planningConfig?.monthly_target_hours ?? 174);
       const ist = Number(fairness.actualHours ?? 0);
@@ -1007,7 +1014,7 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
       });
     }
     return map;
-  }, [draft.config_snapshot?.planningConfig?.monthly_target_hours, draft.fairness, employees]);
+  }, [draft.config_snapshot?.excludedEmployeeNames, draft.config_snapshot?.planningConfig?.monthly_target_hours, draft.fairness, employees]);
 
   /* ── manual editing: select, set, swap, undo ── */
   const [selA, setSelA] = useState<DraftCell | null>(null);
@@ -1127,9 +1134,18 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
         )}
         <button
           type="button"
+          onClick={() => setShowHolidays((current) => !current)}
+          aria-pressed={showHolidays}
+          title={isGerman ? 'Feiertage mit Bezeichnung im Datumskopf ein- oder ausblenden' : 'Show or hide holidays with their name in the date bar'}
+          className={`ml-auto rounded-lg border px-3 py-1.5 text-xs font-bold transition ${showHolidays ? 'border-red-400/40 bg-red-500/15 text-red-200' : 'border-white/15 text-slate-300 hover:bg-white/10'}`}
+        >
+          {isGerman ? (showHolidays ? 'Feiertage an' : 'Feiertage aus') : (showHolidays ? 'Holidays on' : 'Holidays off')}
+        </button>
+        <button
+          type="button"
           onClick={() => setEditMode((current) => !current)}
           disabled={draft.status === 'activated' || !onCellChange}
-          className="ml-auto rounded-lg border border-blue-500/30 px-3 py-1.5 text-xs font-bold text-blue-300 transition hover:bg-blue-500/10 disabled:opacity-50"
+          className="rounded-lg border border-blue-500/30 px-3 py-1.5 text-xs font-bold text-blue-300 transition hover:bg-blue-500/10 disabled:opacity-50"
         >
           {editMode ? (isGerman ? 'Bearbeitung beenden' : 'Stop editing') : (isGerman ? 'Draft manuell bearbeiten' : 'Edit draft manually')}
         </button>
@@ -1203,7 +1219,7 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
             daysInMonth={numDays}
             year={year}
             monthIndex1={mon}
-            holidays={{}}
+            holidays={holidayMap}
             warnings={[]}
             isEditMode
             selectedCells={selectedKeys}
@@ -1221,7 +1237,7 @@ export function DraftShiftTable({ draft, manualOnly = false, onCellChange, onSwa
           daysInMonth={numDays}
           year={year}
           monthIndex1={mon}
-          holidays={{}}
+          holidays={holidayMap}
           warnings={[]}
           selectedCells={new Set<string>()}
           employeeHours={employeeHours}

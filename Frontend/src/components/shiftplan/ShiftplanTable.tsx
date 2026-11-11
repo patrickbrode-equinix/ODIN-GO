@@ -379,6 +379,12 @@ export function ShiftplanTable({
                         {hasWarning && <span className={`text-[11px] font-extrabold ml-0.5 ${hasCriticalWarning ? "text-red-400" : "text-amber-400"}`}>{hasCriticalWarning ? "!!" : "!"}</span>}
                       </div>
 
+                      {holidayName && (
+                        <div className="max-w-[46px] truncate text-[8px] font-bold uppercase leading-tight tracking-tight text-red-300" title={holidayName}>
+                          {holidayName}
+                        </div>
+                      )}
+
                       {/* Traffic Light Dot */}
                       {resultForDay.length > 0 && (
                         <div

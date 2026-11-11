@@ -228,3 +228,108 @@ test('employees without wishes are highlighted on the cost control and distribut
   assert.equal(argbOfName('Kostenkontrolle', 'Ben'), 'FDE68A');
   assert.notEqual(argbOfName('Kostenkontrolle', 'Anna'), 'FDE68A');
 });
+
+test('continuous plan lists all months one after another and the Colo coverage sheet shows open days', async () => {
+  const { addContinuousPlanSheet, addColoCoverageSheet } = await import('../routes/shiftplanControl.js');
+  const january2 = { month: '2027-01', config_snapshot: { shiftDefinitions: definitions, planReport: { colo: { enabled: true } }, coloAssignments: [{ employee_name: 'Anna', date: '2027-01-04', comment: 'Früh', task_key: 'a' }] }, conflicts: [{ type: 'colo_understaffed', date: '2027-01-05', task: 'night', required: 1, actual: 0, missing: 1 }], fairness: {}, shifts_json: [{ employee_name: 'Anna', day: 31, shift_code: 'E1' }] };
+  const february2 = { month: '2027-02', config_snapshot: { shiftDefinitions: definitions }, conflicts: [], fairness: {}, shifts_json: [{ employee_name: 'Anna', day: 1, shift_code: 'L1' }, { employee_name: 'Ben', day: 28, shift_code: 'N' }] };
+  const workbook = new ExcelJS.Workbook();
+  const info = addContinuousPlanSheet(workbook, [february2, january2]);
+  assert.deepEqual(info, { employees: 2, days: 31 + 28 });
+  const sheet = workbook.getWorksheet('Fortlaufender Plan');
+  // January 1 is column 2; February 1 is column 2 + 31
+  assert.equal(sheet.getCell(2, 2).value, 'Januar 2027');
+  assert.equal(sheet.getCell(2, 33).value, 'Februar 2027');
+  assert.equal(sheet.getCell(5, 32).value, 'E1', 'Anna Jan 31');
+  assert.equal(sheet.getCell(5, 33).value, 'L1', 'Anna Feb 1 directly behind Jan 31');
+  assert.equal(sheet.getCell(6, 60).value, 'N', 'Ben Feb 28 is the last column');
+
+  const coverage = addColoCoverageSheet(workbook, [january2, february2]);
+  assert.equal(coverage.gapDays, 1);
+  assert.equal(coverage.coveredDays, 1);
+  const rows = [];
+  workbook.getWorksheet('Colo-Abdeckung').eachRow((row) => rows.push(row.values.filter((value) => value !== undefined).join('|')));
+  assert.ok(rows.some((line) => /04\.01\.2027\|Mo\|.*Anna \(Früh\).*abgedeckt/.test(line)));
+  assert.ok(rows.some((line) => /05\.01\.2027\|Di\|.*night: 0\/1\|Lücke/.test(line)));
+});
+
+test('every export starts with the overview sheet: key figures, linked contents and legend', async () => {
+  const { buildExcelWorkbook } = await import('../routes/shiftplanControl.js');
+  const draft = {
+    month: '2027-02', version: 1, status: 'draft', created_at: new Date('2027-01-01'), created_by: 'admin',
+    shifts_json: [{ employee_name: 'Anna', day: 3, shift_code: 'E1' }, { employee_name: 'Ben', day: 4, shift_code: 'L1' }],
+    conflicts: [{ severity: 'critical', type: 'x' }, { severity: 'warning', type: 'y' }],
+    fairness: { Anna: { actualHours: 8, targetHours: 16 }, Ben: { actualHours: 8, targetHours: 16 } },
+    config_snapshot: { shiftDefinitions: definitions },
+  };
+  for (const variant of ['management', 'team']) {
+    const workbook = await buildExcelWorkbook([draft], null, { variant });
+    const overview = workbook.worksheets[0];
+    assert.equal(overview.name, 'Übersicht');
+    const cells = [];
+    overview.eachRow((row) => row.eachCell((cell) => cells.push(cell.value)));
+    const text = cells.map((value) => (value && typeof value === 'object' ? value.text ?? value.richText?.map((part) => part.text).join('') ?? '' : String(value ?? ''))).join('\n');
+    assert.match(text, /FR2 Schichtplan/);
+    assert.match(text, /Generiert am 01.01.2027/);
+    assert.match(text, /Erstellt von admin/);
+    assert.match(text, /EQUINIX/, 'placeholder wordmark while no logo file exists');
+    assert.match(text, /Februar 2027/);
+    assert.match(text, /Legende: Schichten/);
+    assert.match(text, /Frühschicht|E1/);
+    const link = cells.find((value) => value && typeof value === 'object' && value.hyperlink && value.text === 'Februar 2027');
+    assert.equal(link.hyperlink, "#'Februar 2027'!A1");
+    if (variant === 'management') {
+      assert.match(text, /Vertraulich/);
+      assert.match(text, /Konflikte/i);
+      assert.ok(cells.includes(2) || cells.includes(0.5), 'shift count and goal reached are written as numbers');
+    } else {
+      assert.doesNotMatch(text, /Vertraulich|Konflikte|Ist-Stunden/i);
+    }
+    const month = workbook.getWorksheet('Februar 2027');
+    assert.match(month.getCell(1, 1).fill.fgColor.argb, /1E3A5F$/, 'title band');
+    assert.equal(month.views[0].showGridLines, false);
+    assert.equal(month.pageSetup.orientation, 'landscape');
+  }
+});
+
+test('cover sheet places the logo image when a PNG file is available', async () => {
+  const os = await import('node:os');
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { buildOverviewSheet } = await import('../lib/excelEnterprise.js');
+  const file = path.join(os.tmpdir(), 'odin-test-logo.png');
+  fs.writeFileSync(file, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('Übersicht');
+  buildOverviewSheet(workbook, sheet, { title: 'FR2 Schichtplan', periodLabel: 'Test', variantLabel: 'Teamplan', generatedLabel: 'x', logoPath: file });
+  assert.equal(sheet.getImages().length, 1);
+  assert.notEqual(sheet.getCell(1, 2).value, 'EQUINIX');
+  fs.unlinkSync(file);
+});
+
+test('holidays are marked with F under the day and employees who are not planned stay out of the hours lists', async () => {
+  const { buildExcelWorkbook } = await import('../routes/shiftplanControl.js');
+  const draft = {
+    month: '2026-12', version: 1, status: 'draft', created_at: new Date('2026-11-01'), created_by: 'admin',
+    shifts_json: [{ employee_name: 'Anna', day: 25, shift_code: 'E1' }, { employee_name: 'Zed', day: 25, shift_code: 'E1' }],
+    conflicts: [], fairness: { Anna: { actualHours: 8, targetHours: 160 } },
+    config_snapshot: { shiftDefinitions: definitions, excludedEmployeeNames: ['Zed'] },
+  };
+  const workbook = await buildExcelWorkbook([draft], null, { variant: 'management' });
+  const month = workbook.getWorksheet('Dezember 2026');
+  const header = month.getCell(4, 26); // 25th = column 26
+  assert.equal(header.value, '25\nF', 'day number with F below it');
+  assert.match(header.fill.fgColor.argb, /B91C1C$/);
+  assert.match(String(header.note?.texts ? header.note.texts.map((part) => part.text).join('') : header.note), /1\. Weihnachtstag/);
+  assert.equal(month.getCell(4, 24).value, 23, 'the 23rd is no holiday');
+  const lines = [];
+  month.eachRow((row) => lines.push(String(row.getCell(1).value ?? '')));
+  assert.ok(lines.some((line) => /F = Feiertag:.*25\.12\. 1\. Weihnachtstag/.test(line)));
+
+  const rowOf = (sheet, name) => { let found = null; sheet.eachRow((row) => { if (row.getCell(1).value === name || row.getCell(2).value === name) found = row; }); return found; };
+  assert.equal(rowOf(month, 'Zed') !== null, true, 'still in the plan grid');
+  assert.ok([null, undefined, ''].includes(rowOf(month, 'Zed').getCell(32).value), 'no hours for Zed');
+  assert.equal(rowOf(workbook.getWorksheet('Stunden & Wünsche'), 'Zed'), null);
+  assert.equal(rowOf(workbook.getWorksheet('Schichtverteilung'), 'Zed'), null);
+  assert.ok(rowOf(workbook.getWorksheet('Schichtverteilung'), 'Anna'));
+});

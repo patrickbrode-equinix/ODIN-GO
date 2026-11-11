@@ -54,6 +54,12 @@ export function requiresFullWeekend(...names) {
   return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));
 }
 
+/** Employees who get more night shifts than the others: their night count is divided by this factor (1.5 = 50 % more nights). */
+export const NIGHT_FAVORED_WEIGHT = 1.5;
+export function isNightFavored(...names) {
+  return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));
+}
+
 /** Employees who get more of the public holidays than the others (they count 1.25 holidays lower in the distribution). */
 export function isHolidayFavored(...names) {
   return names.some((name) => name && matchesTokens(name, ['patrick', 'brode']));

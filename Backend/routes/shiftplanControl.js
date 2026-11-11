@@ -79,8 +79,9 @@ import {
 import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, buildHolidayDistribution, focusCostControl } from '../lib/costControl.js';
-import { buildShiftDistribution, DISTRIBUTION_LABELS, DISTRIBUTION_SEGMENTS } from '../lib/shiftDistribution.js';
-import { PERSONAL_AVOID_KEY_PREFIX, PERSONAL_AVOID_RULE, mayKeepPersonalAvoidList, requiresFullWeekend, isHolidayFavored, getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
+import { buildShiftDistribution, DISTRIBUTION_LABELS, DISTRIBUTION_SEGMENTS, isWorkedShiftCode } from '../lib/shiftDistribution.js';
+import { applyEnterpriseLayout, buildOverviewSheet, OVERVIEW_SHEET_NAME, WORKBOOK_TITLE } from '../lib/excelEnterprise.js';
+import { PERSONAL_AVOID_KEY_PREFIX, PERSONAL_AVOID_RULE, mayKeepPersonalAvoidList, requiresFullWeekend, isHolidayFavored, isNightFavored, NIGHT_FAVORED_WEIGHT, getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
 import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, isColoAllowedByRule, isColoCoveredByDbs, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
 import {
   PREFERENCE_STRENGTH_KEY_PREFIX,
@@ -1173,9 +1174,11 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   const exclRes = await pool.query(
-    `SELECT employee_name, fixed_shift_type, weekdays FROM shiftplan_exclusions WHERE is_active = TRUE`
+    `SELECT employee_name, fixed_shift_type, weekdays, plan_on_holidays FROM shiftplan_exclusions WHERE is_active = TRUE`
   );
   const shiftExcludedSet = new Set();
+  // On the "do not plan" list but ticked "plan on holidays": planned on bank holidays only, never in the hours lists.
+  const holidayOnlyEmployees = new Set();
   const fixedShiftTypeByEmployee = new Map();
   // Weekday-limited rules: a plain exclusion blocks its weekdays, a fixed-shift
   // rule allows planning only on its weekdays.
@@ -1197,9 +1200,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       exclusionBlockedWeekdaysByEmployee.set(row.employee_name, new Set(ruleWeekdays));
       continue;
     }
-    shiftExcludedSet.add(row.employee_name);
     fixedShiftTypeByEmployee.delete(row.employee_name);
     exclusionBlockedWeekdaysByEmployee.delete(row.employee_name);
+    if (row.plan_on_holidays === true) {
+      holidayOnlyEmployees.add(row.employee_name);
+      continue;
+    }
+    shiftExcludedSet.add(row.employee_name);
   }
   // Fixed rule in code: some employees never work on weekends (absolute, like an admin exclusion).
   for (const name of employees) {
@@ -1212,6 +1219,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     [`${month}-${numDays}`, `${month}-01`]
   );
   for (const row of assignExclRes.rows) shiftExcludedSet.add(row.employee_name);
+  for (const name of shiftExcludedSet) holidayOnlyEmployees.delete(name);
 
   const skillsMap = new Map();
 
@@ -1505,7 +1513,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const periodBaseTarget = isPartialPeriod
       ? employeeBaseTargetHours[employee] * (monthWeekdays > 0 ? periodWeekdays / monthWeekdays : planningDays / numDays)
       : employeeBaseTargetHours[employee];
-    return [employee, Number(Math.max(0, periodBaseTarget).toFixed(2))];
+    return [employee, holidayOnlyEmployees.has(employee) ? 0 : Number(Math.max(0, periodBaseTarget).toFixed(2))];
   }));
   // Year balance: hours behind (or ahead of) the official targets of the earlier months of the year are
   // made up (or reduced) in this month, damped and capped so a year plan does not oscillate.
@@ -1526,7 +1534,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const MAX_RELIEF_HOURS = 12;
   const employeeTargetHours = Object.fromEntries(activeEmployees.map((employee) => {
     const adjustment = isPartialPeriod ? 0 : Math.min(Math.max(-carriedHourBalance[employee], -MAX_RELIEF_HOURS), MAX_CATCHUP_HOURS);
-    return [employee, Number(Math.max(0, employeeOfficialTargetHours[employee] + adjustment).toFixed(2))];
+    return [employee, holidayOnlyEmployees.has(employee) ? 0 : Number(Math.max(0, employeeOfficialTargetHours[employee] + adjustment).toFixed(2))];
   }));
   // Nobody may end the month further than this below the official target (last-resort fill, see below).
   const MAX_HOURS_BELOW_TARGET = 15;
@@ -1601,7 +1609,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       ? evaluation.violations.some((violation) => violation.hard && (violation.monthly || violation.type !== 'not_preferred'))
       : evaluation.hardBlocked;
   };
-  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesFullWeekend(employee, code)
+  const isEmployeeShiftBlockedOnDate = (employee, dateStr, code) => violatesHolidayOnly(employee, dateStr, code)
+    || violatesFullWeekend(employee, code)
     || violatesCrossMonthWeekType(employee, dateStr, code)
     || violatesNeverTogetherOnDate(employee, dateStr, code)
     || violatesInexperiencedOnDate(employee, dateStr, code)
@@ -1683,6 +1692,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // Employees who work a weekend only as Saturday + Sunday: no Monday-Saturday block (E1SA/E2SA), see the final weekend pass.
   let fullWeekendEmployees = new Set();
   const violatesFullWeekend = (employee, code) => fullWeekendEmployees.has(employee) && /SA$/.test(String(code || '').trim().toUpperCase());
+  // Holiday-only employees (do-not-plan list with the holiday tick): only on bank holidays, and never a night block.
+  const guardBankHolidays = buildBankHolidayMap(year);
+  const violatesHolidayOnly = (employee, dateStr, code) => holidayOnlyEmployees.has(employee)
+    && (!guardBankHolidays[dateStr] || /^N/.test(String(code || '').trim().toUpperCase()));
   let violatesNeverTogetherOnDate = () => false;
   let violatesCrossMonthWeekType = () => false;
   let violatesInexperiencedOnDate = () => false;
@@ -3081,7 +3094,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
           if (shiftDef.shift_type === 'night' && fairnessRules.balance_nights) {
             const avgNights = activeEmployees.reduce((sum, currentEmployee) => sum + empStats[currentEmployee].nights, 0) / activeEmployees.length || 0;
-            score -= (stats.nights - avgNights) * 80;
+            score -= (stats.nights / (isNightFavored(employee) ? NIGHT_FAVORED_WEIGHT : 1) - avgNights) * 80;
             if (history && history.night_count > 3) {
               score -= 100;
               reasons.push('Fairnessausgleich: Hohe Nachtlast im Vormonat');
@@ -3232,6 +3245,13 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             coloBoost,
             colleagueMatches,
             dbsRoster: isRosterDbsAssignment,
+            // Night distribution: whoever has the fewest nights goes first; Patrick Brode is rated 1.5 times (his night count
+            // is divided by 1.5), so he ends up with about 50 % more nights than the others.
+            nightLoad: fairnessRules.balance_nights && normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night'
+              ? stats.nights / (isNightFavored(employee) ? NIGHT_FAVORED_WEIGHT : 1)
+              : null,
+            nightFavored: isNightFavored(employee),
+            holidayOnly: holidayOnlyEmployees.has(employee),
             holidayLoad: bankHolidaysInBlock(day, seriesDays) > 0 ? holidayLoadOf(employee) : 0,
             blockHasHoliday: bankHolidaysInBlock(day, seriesDays) > 0,
             submittedWishes: hasSubmittedWishes(employee),
@@ -3268,6 +3288,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const rotationWeekKey = getWeekendBlockKey(year, mon, day);
         eligibleScored.sort((left, right) => {
           if (Boolean(left.dbsRoster) !== Boolean(right.dbsRoster)) return left.dbsRoster ? -1 : 1;
+          // Bank holiday: the people who are ticked for holiday duty take the slots first.
+          if (bankHolidayMap[dateStr] && left.holidayOnly !== right.holidayOnly) return left.holidayOnly ? -1 : 1;
           // Soft wishes (strength < 100 %): an employee is only used against a
           // wish when no candidate without (or with a weaker) violation is left.
           if (left.preferencePenalty !== right.preferencePenalty) return left.preferencePenalty - right.preferencePenalty;
@@ -3281,12 +3303,21 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           if (left.lateNightPriority !== right.lateNightPriority) return left.lateNightPriority ? -1 : 1;
           // Open Colo cover is filled by a pool member whose wishes fit (before the hour balance: the Colo demand is a fixed requirement).
           if (left.coloBoost !== right.coloBoost) return left.coloBoost ? -1 : 1;
+          // Night slot with Patrick Brode among the candidates: he is taken first as long as his weighted night count
+          // (nights / 1.5) is not above the other candidate's.
+          if (left.nightFavored !== right.nightFavored && left.nightLoad !== null && right.nightLoad !== null) {
+            const favored = left.nightFavored ? left : right;
+            const other = left.nightFavored ? right : left;
+            if (favored.nightLoad <= other.nightLoad) return favored === left ? -1 : 1;
+          }
           // Contractual hours remain the first fairness guard. Within one
           // shift's worth of open hours, honour the selected shift wish.
           const targetGapDifference = (right.targetHoursGap + right.varietyHours) - (left.targetHoursGap + left.varietyHours);
           if (Math.abs(targetGapDifference) > getShiftHoursForDay(shiftDef, day)) return targetGapDifference;
           // Bank holidays: whoever has worked the fewest of them goes first (even distribution over the year).
           if ((left.blockHasHoliday || right.blockHasHoliday) && Math.abs(left.holidayLoad - right.holidayLoad) >= 0.5) return left.holidayLoad - right.holidayLoad;
+          // Night slots: the lower (weighted) night count wins, Patrick Brode's 1.5 bonus makes him the first pick more often.
+          if (left.nightLoad !== null && right.nightLoad !== null && Math.abs(left.nightLoad - right.nightLoad) >= 0.5) return left.nightLoad - right.nightLoad;
           // People who have submitted wishes are placed before those without: their wishes can only be honoured while the
           // slots are still open, everybody else is flexible.
           if (left.submittedWishes !== right.submittedWishes) return left.submittedWishes ? -1 : 1;
@@ -5180,6 +5211,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   const targetShortfalls = activeEmployees
+    .filter((employee) => !holidayOnlyEmployees.has(employee))
     .map((employee) => ({ employee, actualHours: Number(empHours[employee].toFixed(2)), targetHours: employeeTargetHours[employee] }))
     .filter((entry) => entry.actualHours < entry.targetHours);
   if (targetShortfalls.length > 0) {
@@ -5188,6 +5220,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
 
   const fairness = {};
   for (const employee of activeEmployees) {
+    if (holidayOnlyEmployees.has(employee)) continue; // not part of the hours lists
     fairness[employee] = {
       nights: empStats[employee].nights,
       weekends: empStats[employee].weekends,
@@ -5284,6 +5317,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       employees: employees.length,
       activeEmployees: activeEmployees.length,
       excluded: shiftExcludedSet.size,
+      // Everybody who is not planned regularly (do-not-plan list, also with the holiday tick): no Soll/Ist hours in lists.
+      excludedEmployeeNames: [...new Set([...shiftExcludedSet, ...holidayOnlyEmployees])].sort((left, right) => left.localeCompare(right, 'de')),
       daysInMonth: numDays,
       planningPeriod: {
         type: isPartialPeriod ? 'week' : 'month',
@@ -6525,6 +6560,182 @@ function addPlanningSettingsSheet(workbook, drafts) {
   ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 4 }];
 }
 
+/** Employees who are not planned regularly (do-not-plan list): they stay out of every hours list. */
+function notPlannedNamesOf(draft) {
+  return new Set(Array.isArray(draft?.config_snapshot?.excludedEmployeeNames) ? draft.config_snapshot.excludedEmployeeNames : []);
+}
+
+// "F" below the day number in the date header of a holiday (line break inside the number format), name as a note.
+function markHolidayHeader(cell, holidayName, day) {
+  cell.value = `${day}\nF`;
+  cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'B91C1C' } };
+  cell.note = `Feiertag: ${holidayName}`;
+}
+function holidayListText(holidays, year, mon) {
+  const prefix = `${year}-${String(mon).padStart(2, '0')}-`;
+  const entries = Object.entries(holidays).filter(([date]) => date.startsWith(prefix)).sort(([left], [right]) => left.localeCompare(right));
+  return entries.map(([date, name]) => `${date.slice(8, 10)}.${date.slice(5, 7)}. ${name}`).join('   ·   ');
+}
+
+const COLO_COVERAGE_HEADERS = ['Datum', 'Wochentag', 'Feiertag', 'Colo besetzt', 'Fehlend', 'Status'];
+
+/**
+ * Management sheet "Colo-Abdeckung": for every day of the drafts which Colo tasks are covered (and by whom) and which
+ * requirement of the admin settings is open (the generator's colo_understaffed conflicts). Shows at a glance whether
+ * all days are covered as demanded.
+ */
+export function addColoCoverageSheet(workbook, drafts) {
+  const relevant = drafts.filter((draft) => draft.config_snapshot?.planReport?.colo?.enabled
+    || (Array.isArray(draft.config_snapshot?.coloAssignments) && draft.config_snapshot.coloAssignments.length > 0));
+  if (relevant.length === 0) return null;
+  const ws = workbook.addWorksheet('Colo-Abdeckung');
+  ws.getCell(1, 1).value = 'Colo-Abdeckung pro Tag';
+  ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+  const rows = [];
+  for (const draft of relevant) {
+    const [year, mon] = String(draft.month).split('-').map(Number);
+    const holidays = buildHessenHolidayMap(year);
+    const assignments = Array.isArray(draft.config_snapshot?.coloAssignments) ? draft.config_snapshot.coloAssignments : [];
+    const conflicts = (Array.isArray(draft.conflicts) ? draft.conflicts : []).filter((entry) => entry?.type === 'colo_understaffed');
+    for (let day = 1; day <= daysInMonth(year, mon); day++) {
+      const iso = `${year}-${String(mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const covered = assignments.filter((entry) => String(entry.date).slice(0, 10) === iso);
+      const open = conflicts.filter((entry) => String(entry.date).slice(0, 10) === iso);
+      const missingCount = open.reduce((sum, entry) => sum + (Number(entry.missing) || 1), 0);
+      rows.push({
+        iso,
+        date: `${String(day).padStart(2, '0')}.${String(mon).padStart(2, '0')}.${year}`,
+        weekday: DAY_NAMES_DE[new Date(year, mon - 1, day).getDay()],
+        holiday: holidays[iso] || '',
+        covered: covered.map((entry) => `${entry.employee_name}${entry.comment ? ` (${entry.comment})` : ''}`).join(', '),
+        coveredCount: covered.length,
+        missingText: open.map((entry) => `${entry.task || 'Colo'}: ${entry.actual ?? 0}/${entry.required ?? '?'}`).join(', '),
+        missingCount,
+        status: missingCount > 0 ? 'Lücke' : covered.length > 0 ? 'abgedeckt' : 'keine Vorgabe',
+      });
+    }
+  }
+  const gapDays = rows.filter((entry) => entry.status === 'Lücke').length;
+  const coveredDays = rows.filter((entry) => entry.status === 'abgedeckt').length;
+  ws.getCell(2, 1).value = `${rows.length} Tage: ${coveredDays} vollständig abgedeckt, ${gapDays} mit offenem Colo-Bedarf, ${rows.length - coveredDays - gapDays} ohne Vorgabe. Offene Aufgaben: ${rows.reduce((sum, entry) => sum + entry.missingCount, 0)}.`;
+  ws.getCell(2, 1).font = { name: 'Calibri', size: 10, bold: true, color: { argb: gapDays > 0 ? 'B45309' : '047857' } };
+  COLO_COVERAGE_HEADERS.forEach((header, index) => { ws.getCell(4, index + 1).value = header; });
+  styleExcelHeaderRow(ws, 4, COLO_COVERAGE_HEADERS.length);
+  rows.forEach((entry, index) => {
+    const values = [entry.date, entry.weekday, entry.holiday, entry.covered || '–', entry.missingText || '', entry.status];
+    values.forEach((value, column) => {
+      const cell = ws.getCell(5 + index, column + 1);
+      cell.value = value;
+      cell.font = { name: 'Calibri', size: 10, bold: column === 5 };
+      cell.alignment = { horizontal: column === 3 || column === 4 ? 'left' : 'center', vertical: 'middle' };
+      cell.border = EXCEL_THIN_BORDER;
+      if (column === 5) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: entry.status === 'Lücke' ? 'FEE2E2' : entry.status === 'abgedeckt' ? 'D1FAE5' : 'F3F4F6' } };
+    });
+  });
+  [12, 11, 22, 70, 30, 14].forEach((width, index) => { ws.getColumn(index + 1).width = width; });
+  ws.views = [{ state: 'frozen', ySplit: 4 }];
+  ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + rows.length, column: COLO_COVERAGE_HEADERS.length } };
+  return { rows, gapDays, coveredDays };
+}
+
+/**
+ * Continuous plan: one sheet from the first to the last day of all drafts (e.g. January to December), employees in
+ * rows, every day of the year in a column, so a whole year can be read without switching sheets.
+ */
+export function addContinuousPlanSheet(workbook, drafts, { absenceInfo = new Map(), missingWishEmployees = new Set(), title = 'Fortlaufender Plan' } = {}) {
+  const sorted = [...drafts].sort((left, right) => left.month.localeCompare(right.month));
+  const ws = workbook.addWorksheet('Fortlaufender Plan');
+  const byDraft = sorted.map((draft) => {
+    const [year, mon] = draft.month.split('-').map(Number);
+    const plan = new Map();
+    for (const shift of Array.isArray(draft.shifts_json) ? draft.shifts_json : []) {
+      if (!plan.has(shift.employee_name)) plan.set(shift.employee_name, {});
+      plan.get(shift.employee_name)[shift.day] = shift.shift_code;
+    }
+    for (const name of Object.keys(draft.fairness || {})) if (!plan.has(name)) plan.set(name, {});
+    return { draft, year, mon, numDays: daysInMonth(year, mon), plan, holidays: buildHessenHolidayMap(year), marks: absenceInfo.get(draft.month)?.marks || new Map() };
+  });
+  const employees = [...new Set(byDraft.flatMap((entry) => [...entry.plan.keys()]))].sort((left, right) => left.localeCompare(right, 'de'));
+  const totalDays = byDraft.reduce((sum, entry) => sum + entry.numDays, 0);
+
+  ws.mergeCells(1, 1, 1, Math.max(totalDays + 1, 2));
+  ws.getCell(1, 1).value = `${title}: ${MONTH_NAMES_DE[byDraft[0].mon]} ${byDraft[0].year} bis ${MONTH_NAMES_DE[byDraft.at(-1).mon]} ${byDraft.at(-1).year}`;
+  ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
+  ws.getRow(1).height = 26;
+  const border = { top: { style: 'thin', color: { argb: 'D1D5DB' } }, bottom: { style: 'thin', color: { argb: 'D1D5DB' } }, left: { style: 'thin', color: { argb: 'D1D5DB' } }, right: { style: 'thin', color: { argb: 'D1D5DB' } } };
+  const monthStartBorder = { ...border, left: { style: 'medium', color: { argb: '1E3A5F' } } };
+  ws.getCell(2, 1).value = 'Monat';
+  ws.getCell(3, 1).value = 'Wochentag';
+  ws.getCell(4, 1).value = 'Mitarbeiter';
+  for (let row = 2; row <= 4; row++) {
+    const cell = ws.getCell(row, 1);
+    cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: 'FFFFFF' } };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
+  }
+
+  let column = 2;
+  const columnOfDay = [];
+  byDraft.forEach((entry, entryIndex) => {
+    const firstColumn = column;
+    for (let day = 1; day <= entry.numDays; day++, column++) {
+      const dow = new Date(entry.year, entry.mon - 1, day).getDay();
+      const isHoliday = Boolean(entry.holidays[`${entry.year}-${String(entry.mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`]);
+      const weekendOrHoliday = dow === 0 || dow === 6 || isHoliday;
+      const header = (row, value, size = 8) => {
+        const cell = ws.getCell(row, column);
+        cell.value = value;
+        cell.font = { name: 'Calibri', size, bold: true, color: { argb: 'FFFFFF' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: isHoliday ? 'B91C1C' : weekendOrHoliday ? '4B5563' : (entryIndex % 2 === 0 ? '1E3A5F' : '2F5D8C') } };
+        cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        cell.border = day === 1 ? monthStartBorder : border;
+      };
+      header(3, DAY_NAMES_DE[dow]);
+      header(4, day);
+      if (isHoliday) markHolidayHeader(ws.getCell(4, column), entry.holidays[`${entry.year}-${String(entry.mon).padStart(2, '0')}-${String(day).padStart(2, '0')}`], day);
+      columnOfDay.push({ entry, day, column });
+      ws.getColumn(column).width = 4.2;
+    }
+    ws.mergeCells(2, firstColumn, 2, column - 1);
+    const monthCell = ws.getCell(2, firstColumn);
+    monthCell.value = `${MONTH_NAMES_DE[entry.mon]} ${entry.year}`;
+    monthCell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: 'FFFFFF' } };
+    monthCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: entryIndex % 2 === 0 ? '1E3A5F' : '2F5D8C' } };
+    monthCell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+
+  if (byDraft.some((entry) => Object.keys(entry.holidays).some((date) => date.startsWith(`${entry.year}-${String(entry.mon).padStart(2, '0')}-`)))) ws.getRow(4).height = 30;
+  employees.forEach((employee, index) => {
+    const rowNumber = 5 + index;
+    const nameCell = ws.getCell(rowNumber, 1);
+    nameCell.value = employee;
+    nameCell.font = { name: 'Calibri', size: 9, bold: true };
+    nameCell.border = border;
+    if (missingWishEmployees.has(employee)) { nameCell.fill = MISSING_WISH_FILL; nameCell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '92400E' } }; }
+    for (const { entry, day, column: dayColumn } of columnOfDay) {
+      const planned = entry.plan.get(employee)?.[day] || '';
+      const code = planned || entry.marks.get(employee)?.get(day)?.code || '';
+      const cell = ws.getCell(rowNumber, dayColumn);
+      cell.value = code;
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      cell.font = { name: 'Calibri', size: 8 };
+      cell.border = day === 1 ? monthStartBorder : border;
+      const colors = resolveExcelShiftColors(code);
+      if (colors) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.fill } };
+        cell.font = { name: 'Calibri', size: 8, bold: true, color: { argb: colors.font } };
+      } else {
+        const dow = new Date(entry.year, entry.mon - 1, day).getDay();
+        if (dow === 0 || dow === 6) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F3F4F6' } };
+      }
+    }
+  });
+  ws.getColumn(1).width = 24;
+  ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 4, activeCell: 'B5' }];
+  ws.pageSetup = { orientation: 'landscape', paperSize: 8, fitToPage: true, fitToWidth: 1, fitToHeight: 0, printTitlesRow: '1:4', margins: { left: 0.25, right: 0.25, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 } };
+  return { employees: employees.length, days: totalDays };
+}
+
 const DISTRIBUTION_COLORS = { early: 'F5B942', late: '4A86E8', night: '8B6BD6', weekend: '6FD0E8', other: '9CA3AF' };
 const DISTRIBUTION_BAR_CELLS = 50;
 
@@ -6556,7 +6767,10 @@ export function addShiftDistributionSheet(workbook, drafts, { missingWishEmploye
       const code = String(definition?.code || '').trim().toUpperCase();
       if (code && !typeByCode.has(code)) typeByCode.set(code, String(definition.type || definition.shift_type || '').toLowerCase());
     }
-    for (const shift of Array.isArray(draft.shifts_json) ? draft.shifts_json : []) rows.push({ ...shift, year, month: mon });
+    const notPlanned = notPlannedNamesOf(draft);
+    for (const shift of Array.isArray(draft.shifts_json) ? draft.shifts_json : []) {
+      if (!notPlanned.has(shift.employee_name)) rows.push({ ...shift, year, month: mon });
+    }
   }
   const { employees, team } = buildShiftDistribution(rows, typeByCode);
   const ws = workbook.addWorksheet('Schichtverteilung');
@@ -6573,11 +6787,12 @@ export function addShiftDistributionSheet(workbook, drafts, { missingWishEmploye
   ws.getRow(4).height = 30;
   // Legend above the bar
   segments.forEach((segment, index) => {
+    ws.mergeCells(4, firstBarColumn + index * 10, 4, firstBarColumn + index * 10 + 9);
     const cell = ws.getCell(4, firstBarColumn + index * 10);
     cell.value = DISTRIBUTION_LABELS[segment];
     cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: segment === 'other' || segment === 'weekend' ? '111827' : 'FFFFFF' } };
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: DISTRIBUTION_COLORS[segment] } };
-    cell.alignment = { horizontal: 'left', vertical: 'middle' };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
   });
 
   const writeRow = (rowNumber, label, entry, bold = false) => {
@@ -6619,8 +6834,10 @@ export function addCostControlSheet(workbook, drafts, { timesByCode = new Map(),
   ws.getCell(1, 1).value = 'Kostenkontrolle: Nacht-, Sonntags- und Feiertagszuschläge';
   ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
   ws.getCell(2, 1).value = 'Zuschlagsstunden aus den Schichtzeiten: Nacht 20-6 Uhr, Sonntag 0-24 Uhr, Feiertag 0-24 Uhr (nur nationale und internationale Bankfeiertage; Fronleichnam, Heiligabend und Silvester zählen nicht). Die unbezahlte Stunde Pause ist abgezogen. Nachtschichten am Sonntag erhalten Nacht- und Sonntagszuschlag; ein Sonntag, der Feiertag ist, steht in beiden Spalten (nicht addieren). Zuordnung zum Starttag der Schicht.';
-  ws.getCell(2, 1).alignment = { wrapText: false };
+  ws.mergeCells(2, 1, 2, 8);
+  ws.getCell(2, 1).alignment = { wrapText: true, vertical: 'top' };
   ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
+  ws.getRow(2).height = 42;
 
   let row = 4;
   const writeTable = (title, headers, rows, { totalRow = null } = {}) => {
@@ -6639,7 +6856,7 @@ export function addCostControlSheet(workbook, drafts, { timesByCode = new Map(),
         cell.font = { name: 'Calibri', size: 10, bold: Boolean(isTotal) };
         cell.alignment = { horizontal: index === 0 ? 'left' : 'center' };
         if (isTotal) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E5E7EB' } };
-        if (typeof value === 'number') cell.numFmt = '0.##';
+        if (typeof value === 'number') cell.numFmt = Number.isInteger(value) ? '#,##0' : '#,##0.00';
       });
       row += 1;
     }
@@ -6754,7 +6971,9 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
       if (!shiftsByEmployee.has(shift.employee_name)) shiftsByEmployee.set(shift.employee_name, {});
       shiftsByEmployee.get(shift.employee_name)[shift.day] = shift.shift_code;
     }
+    const notPlanned = notPlannedNamesOf(draft);
     const employees = [...new Set([...shiftsByEmployee.keys(), ...Object.keys(draft.fairness || {})])]
+      .filter((name) => !notPlanned.has(name))
       .sort((left, right) => left.localeCompare(right, 'de'));
 
     for (const employee of employees) {
@@ -6815,16 +7034,16 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
     { header: 'Monat', width: 14, align: 'left', value: (entry) => entry.monthLabel },
     { header: 'Mitarbeiter', width: 24, align: 'left', bold: true, key: 'name', value: (entry) => entry.employee },
     ...(includeHours ? [
-      { header: 'Soll (h)', width: 10, numFmt: '0.0', value: (entry) => entry.target },
-      { header: 'Ist (h)', width: 10, numFmt: '0.0', value: (entry) => entry.actual },
-      { header: 'Differenz (h)', width: 13, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (entry) => diffOf(entry) },
-      { header: 'Soll erreicht', width: 13, numFmt: '0%', key: 'reached', value: (entry) => { const r = reachedOf(entry); return r === null ? null : r / 100; } },
+      { header: 'Soll (h)', width: 12, numFmt: '0.0', value: (entry) => entry.target },
+      { header: 'Ist (h)', width: 12, numFmt: '0.0', value: (entry) => entry.actual },
+      { header: 'Differenz (h)', width: 17, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (entry) => diffOf(entry) },
+      { header: 'Soll erreicht', width: 17, numFmt: '0%', key: 'reached', value: (entry) => { const r = reachedOf(entry); return r === null ? null : r / 100; } },
     ] : []),
-    ...(includeWishes ? [{ header: 'Urlaub (Tage)', width: 13, key: 'vacation', value: (entry) => entry.vacationDays }] : []),
-    ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 18, key: 'submitted', value: (entry) => (entry.submitted ? 'Ja' : 'Nein') }] : []),
+    ...(includeWishes ? [{ header: 'Urlaub (Tage)', width: 16, key: 'vacation', value: (entry) => entry.vacationDays }] : []),
+    ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 23, key: 'submitted', value: (entry) => (entry.submitted ? 'Ja' : 'Nein') }] : []),
     ...(includeWishes ? [
-      { header: 'Wünsche', width: 10, value: (entry) => entry.wishCount },
-      { header: 'Wunscherfüllung', width: 16, numFmt: '0%', key: 'wishPercent', value: (entry) => (entry.wishPercent === null ? null : entry.wishPercent / 100) },
+      { header: 'Wünsche', width: 12, value: (entry) => entry.wishCount },
+      { header: 'Wunscherfüllung', width: 20, numFmt: '0%', key: 'wishPercent', value: (entry) => (entry.wishPercent === null ? null : entry.wishPercent / 100) },
     ] : []),
   ];
   const columnCount = columns.length;
@@ -6879,12 +7098,12 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
         { header: 'Soll (h)', width: 11, numFmt: '0.0', value: (_e, total) => total.target },
         { header: 'Ist (h)', width: 11, numFmt: '0.0', value: (_e, total) => total.actual },
         { header: 'Differenz (h)', width: 14, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (_e, total) => Number((total.actual - total.target).toFixed(2)) },
-        { header: 'Soll erreicht', width: 13, numFmt: '0%', key: 'reached', value: (_e, total) => (total.target > 0 ? total.actual / total.target : null) },
+        { header: 'Soll erreicht', width: 17, numFmt: '0%', key: 'reached', value: (_e, total) => (total.target > 0 ? total.actual / total.target : null) },
       ] : []),
-      ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 18, key: 'submitted', value: (_e, total) => (total.submitted ? 'Ja' : 'Nein') }] : []),
+      ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 23, key: 'submitted', value: (_e, total) => (total.submitted ? 'Ja' : 'Nein') }] : []),
       ...(includeWishes ? [
-        { header: 'Wünsche', width: 10, value: (_e, total) => total.count },
-        { header: 'Wunscherfüllung', width: 16, numFmt: '0%', key: 'wishPercent', value: (_e, total) => (total.count > 0 ? total.scoreSum / total.count : null) },
+        { header: 'Wünsche', width: 12, value: (_e, total) => total.count },
+        { header: 'Wunscherfüllung', width: 20, numFmt: '0%', key: 'wishPercent', value: (_e, total) => (total.count > 0 ? total.scoreSum / total.count : null) },
       ] : []),
     ];
     const ts = workbook.addWorksheet('Gesamt');
@@ -6966,6 +7185,8 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'ODIN Shiftplan';
   workbook.created = new Date();
+  // Cover sheet: created first so it is the first tab, filled at the end when all sheets exist.
+  const overviewSheet = workbook.addWorksheet(OVERVIEW_SHEET_NAME);
 
   // Overview sheets come first, so they are the first thing the readers see.
   const absenceInfo = await loadAbsenceInfoForDrafts(drafts);
@@ -6974,8 +7195,11 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     : new Set();
   // Cost control (night and Sunday hours) is only for the management.
   const highlightMissing = options.includeWishStatus === false ? new Set() : missingWishEmployees;
-  if (isManagement) addCostControlSheet(workbook, drafts, { timesByCode: await loadShiftTimesByCode(), missingWishEmployees: highlightMissing });
+  const costControl = isManagement ? addCostControlSheet(workbook, drafts, { timesByCode: await loadShiftTimesByCode(), missingWishEmployees: highlightMissing }) : null;
   if (isManagement) addShiftDistributionSheet(workbook, drafts, { missingWishEmployees: highlightMissing });
+  const coloCoverage = isManagement ? addColoCoverageSheet(workbook, drafts) : null;
+  // One continuous plan over all months of a quarter / year (before the month sheets).
+  if (drafts.length > 1) addContinuousPlanSheet(workbook, drafts, { absenceInfo, missingWishEmployees: includeWishStatus ? missingWishEmployees : new Set() });
 
 
   for (const draft of drafts) {
@@ -6997,6 +7221,8 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     // Employees that are planned but have no shift this month still get a row (absence marks).
     for (const name of Object.keys(draft.fairness || {})) if (!byEmployee[name]) byEmployee[name] = {};
     const monthMarks = absenceInfo.get(draft.month)?.marks || new Map();
+    const monthHolidays = buildHessenHolidayMap(year);
+    const notPlannedNames = notPlannedNamesOf(draft);
     const empNames = Object.keys(byEmployee).sort((a, b) => a.localeCompare(b, 'de'));
     // Colo cover (all variants) and late overstaffing on Thursday/Friday (not in the team sheet) are marked in the cell.
     const coloCells = new Set((Array.isArray(draft.config_snapshot?.coloAssignments) ? draft.config_snapshot.coloAssignments : [])
@@ -7066,6 +7292,11 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: dow === 0 || dow === 6 ? '4B5563' : '1E3A5F' } };
       cell.alignment = { horizontal: 'center' };
       cell.border = { top: { style: 'thin' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } };
+      const holidayName = monthHolidays[`${year}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`];
+      if (holidayName) {
+        markHolidayHeader(cell, holidayName, d);
+        ws.getCell(3, d + 1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'B91C1C' } };
+      }
     }
     if (showHours) {
       ws.getCell(4, statsCol).value = 'Stunden';
@@ -7073,7 +7304,7 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       ws.getCell(4, statsCol).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '1E3A5F' } };
       ws.getCell(4, statsCol).alignment = { horizontal: 'center' };
     }
-    ws.getRow(4).height = 22;
+    ws.getRow(4).height = Object.keys(monthHolidays).some((date) => date.startsWith(`${year}-${String(mon).padStart(2, '0')}-`)) ? 32 : 22;
 
     const durationByCode = new Map(
       (draft.config_snapshot?.shiftDefinitions || []).map((definition) => [
@@ -7146,8 +7377,8 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       }
       if (coloDays > 0) ws.getRow(row).height = 28;
 
-      // Credited monthly hours (includes configured shift durations and absences).
-      if (showHours) {
+      // Credited monthly hours (includes configured shift durations and absences); none for employees who are not planned.
+      if (showHours && !notPlannedNames.has(emp)) {
         const totalCell = ws.getCell(row, statsCol);
         const reportedHours = Number(draft.fairness?.[emp]?.actualHours);
         totalCell.value = Number.isFinite(reportedHours) ? reportedHours : fallbackHours;
@@ -7161,7 +7392,7 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     ws.getColumn(1).width = 22;
     for (let d = 1; d <= numDays; d++) ws.getColumn(d + 1).width = 4.5;
     if (showHours) ws.getColumn(statsCol).width = 7;
-    ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4, column: lastColumn } };
+    ws.autoFilter = { from: { row: 4, column: 1 }, to: { row: 4 + empNames.length, column: 1 } };
 
     // Legend row
     const legendRow = empNames.length + 6;
@@ -7180,6 +7411,11 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
       const marks = [coloCells.size > 0 ? 'Cyan umrandet = Colo' : null, overflowCells.size > 0 ? 'Orange umrandet = Überbesetzung Spätschicht Do/Fr' : null].filter(Boolean);
       ws.getCell(legendRow + 3, 1).value = marks.join('   |   ');
       ws.getCell(legendRow + 3, 1).font = { name: 'Calibri', size: 8, bold: true, color: { argb: '0E7490' } };
+    }
+    const holidayLine = holidayListText(monthHolidays, year, mon);
+    if (holidayLine) {
+      ws.getCell(legendRow + 4, 1).value = `F = Feiertag:   ${holidayLine}`;
+      ws.getCell(legendRow + 4, 1).font = { name: 'Calibri', size: 8, bold: true, color: { argb: 'B91C1C' } };
     }
     if (includeWishStatus) {
       const legendCell = ws.getCell(legendRow + 1, 1);
@@ -7278,9 +7514,130 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
     for (let c = 2; c <= columns.length; c++) summaryWs.getColumn(c).width = 14;
   }
 
+  // Common look of all sheets and the cover sheet with key figures, contents and legend.
+  const generatedLabel = new Date().toLocaleString('de-DE', { timeZone: config.OPERATIONAL_TIMEZONE });
+  const variantLabel = isManagement ? 'Leitungsauswertung' : isTeam ? 'Teamplan' : 'Gesamtexport';
+  applyEnterpriseLayout(workbook, { variantLabel, generatedLabel });
+  buildOverviewSheet(workbook, overviewSheet, buildOverviewContext({ drafts, period, isManagement, isTeam, variantLabel, generatedLabel, exportedBy: options.exportedBy || '', costControl, coloCoverage, missingWishEmployees: includeWishStatus ? missingWishEmployees : new Set() }));
+
   normalizeWorkbookColors(workbook);
   return workbook;
 }
+
+/** Key figures, shift legend and mark legend of the cover sheet. */
+function buildOverviewContext({ drafts, period, isManagement, isTeam, variantLabel, generatedLabel, exportedBy, costControl, coloCoverage, missingWishEmployees }) {
+  const employees = new Set();
+  let shiftCount = 0;
+  let actualHours = 0;
+  let targetHours = 0;
+  let conflictCount = 0;
+  let criticalCount = 0;
+  for (const draft of drafts) {
+    const notPlanned = notPlannedNamesOf(draft);
+    for (const shift of Array.isArray(draft.shifts_json) ? draft.shifts_json : []) {
+      if (!isWorkedShiftCode(shift.shift_code)) continue;
+      shiftCount += 1;
+      if (!notPlanned.has(shift.employee_name)) employees.add(shift.employee_name);
+    }
+    for (const entry of Object.values(draft.fairness || {})) {
+      actualHours += Number(entry?.actualHours) || 0;
+      targetHours += Number(entry?.targetHours) || 0;
+    }
+    for (const conflict of Array.isArray(draft.conflicts) ? draft.conflicts : []) {
+      conflictCount += 1;
+      if (conflict?.severity === 'critical') criticalCount += 1;
+    }
+  }
+  const firstMonth = drafts[0]?.month || '';
+  const lastMonth = drafts.at(-1)?.month || firstMonth;
+  const monthLabel = (month) => { const [year, mon] = String(month).split('-').map(Number); return `${MONTH_NAMES_DE[mon]} ${year}`; };
+  const periodLabel = period?.type === 'quarter' ? `Quartalsplanung Q${period.quarter} ${period.year}`
+    : period?.type === 'year' ? `Jahresplanung ${period.year}`
+      : firstMonth === lastMonth ? monthLabel(firstMonth) : `${monthLabel(firstMonth)} bis ${monthLabel(lastMonth)}`;
+  const number = (value, digits = 0) => value.toLocaleString('de-DE', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+
+  const kpis = [
+    { label: 'Mitarbeiter', value: employees.size, note: 'regulär geplant, mit mindestens einer Schicht' },
+    { label: 'Geplante Schichten', value: shiftCount, numFmt: '#,##0', note: `in ${drafts.length} ${drafts.length === 1 ? 'Monat' : 'Monaten'}` },
+  ];
+  if (!isTeam) {
+    const reached = targetHours > 0 ? Math.round((actualHours / targetHours) * 100) : null;
+    kpis.push(
+      { label: 'Ist-Stunden', value: Math.round(actualHours), numFmt: '#,##0" h"', note: `Soll ${number(targetHours)} h` },
+      { label: 'Soll erreicht', value: reached === null ? '–' : reached / 100, numFmt: '0 %', note: 'Ist im Verhältnis zum Soll', tone: reached === null || reached >= 97 ? THEME_OK : THEME_WARN },
+      { label: 'Konflikte', value: conflictCount, note: `davon ${criticalCount} kritisch`, tone: criticalCount > 0 ? THEME_BAD : conflictCount > 0 ? THEME_WARN : THEME_OK },
+    );
+  }
+  if (isManagement) {
+    if (coloCoverage) {
+      const total = coloCoverage.rows.length;
+      kpis.push({ label: 'Colo-Abdeckung', value: `${coloCoverage.coveredDays} von ${total} Tagen`, note: `${coloCoverage.gapDays} Tage mit offenem Bedarf`, tone: coloCoverage.gapDays > 0 ? THEME_WARN : THEME_OK });
+    }
+    kpis.push({ label: 'Ohne Wünsche', value: missingWishEmployees.size, note: 'Mitarbeiter ohne abgegebene Wünsche', tone: missingWishEmployees.size > 0 ? THEME_WARN : THEME_OK });
+    if (costControl) {
+      kpis.push(
+        { label: 'Feiertagszuschlag', value: costControl.total.holidayHours, numFmt: '#,##0.0" h"', note: `${costControl.holidays.length} Bankfeiertage` },
+        { label: 'Nachtzuschlag', value: costControl.total.nightHours, numFmt: '#,##0.0" h"', note: `${costControl.total.nightShifts} Schichten mit Nacht` },
+        { label: 'Sonntagszuschlag', value: costControl.total.sundayHours, numFmt: '#,##0.0" h"', note: `${costControl.total.sundayShifts} Schichten mit Sonntag` },
+      );
+    }
+  } else {
+    kpis.push({ label: 'Zeitraum', value: drafts.length, note: periodLabel });
+  }
+
+  const definitions = new Map();
+  for (const draft of drafts) {
+    for (const definition of draft.config_snapshot?.shiftDefinitions || []) {
+      const code = String(definition?.code || '').trim().toUpperCase();
+      if (code && !definitions.has(code)) definitions.set(code, definition);
+    }
+  }
+  const typeLabel = { early: 'Früh', late: 'Spät', night: 'Nacht', special: 'Sonder' };
+  const shifts = [...definitions.entries()].map(([code, definition]) => ({
+    code,
+    name: definition.name || '',
+    time: (definition.startTime ?? definition.start_time) && (definition.endTime ?? definition.end_time)
+      ? `${String(definition.startTime ?? definition.start_time).slice(0, 5)}–${String(definition.endTime ?? definition.end_time).slice(0, 5)}` : '',
+    hours: Number(definition.durationHours ?? definition.duration_hours) || '',
+    type: typeLabel[String(definition.type || definition.shift_type || '').toLowerCase()] || '',
+  }));
+
+  const cyan = { style: 'medium', color: { argb: '06B6D4' } };
+  const orange = { style: 'medium', color: { argb: 'F97316' } };
+  const marks = [
+    { sample: 'Sa/So', fill: 'F3F4F6', text: 'Grau hinterlegt = Wochenende (im Fortlaufenden Plan zusätzlich Tageskopf grau, Feiertage rot)' },
+    { sample: 'E1', fill: 'FFEDD5', font: '9A3412', border: { top: cyan, bottom: cyan, left: cyan, right: cyan }, text: 'Cyan umrandet (zweite Zeile „COLO“) = Mitarbeiter übernimmt an diesem Tag eine Colo-Aufgabe' },
+    { sample: 'URL', fill: 'EDE9FE', font: '5B21B6', text: 'Urlaub (URL), Krank (KRANK), Seminar (SEM), Extern (EXT) kommen aus den Abwesenheiten, nicht aus dem Generator' },
+  ];
+  marks.splice(1, 0, { sample: 'F', fill: 'B91C1C', font: 'FFFFFF', text: 'Roter Tageskopf mit „F“ unter dem Datum = Feiertag; der Name steht in der Zellnotiz und unter dem Plan' });
+  if (!isTeam) marks.splice(3, 0, { sample: 'L1', fill: 'FEF3C7', font: '854D0E', border: { top: orange, bottom: orange, left: orange, right: orange }, text: 'Orange umrandet = Überbesetzung Spätschicht am Donnerstag/Freitag' });
+  if (isManagement) marks.push({ sample: 'Name', fill: 'FDE68A', font: '92400E', text: 'Gelb hinterlegter Name = für diese Person wurden keine Wünsche abgegeben' });
+
+  // Generation date = newest creation time of the drafts; author(s) = who generated them.
+  const createdTimes = drafts.map((draft) => new Date(draft.created_at)).filter((date) => !Number.isNaN(date.getTime()));
+  const generatedAt = createdTimes.length > 0 ? new Date(Math.max(...createdTimes.map((date) => date.getTime()))) : new Date();
+  const generatedAtLabel = `${generatedAt.toLocaleDateString('de-DE', { timeZone: config.OPERATIONAL_TIMEZONE, day: '2-digit', month: '2-digit', year: 'numeric' })}, ${generatedAt.toLocaleTimeString('de-DE', { timeZone: config.OPERATIONAL_TIMEZONE, hour: '2-digit', minute: '2-digit' })} Uhr`;
+  const authors = [...new Set(drafts.map((draft) => String(draft.created_by || '').trim()).filter((name) => name && name !== 'system'))];
+
+  return {
+    title: WORKBOOK_TITLE,
+    periodLabel,
+    variantLabel,
+    confidential: !isTeam,
+    generatedLabel,
+    generatedAtLabel,
+    createdBy: authors.join(', '),
+    exportedBy,
+    kpis,
+    shifts,
+    marks,
+    colorFor: resolveExcelShiftColors,
+  };
+}
+
+const THEME_OK = '047857';
+const THEME_WARN = 'B45309';
+const THEME_BAD = 'B91C1C';
 
 // ?variant=team (default: shifts only) or ?variant=management (hours + wish fulfilment).
 // The management variant contains personal wish data and hours: admins only.
@@ -7290,11 +7647,12 @@ function exportVariant(req) {
 // ?include=hours,wishes,wishStatus chooses the content of the management export (default: everything).
 function exportOptions(req) {
   const variant = exportVariant(req);
-  if (variant !== 'management') return { variant };
+  const exportedBy = req.user?.displayName || req.user?.email || req.user?.loginName || '';
+  if (variant !== 'management') return { variant, exportedBy };
   const raw = req.query?.include;
-  if (raw === undefined) return { variant, includeHours: true, includeWishes: true, includeWishStatus: true };
+  if (raw === undefined) return { variant, exportedBy, includeHours: true, includeWishes: true, includeWishStatus: true };
   const parts = new Set(String(raw).split(',').map((part) => part.trim()).filter(Boolean));
-  return { variant, includeHours: parts.has('hours'), includeWishes: parts.has('wishes'), includeWishStatus: parts.has('wishStatus') };
+  return { variant, exportedBy, includeHours: parts.has('hours'), includeWishes: parts.has('wishes'), includeWishStatus: parts.has('wishStatus') };
 }
 function variantFileSuffix(variant) {
   return variant === 'management' ? 'Leitung' : 'Team';

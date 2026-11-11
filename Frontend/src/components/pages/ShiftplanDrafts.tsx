@@ -54,6 +54,7 @@ type Draft = DraftSummary & {
   fairness?: Record<string, DraftFairness>;
   config_snapshot?: {
     dispatcherConfig?: { enabled?: boolean; priorities?: string[] };
+    excludedEmployeeNames?: string[];
     planningConfig?: { monthly_target_hours?: number };
     planningSettings?: DraftPlanningSettings;
     coloAssignments?: unknown;
@@ -135,6 +136,8 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
         </thead>
         <tbody>
           {employees.map((employee) => {
+            // Not planned (do-not-plan list): no Soll/Ist chips, they would only distort the hours.
+            const hoursHidden = Array.isArray(draft.config_snapshot?.excludedEmployeeNames) && draft.config_snapshot.excludedEmployeeNames.includes(employee);
             const hours = draft.fairness?.[employee];
             const targetCandidate = Number(hours?.targetHours ?? draft.config_snapshot?.planningConfig?.monthly_target_hours ?? 174);
             const actualCandidate = Number(hours?.actualHours ?? 0);
@@ -146,11 +149,15 @@ const DraftScheduleTable = memo(function DraftScheduleTable({ draft, compact = f
             <tr key={employee} className={`border-t border-white/6 transition-colors ${selectedEmployee === employee ? "bg-indigo-500/15 ring-1 ring-inset ring-indigo-400/50" : selectedEmployee ? "opacity-40" : "hover:bg-white/[0.04]"}`}>
               <th onClick={() => setSelectedEmployee((current) => (current === employee ? null : employee))} aria-pressed={selectedEmployee === employee} className={`${compact ? "p-2" : "p-3"} sticky left-0 z-10 cursor-pointer ${selectedEmployee === employee ? "bg-[#1b2250]" : "bg-[#081321]/95"} text-left font-semibold text-foreground`}>
                 <div>{employee}{dispatcherPool.length > 0 && isColoEmployee(employee, [dispatcherPool[0]]) && Array.from(shiftsByEmployee.get(employee)?.values() || []).some((code) => String(code).startsWith("E")) ? <span className="ml-2 inline-flex rounded border border-pink-400/40 bg-pink-500/15 px-1.5 py-px text-[9px] font-black text-pink-200">DP</span> : null}</div>
+                {hoursHidden ? (
+                  <div className="mt-1 text-[9px] font-bold uppercase tracking-wide text-slate-400">{isGerman ? "nicht in der Stundenplanung" : "not in hours planning"}</div>
+                ) : (
                 <div className="mt-1 flex flex-wrap gap-1 text-[9px] font-bold uppercase tracking-wide">
                   <span className="rounded border border-sky-400/30 bg-sky-500/10 px-1.5 py-0.5 text-sky-200">{isGerman ? "Soll" : "Target"} {targetHours.toFixed(1)}h</span>
                   <span className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 text-slate-200">{isGerman ? "Ist" : "Actual"} {actualHours.toFixed(1)}h</span>
                   <span className={`rounded border px-1.5 py-0.5 ${deltaHours >= 0 ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" : "border-rose-400/30 bg-rose-500/10 text-rose-200"}`}>{deltaHours >= 0 ? "+" : ""}{deltaHours.toFixed(1)}h</span>
                 </div>
+                )}
               </th>
               {days.map((value) => {
                 const code = shiftsByEmployee.get(employee)?.get(value) || "";

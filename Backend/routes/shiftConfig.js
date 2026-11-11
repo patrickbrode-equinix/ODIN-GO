@@ -790,10 +790,10 @@ router.post('/exclusions', requirePageAccess('shiftplan_control', 'write'), asyn
     const actor = req.user?.displayName || req.user?.email || req.user?.loginName || 'system';
     const normalizedFixedShiftType = normalizeFixedShiftType(fixed_shift_type);
     const { rows } = await pool.query(
-      `INSERT INTO shiftplan_exclusions (employee_name, reason, reason_text, fixed_shift_type, weekdays, created_by)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+      `INSERT INTO shiftplan_exclusions (employee_name, reason, reason_text, fixed_shift_type, weekdays, created_by, plan_on_holidays)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
        RETURNING *`,
-      [employee_name.trim(), reason || 'admin_override', reason_text || null, normalizedFixedShiftType, normalizeExclusionWeekdaysInput(req.body?.weekdays), actor]
+      [employee_name.trim(), reason || 'admin_override', reason_text || null, normalizedFixedShiftType, normalizeExclusionWeekdaysInput(req.body?.weekdays), actor, req.body?.plan_on_holidays === true]
     );
     res.json({ ok: true, exclusion: rows[0] });
   } catch (err) {
@@ -816,10 +816,12 @@ router.patch('/exclusions/:id', requirePageAccess('shiftplan_control', 'write'),
        SET reason = $1,
            reason_text = $2,
            fixed_shift_type = $3,
-           weekdays = CASE WHEN $5::boolean THEN $6::jsonb ELSE weekdays END
+           weekdays = CASE WHEN $5::boolean THEN $6::jsonb ELSE weekdays END,
+           plan_on_holidays = CASE WHEN $7::boolean THEN $8::boolean ELSE plan_on_holidays END
        WHERE id = $4 AND is_active = TRUE
        RETURNING *`,
-      [nextReason, nextReasonText, normalizedFixedShiftType, id, updatesWeekdays, normalizeExclusionWeekdaysInput(req.body?.weekdays)]
+      [nextReason, nextReasonText, normalizedFixedShiftType, id, updatesWeekdays, normalizeExclusionWeekdaysInput(req.body?.weekdays),
+        Object.prototype.hasOwnProperty.call(req.body || {}, 'plan_on_holidays'), req.body?.plan_on_holidays === true]
     );
 
     if (!rows[0]) return res.status(404).json({ ok: false, error: 'Eintrag nicht gefunden' });

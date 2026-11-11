@@ -281,6 +281,7 @@ interface ShiftplanExclusion {
   reason_text: string | null;
   fixed_shift_type: string | null;
   weekdays?: number[] | null;
+  plan_on_holidays?: boolean;
   is_active: boolean;
   created_by: string;
   created_at: string;
@@ -927,6 +928,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
   const [newExclusionName, setNewExclusionName] = useState('');
   const [newExclusionFixedShiftType, setNewExclusionFixedShiftType] = useState<FixedShiftTypeValue>('');
   const [newExclusionWeekdays, setNewExclusionWeekdays] = useState<number[]>(ALL_WEEKDAYS);
+  const [newExclusionPlanOnHolidays, setNewExclusionPlanOnHolidays] = useState(false);
   const [staffingRules, setStaffingRules] = useState<StaffingRuleRow[]>([]);
   const [shiftDefaults, setShiftDefaults] = useState<Record<string, { start_time: string; end_time: string; duration_hours: number; min_staff: number; max_staff: number }>>({});
   const [newDbsEmployee, setNewDbsEmployee] = useState('');
@@ -1416,7 +1418,9 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         reason: fixedShiftType ? 'fixed_shift' : 'admin_override',
         fixed_shift_type: fixedShiftType,
         weekdays: newExclusionWeekdays,
+        plan_on_holidays: !fixedShiftType && newExclusionPlanOnHolidays,
       });
+      setNewExclusionPlanOnHolidays(false);
       setNewExclusionName('');
       setNewExclusionFixedShiftType('');
       setNewExclusionWeekdays(ALL_WEEKDAYS);
@@ -1431,7 +1435,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }
   };
 
-  const updateExclusionRule = async (exclusion: ShiftplanExclusion, fixedShiftType: FixedShiftTypeValue, weekdays: number[] = normalizeExclusionWeekdays(exclusion.weekdays)) => {
+  const updateExclusionRule = async (exclusion: ShiftplanExclusion, fixedShiftType: FixedShiftTypeValue, weekdays: number[] = normalizeExclusionWeekdays(exclusion.weekdays), planOnHolidays: boolean = exclusion.plan_on_holidays === true) => {
     setSaving(`excl-${exclusion.id}`);
     try {
       const { data } = await api.patch(`/shift-config/exclusions/${exclusion.id}`, {
@@ -1439,6 +1443,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         reason_text: exclusion.reason_text,
         fixed_shift_type: fixedShiftType || null,
         weekdays,
+        plan_on_holidays: planOnHolidays,
       });
       setExclusions((current) => current.map((entry) => entry.id === exclusion.id ? data.exclusion : entry));
       showToast(isGerman ? 'Regel aktualisiert.' : 'Rule updated.');
@@ -2839,6 +2844,12 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
               <option key={option.value || 'exclude'} value={option.value}>{isGerman ? option.labelDe : option.labelEn}</option>
             ))}
           </select>
+          {!newExclusionFixedShiftType && (
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-100">
+              <input type="checkbox" checked={newExclusionPlanOnHolidays} onChange={(event) => setNewExclusionPlanOnHolidays(event.target.checked)} className="h-4 w-4 rounded border-white/20 bg-slate-950" />
+              {isGerman ? 'An Feiertagen planen' : 'Plan on holidays'}
+            </label>
+          )}
           <button onClick={() => void addExclusion()} disabled={!newExclusionName.trim() || saving === 'excl-new'} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-2 text-sm font-medium text-red-200 transition hover:bg-red-500/20 disabled:opacity-50">
             <UserX className="h-4 w-4" />
             {saving === 'excl-new'
@@ -2897,6 +2908,21 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   <div className="text-xs text-slate-400">{t("shiftAdmin.exclCreatedBy")} {exclusion.created_by} {isGerman ? 'am' : 'on'} {new Date(exclusion.created_at).toLocaleDateString(isGerman ? 'de-DE' : 'en-US', { timeZone: 'Europe/Berlin' })}</div>
                 </div>
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+                  {!isFixedShiftRule && (
+                    <label
+                      className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-100"
+                      title={isGerman ? 'Wird nicht regulär geplant, aber an Bankfeiertagen eingesetzt. Taucht in keiner Stundenliste auf.' : 'Not planned regularly, but used on bank holidays. Appears in no hours list.'}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={exclusion.plan_on_holidays === true}
+                        disabled={saving === `excl-${exclusion.id}`}
+                        onChange={(event) => void updateExclusionRule(exclusion, '' as FixedShiftTypeValue, normalizeExclusionWeekdays(exclusion.weekdays), event.target.checked)}
+                        className="h-4 w-4 rounded border-white/20 bg-slate-950"
+                      />
+                      {isGerman ? 'An Feiertagen planen' : 'Plan on holidays'}
+                    </label>
+                  )}
                   <select
                     value={(exclusion.fixed_shift_type || '') as FixedShiftTypeValue}
                     onChange={(event) => void updateExclusionRule(exclusion, event.target.value as FixedShiftTypeValue)}
