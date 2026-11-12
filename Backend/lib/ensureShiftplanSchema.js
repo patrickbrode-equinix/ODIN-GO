@@ -53,6 +53,11 @@ export async function ensureShiftplanSchema() {
       `);
 
       await pool.query(`
+        ALTER TABLE shiftplan_exclusions
+          ADD COLUMN IF NOT EXISTS do_not_plan BOOLEAN NOT NULL DEFAULT FALSE
+      `);
+
+      await pool.query(`
         ALTER TABLE shift_definitions
           ADD COLUMN IF NOT EXISTS free_days_after SMALLINT NULL
       `);

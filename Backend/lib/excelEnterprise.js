@@ -72,6 +72,81 @@ export function describeSheet(name) {
   return known[name] || { group: 'settings', text: '' };
 }
 
+/** Sheets that are tables (not plan grids): their columns are sized once, here, so nobody has to widen them. */
+const TABLE_SHEETS = new Set([
+  'Stunden & Wünsche', 'Stunden', 'Wünsche', 'Wunsch-Status', 'Gesamt', 'Wunschdetails', 'Kostenkontrolle',
+  'Colo-Abdeckung', 'Einstellungen', 'Jahresübersicht', 'Quartalsübersicht',
+]);
+
+function cellText(cell) {
+  const value = cell.value;
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number') {
+    const format = String(cell.numFmt || '');
+    if (format.includes('%')) return `${(value * 100).toFixed(format.includes('0.0') ? 1 : 0)} %`;
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+  if (typeof value === 'object') {
+    if (value.richText) return value.richText.map((part) => part.text).join('');
+    if (value.text !== undefined) return String(value.text);
+    if (value.result !== undefined) return String(value.result);
+    if (value instanceof Date) return '31.12.2027';
+    return '';
+  }
+  return String(value);
+}
+
+/**
+ * Column widths from the real content: wide enough for every value (headers may wrap), never wider than maxWidth.
+ * Text that is still longer wraps inside its cell and the row gets the height it needs. Title and note rows (one value
+ * or merged) are ignored.
+ */
+export function autoLayoutColumns(ws, { minWidth = 9, maxWidth = 44 } = {}) {
+  const need = new Map(); // column -> { body, header }
+  const longestWord = (text) => text.split(/[\s/]+/).reduce((max, word) => Math.max(max, word.length), 0);
+  const rows = [];
+  ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    const cells = [];
+    row.eachCell({ includeEmpty: false }, (cell, column) => {
+      if (cell.isMerged && cell.master !== cell) return;
+      if (cell.isMerged) return;
+      if (cellText(cell) !== '') cells.push({ cell, column });
+    });
+    if (cells.length < 2) return;
+    rows.push({ rowNumber, cells });
+    for (const { cell, column } of cells) {
+      const text = cellText(cell);
+      const isHeader = cell.font?.bold === true && /FFFFFF$/.test(String(cell.font?.color?.argb || ''));
+      const entry = need.get(column) || { body: 0, header: 0 };
+      if (isHeader) entry.header = Math.max(entry.header, longestWord(text) * 1.1 + 3);
+      else entry.body = Math.max(entry.body, text.split('\n').reduce((max, line) => Math.max(max, line.length), 0) * 1.08 + 2.5);
+      need.set(column, entry);
+    }
+  });
+  const filterPadding = ws.autoFilter ? 3 : 0;
+  const widthOf = new Map();
+  for (const [column, entry] of need) {
+    widthOf.set(column, Math.min(Math.max(Math.max(entry.body, entry.header + filterPadding), minWidth), maxWidth));
+    ws.getColumn(column).width = Number(widthOf.get(column).toFixed(1));
+  }
+  // wrap what does not fit and give the row the height it needs
+  for (const { rowNumber, cells } of rows) {
+    let lines = 1;
+    for (const { cell, column } of cells) {
+      const text = cellText(cell);
+      const width = widthOf.get(column) || minWidth;
+      const isHeader = cell.font?.bold === true && /FFFFFF$/.test(String(cell.font?.color?.argb || ''));
+      const needed = isHeader ? Math.ceil((text.length * 1.1 + 3) / width) : Math.ceil((text.length * 1.08 + 2.5) / width);
+      if (needed > 1) {
+        cell.alignment = { ...(cell.alignment || {}), wrapText: true, vertical: isHeader ? 'middle' : 'top' };
+        lines = Math.max(lines, needed);
+      }
+    }
+    const row = ws.getRow(rowNumber);
+    if (lines > 1) row.height = Math.max(Number(row.height) || 15, lines * 13.5 + 3);
+  }
+}
+
 const TAB_COLORS = { overview: THEME.navy, plan: '2F6FB5', analysis: '0F9D8A', settings: '9CA3AF' };
 
 function safeName(name) {
@@ -101,6 +176,8 @@ export function applyEnterpriseLayout(workbook, { variantLabel = '', generatedLa
     title.font = { name: 'Calibri', size: 15, bold: true, color: { argb: THEME.white } };
     title.alignment = { horizontal: 'left', vertical: 'middle', indent: 1 };
     ws.getRow(1).height = 32;
+
+    if (TABLE_SHEETS.has(ws.name)) autoLayoutColumns(ws, ws.name === 'Kostenkontrolle' ? { maxWidth: 30 } : {});
 
     // Calm background: no grid lines, keep the frozen panes of the sheet
     const views = Array.isArray(ws.views) && ws.views.length > 0 ? ws.views : [{}];

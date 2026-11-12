@@ -6,6 +6,7 @@
 import express from "express";
 import { notifyShiftChanges } from "../lib/planNotifications.js";
 import { canSeeSickness, maskScheduleSickness } from "../lib/sicknessVisibility.js";
+import { loadDoNotPlanKeys, isDoNotPlan } from "../lib/doNotPlan.js";
 import db from "../db.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 import { requirePageAccess } from "../middleware/requirePageAccess.js";
@@ -440,6 +441,9 @@ router.get(
         scheduleEmployeeKeys.add(identityKey);
       }
 
+      // "Nicht planen" employees do not appear in the plan at all.
+      const hiddenKeys = await loadDoNotPlanKeys((text, params) => db.query(text, params));
+      for (const name of Object.keys(schedule)) if (isDoNotPlan(name, hiddenKeys)) delete schedule[name];
       res.json({
         meta: {
           label: monthLabel,

@@ -107,3 +107,28 @@ test('do-not-plan list: ticked "plan on holidays" works only on bank holidays an
   }
   assert.ok(tickedHolidayShifts > 0, 'the ticked employee takes holiday shifts');
 });
+
+test('button "Nicht planen": the employee disappears from the plan, the fairness list and the exports', async () => {
+  const { stripDoNotPlan, loadDoNotPlanKeys, isDoNotPlan } = await import('../lib/doNotPlan.js');
+  const names = buildTeam(30);
+  const hidden = names[4];
+  names.db.exclusions = [{ employee_name: hidden, fixed_shift_type: null, weekdays: null, plan_on_holidays: true, do_not_plan: true }];
+  const result = await generateShiftPlan(2027, 5, 31, 'test', {});
+  assert.ok(!result.shifts.some((entry) => entry.employee_name === hidden), 'no shift');
+  assert.equal(result.fairness[hidden], undefined);
+  assert.ok(!(result.configSnapshot.excludedEmployeeNames || []).includes(hidden), 'not even listed as excluded: the person is not part of the plan');
+  assert.equal(result.shifts.length > 0, true);
+
+  const keys = await loadDoNotPlanKeys((text, params) => pool.query(text, params));
+  assert.equal(isDoNotPlan('Test Person 03', keys), true);
+  assert.equal(isDoNotPlan('Person 03, Test', keys), true, 'name variants match');
+  assert.equal(isDoNotPlan('Test Person 04', keys), false);
+  const stripped = stripDoNotPlan({
+    shifts_json: [{ employee_name: hidden, day: 1 }, { employee_name: 'Other', day: 1 }],
+    fairness: { [hidden]: {}, Other: {} }, absences: [{ employee_name: hidden }], manual_employees: [{ employee_name: hidden }], wish_status: [{ employee_name: hidden }, { employee_name: 'Other' }],
+  }, keys);
+  assert.deepEqual(stripped.shifts_json.map((entry) => entry.employee_name), ['Other']);
+  assert.deepEqual(Object.keys(stripped.fairness), ['Other']);
+  assert.equal(stripped.absences.length + stripped.manual_employees.length, 0);
+  assert.equal(stripped.wish_status.length, 1);
+});

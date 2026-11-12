@@ -282,6 +282,7 @@ interface ShiftplanExclusion {
   fixed_shift_type: string | null;
   weekdays?: number[] | null;
   plan_on_holidays?: boolean;
+  do_not_plan?: boolean;
   is_active: boolean;
   created_by: string;
   created_at: string;
@@ -1435,7 +1436,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
     }
   };
 
-  const updateExclusionRule = async (exclusion: ShiftplanExclusion, fixedShiftType: FixedShiftTypeValue, weekdays: number[] = normalizeExclusionWeekdays(exclusion.weekdays), planOnHolidays: boolean = exclusion.plan_on_holidays === true) => {
+  const updateExclusionRule = async (exclusion: ShiftplanExclusion, fixedShiftType: FixedShiftTypeValue, weekdays: number[] = normalizeExclusionWeekdays(exclusion.weekdays), planOnHolidays: boolean = exclusion.plan_on_holidays === true, doNotPlan: boolean = exclusion.do_not_plan === true) => {
     setSaving(`excl-${exclusion.id}`);
     try {
       const { data } = await api.patch(`/shift-config/exclusions/${exclusion.id}`, {
@@ -1444,6 +1445,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         fixed_shift_type: fixedShiftType || null,
         weekdays,
         plan_on_holidays: planOnHolidays,
+        do_not_plan: doNotPlan,
       });
       setExclusions((current) => current.map((entry) => entry.id === exclusion.id ? data.exclusion : entry));
       showToast(isGerman ? 'Regel aktualisiert.' : 'Rule updated.');
@@ -2908,7 +2910,17 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                   <div className="text-xs text-slate-400">{t("shiftAdmin.exclCreatedBy")} {exclusion.created_by} {isGerman ? 'am' : 'on'} {new Date(exclusion.created_at).toLocaleDateString(isGerman ? 'de-DE' : 'en-US', { timeZone: 'Europe/Berlin' })}</div>
                 </div>
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-                  {!isFixedShiftRule && (
+                  <button
+                    type="button"
+                    aria-pressed={exclusion.do_not_plan === true}
+                    disabled={saving === `excl-${exclusion.id}`}
+                    onClick={() => void updateExclusionRule(exclusion, (exclusion.fixed_shift_type || '') as FixedShiftTypeValue, normalizeExclusionWeekdays(exclusion.weekdays), exclusion.plan_on_holidays === true, !(exclusion.do_not_plan === true))}
+                    title={isGerman ? 'Die Person verschwindet komplett aus dem Dienstplan: Generator, Draft, Dienstplan und Excel.' : 'The person disappears from the whole shift plan: generator, draft, live plan and Excel.'}
+                    className={`inline-flex items-center justify-center gap-2 rounded-2xl border px-4 py-2 text-sm font-semibold transition disabled:opacity-50 ${exclusion.do_not_plan === true ? 'border-red-400/60 bg-red-500/30 text-red-50' : 'border-white/15 bg-white/5 text-slate-200 hover:bg-red-500/15'}`}
+                  >
+                    {exclusion.do_not_plan === true ? (isGerman ? 'Nicht planen: aktiv' : 'Do not plan: on') : (isGerman ? 'Nicht planen' : 'Do not plan')}
+                  </button>
+                  {!isFixedShiftRule && !(exclusion.do_not_plan === true) && (
                     <label
                       className="inline-flex cursor-pointer items-center gap-2 rounded-2xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm font-medium text-amber-100"
                       title={isGerman ? 'Wird nicht regulär geplant, aber an Bankfeiertagen eingesetzt. Taucht in keiner Stundenliste auf.' : 'Not planned regularly, but used on bank holidays. Appears in no hours list.'}

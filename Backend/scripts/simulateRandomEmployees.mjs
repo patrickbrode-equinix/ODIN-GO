@@ -24,6 +24,7 @@ const { default: pool } = await import('../db.js');
 const { generateShiftPlan } = await import('../routes/shiftplanControl.js');
 const { createFakePlanningDb, createRandom } = await import('../tests/helpers/fakePlanningDb.js');
 const { formatShiftMonthLabel } = await import('../lib/shiftplanMonth.js');
+const { alignBoundaryWeeks } = await import('../lib/weekConsistency.js');
 
 const rng = createRandom(seed);
 const originalConsole = { warn: console.warn, log: console.log };
@@ -119,7 +120,7 @@ if (args.lnonly) {
   }
 }// --coloeasy: pool members that accept every shift type (realistic admin choice: people who can do Colo nights)
 const coloCandidates = args.coloeasy ? employees.filter((employee) => !employee.unwanted.includes('N') && !employee.preferred.length && employee.maxNights !== 0) : employees;
-const coloPool = rng.shuffle(coloCandidates).slice(0, Math.min(6, Math.floor(employeeCount / 6))).map((employee) => employee.name);
+const coloPool = rng.shuffle(coloCandidates).slice(0, Number(args.colopool) || Math.min(6, Math.floor(employeeCount / 6))).map((employee) => employee.name);
 
 /* ---------- fake database ---------- */
 
@@ -477,6 +478,7 @@ let year = startYear;
 let month = startMonth;
 // The saved drafts of earlier months feed the next month (hour balance, shift continuity) like in the real app.
 let chainedCarry = null;
+const plansForAlignment = [];
 for (let index = 0; index < monthCount; index++) {
   addAbsences(year, month);
   const numDays = new Date(year, month, 0).getDate();
@@ -490,6 +492,7 @@ for (let index = 0; index < monthCount; index++) {
       }
     }
   }
+  plansForAlignment.push({ month: `${year}-${String(month).padStart(2, '0')}`, result });
   report.months.push(audit(result, year, month));
   report.months.at(-1).structure = auditStructure(result, year, month);
   report.months.at(-1).structure.inexperienced = result.planReport.inexperienced;
@@ -499,6 +502,8 @@ for (let index = 0; index < monthCount; index++) {
   if (month > 12) { month = 1; year += 1; }
 }
 
+// Like the quarter / year run of the app: the week across a month boundary is aligned on both sides (--noalign to see the raw result).
+if (!args.noalign) report.boundaryAlignments = alignBoundaryWeeks(plansForAlignment).length;
 console.warn = originalConsole.warn;
 const totalViolations = report.months.reduce((sum, entry) => sum + entry.violations.length, 0);
 report.totalViolations = totalViolations;

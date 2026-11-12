@@ -80,6 +80,8 @@ import { loadWishSettings } from '../lib/wishSettings.js';
 import { alignPreferredColleagues } from '../lib/colleagueAlignment.js';
 import { buildCostControl, buildHolidayDistribution, focusCostControl } from '../lib/costControl.js';
 import { buildShiftDistribution, DISTRIBUTION_LABELS, DISTRIBUTION_SEGMENTS, isWorkedShiftCode } from '../lib/shiftDistribution.js';
+import { planWeekCodes } from '../lib/weekConsistency.js';
+import { loadDoNotPlanKeys, isDoNotPlan, stripDoNotPlan } from '../lib/doNotPlan.js';
 import { applyEnterpriseLayout, buildOverviewSheet, OVERVIEW_SHEET_NAME, WORKBOOK_TITLE } from '../lib/excelEnterprise.js';
 import { PERSONAL_AVOID_KEY_PREFIX, PERSONAL_AVOID_RULE, mayKeepPersonalAvoidList, requiresFullWeekend, isHolidayFavored, isNightFavored, NIGHT_FAVORED_WEIGHT, getNeverTogetherRule, getTogetherPartners, isNightTeamMember, isWeekdayOnlyEmployee, violatesNeverTogether, WEEKEND_WEEKDAYS } from '../lib/fixedEmployeeRules.js';
 import { buildColoRolePlan, coloNameKey, getColoTaskRequirements, isColoAllowedByRule, isColoCoveredByDbs, normalizeColoPlanningConfig } from '../lib/coloPlanning.js';
@@ -859,7 +861,13 @@ async function loadDraftAbsences(month) {
   return rows;
 }
 
+// Employees with the "Nicht planen" button are not part of any plan, so they never appear in the employee list.
 async function loadEmployeesForPlanningYear(year, monthId = null) {
+  const [employees, hiddenKeys] = await Promise.all([loadEmployeesForPlanningYearRaw(year, monthId), loadDoNotPlanKeys((text, params) => pool.query(text, params))]);
+  return employees.filter((name) => !isDoNotPlan(name, hiddenKeys));
+}
+
+async function loadEmployeesForPlanningYearRaw(year, monthId = null) {
   let yearPlanEmployees = [];
 
   if (Number(year) === 2027) {
@@ -1174,7 +1182,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   }
 
   const exclRes = await pool.query(
-    `SELECT employee_name, fixed_shift_type, weekdays, plan_on_holidays FROM shiftplan_exclusions WHERE is_active = TRUE`
+    `SELECT employee_name, fixed_shift_type, weekdays, plan_on_holidays, do_not_plan FROM shiftplan_exclusions WHERE is_active = TRUE`
   );
   const shiftExcludedSet = new Set();
   // On the "do not plan" list but ticked "plan on holidays": planned on bank holidays only, never in the hours lists.
@@ -1184,6 +1192,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // rule allows planning only on its weekdays.
   const exclusionBlockedWeekdaysByEmployee = new Map();
   for (const row of exclRes.rows) {
+    if (row.do_not_plan === true) continue; // "Nicht planen": not part of the plan at all
     const fixedShiftType = normalizePlanningShiftTypeKey(row.fixed_shift_type);
     const ruleWeekdays = normalizeExclusionWeekdays(row.weekdays);
     const coversWholeWeek = ruleWeekdays.length === 7;
@@ -1459,6 +1468,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   const empRecoveryReason = {};
   const empSeriesCode = {};
   const empSeriesRemaining = {};
+  // Last day (of this month) of a block that already ran in the previous month: it is completed, weekend limits were
+  // checked when the block started (otherwise "E1SA" stops on Friday and the Saturday is missing).
+  const carriedSeriesUntilDay = {};
   const empSeriesTotalDays = {};
   const empLastWorkedShiftCode = {};
   const empLastWorkedShiftType = {};
@@ -1706,6 +1718,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   // The former skills matrix is intentionally no longer part of planning.
   const featureFlags = { skillsEnabled: false };
   let assignedToday = null;
+  // People whose weekend block is paused for one holiday (maximum reached): the block continues the next day.
+  let holidaySkipToday = new Set();
   let assignedByShiftTypeToday = { early: 0, late: 0, night: 0, special: 0 };
   let assignedByDefToday = {};
 
@@ -1726,6 +1740,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     empRecoveryReason[employee] = carried.recoveryReason || null;
     empSeriesCode[employee] = carried.seriesCode || null;
     empSeriesRemaining[employee] = Math.max(Number.parseInt(carried.seriesRemaining, 10) || 0, 0);
+    carriedSeriesUntilDay[employee] = empSeriesRemaining[employee] > 0 ? planningStartDay + empSeriesRemaining[employee] - 1 : 0;
     empSeriesTotalDays[employee] = Math.max(Number.parseInt(carried.seriesTotalDays, 10) || 0, 0);
     empLastWorkedShiftCode[employee] = carried.lastWorkedShiftCode || null;
     empLastWorkedShiftType[employee] = carried.lastWorkedShiftType || null;
@@ -1805,13 +1820,16 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         projected.add(key);
       }
     }
-    if (!skipSpacing && violatesWeekendSpacing(employee, newKeys)) return true;
+    // Bank holiday weekends (Christmas, Easter ...) need more people than a normal weekend: the admin rotation limits (weekend
+    // spacing, weekends per month +1) are relaxed for them; the employee's own hard wishes stay in force.
+    const holidayWeekend = days.some((day) => isWeekend(year, mon, day) && Boolean(guardBankHolidays[`${month}-${String(day).padStart(2, '0')}`]));
+    if (!skipSpacing && !holidayWeekend && violatesWeekendSpacing(employee, newKeys)) return true;
     // The individual limit only blocks while its strength is 100 %; softer
     // strengths are penalised in the candidate scoring (max_weekends).
     const individualLimit = isHardStrength(prefStrength.max_weekends)
       ? Number.parseInt(String(empPrefsMap.get(employee)?.max_weekends_per_month ?? ''), 10)
       : Number.NaN;
-    const rotationLimit = Number.parseInt(String(rotation.max_weekends_per_month ?? ''), 10);
+    const rotationLimit = Number.parseInt(String(rotation.max_weekends_per_month ?? ''), 10) + (holidayWeekend ? 1 : 0);
     return [individualLimit, rotationLimit].some((limit) => Number.isInteger(limit) && projected.size > limit);
   };
 
@@ -2497,6 +2515,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     });
 
     assignedToday = new Set();
+    holidaySkipToday = new Set();
   assignedByShiftTypeToday = { early: 0, late: 0, night: 0, special: 0 };
     assignedByDefToday = {};
     // Employees who can only work one shift type today (hard wish, fixed type, DBS rule).
@@ -2577,7 +2596,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (rosterMismatch
         || !availableEmployeeSet.has(employee)
         || !availableShiftCodes.has(empSeriesCode[employee])
-        || wouldExceedEmployeeWeekendLimit(employee, [day], { skipSpacing: coloShiftTypeByCode.get(String(empSeriesCode[employee] || '').trim().toUpperCase()) === 'night' })
+        || (day > (carriedSeriesUntilDay[employee] || 0) && wouldExceedEmployeeWeekendLimit(employee, [day], { skipSpacing: coloShiftTypeByCode.get(String(empSeriesCode[employee] || '').trim().toUpperCase()) === 'night' }))
         || isEmployeeShiftBlockedOnDate(employee, dateStr, empSeriesCode[employee])) {
         empSeriesCode[employee] = null;
         empSeriesRemaining[employee] = 0;
@@ -2587,6 +2606,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     // A running block never ends by itself, so a day with a lower maximum (public holiday, Saturday,
     // Sunday) would keep everybody who started the week. Surplus people get this day off: first those who
     // asked for the holiday off, then those with the fewest open hours.
+    // A bank holiday on the coming Saturday / Sunday (Christmas, Easter ...): weekend blocks are not the ones that get cut.
+    const holidayWeekendAhead = Array.from({ length: 7 - ((dow + 6) % 7) }, (_, index) => day + index + 1)
+      .some((aheadDay) => aheadDay <= numDays && isWeekend(year, mon, aheadDay) && Boolean(bankHolidayMap[`${month}-${String(aheadDay).padStart(2, '0')}`]));
     for (const typeKey of ['early', 'late', 'night']) {
       const typeMaximum = getShiftTypeMaximum(typeKey);
       if (!Number.isFinite(typeMaximum)) continue;
@@ -2598,10 +2620,22 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const keepOrder = [...running].sort((left, right) => {
         const wantsOff = (employee) => (holidayName && (empPrefsMap.get(employee)?.preferred_holidays || []).includes(holidayName) ? 1 : 0);
         if (wantsOff(left) !== wantsOff(right)) return wantsOff(left) - wantsOff(right);
+        // People whose block still has to cover the coming weekend (…SA / …WE) are kept first: cutting them would leave
+        // Saturday / Sunday (Christmas, Easter ...) without early / late staff while weekday-only blocks stay.
+        const coversWeekend = (employee) => (holidayWeekendAhead && /(SA|WE)$/.test(String(empSeriesCode[employee] || '').trim().toUpperCase()) ? 1 : 0);
+        if (coversWeekend(left) !== coversWeekend(right)) return coversWeekend(right) - coversWeekend(left);
         const openHours = (employee) => employeeTargetHours[employee] - empHours[employee];
         return openHours(right) - openHours(left) || left.localeCompare(right, 'de');
       });
       for (const employee of keepOrder.slice(typeMaximum)) {
+        // A weekend block (…SA / …WE) is only paused for this holiday and continues tomorrow, so the weekend stays covered
+        // and the week does not break apart; everything else ends as before.
+        if (empSeriesRemaining[employee] > 1 && /(SA|WE)$/.test(String(empSeriesCode[employee] || '').trim().toUpperCase())) {
+          holidaySkipToday.add(employee);
+          const index = availableForDay.indexOf(employee);
+          if (index >= 0) availableForDay.splice(index, 1);
+          continue;
+        }
         empSeriesCode[employee] = null;
         empSeriesRemaining[employee] = 0;
         empSeriesTotalDays[employee] = 0;
@@ -3370,7 +3404,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     for (const employee of activeEmployees) {
       if (!assignedToday.has(employee)) {
         if (holidayName && !weekend && !absenceCreditedToday.has(employee)) creditHolidayHours(employee, day);
-        if (empSeriesRemaining[employee] > 0) {
+        if (empSeriesRemaining[employee] > 0 && holidaySkipToday.has(employee)) {
+          empSeriesRemaining[employee] -= 1; // the paused holiday counts as a day of the block
+          if (empSeriesRemaining[employee] <= 0) { empSeriesCode[employee] = null; empSeriesTotalDays[employee] = 0; }
+        } else if (empSeriesRemaining[employee] > 0) {
           empSeriesCode[employee] = null;
           empSeriesRemaining[employee] = 0;
           empSeriesTotalDays[employee] = 0;
@@ -3634,8 +3671,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
   };
   // The balance pass (guaranteePass) may exceed the maximum by ELASTIC_EXTRA_STAFF people: a person who is
   // far behind on the year balance gets hours before the maximum blocks them.
+  // Bank holidays never get the elastic extra staff: their maximum (admin: Feiertag national / international) is a hard limit.
   const hasDefinitionCapacityForEmployee = (employee, day, definition) => capacityWithin(employee, day, definition, 0)
-    || (guaranteePass && capacityWithin(employee, day, definition, ELASTIC_EXTRA_STAFF));
+    || (guaranteePass && !holidayMap[`${month}-${String(day).padStart(2, '0')}`] && capacityWithin(employee, day, definition, ELASTIC_EXTRA_STAFF));
 
   // Preferred colleagues: swap whole weekday blocks between two people who work exactly the same days,
   // so a wisher and the wished colleague end up in the same shift type without changing the daily
@@ -5039,7 +5077,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
         const definition = candidates.find((candidate) => !isEmployeeShiftBlockedOnDate(employee, dateStr, candidate.code)
           && !wouldViolateAdjacentTransition(employee, day, candidate)
           && isOutsideDbsAllowed(employee, candidate, 1)
-          && (capacityWithin(employee, day, candidate, 0) || capacityWithin(employee, day, candidate, ELASTIC_EXTRA_STAFF)));
+          && (capacityWithin(employee, day, candidate, 0) || (!holidayMap[dateStr] && capacityWithin(employee, day, candidate, ELASTIC_EXTRA_STAFF)))); // never above the maximum on a holiday
         if (!definition) continue;
         if (!capacityWithin(employee, day, definition, 0)) balanceOverstaffCells.add(`${employee}|${day}`);
         releaseHolidayCredit(employee, day);
@@ -5209,6 +5247,55 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       message: `${employee}: Zielzeit um ${missingHours.toFixed(2)} Stunden unterschritten (${reasonLabel}).`,
     });
   }
+
+  // Week consistency (last pass): within one week a person has ONE shift family (E1 or E2 ...) and the suffix of the code
+  // matches the weekend that is really worked: both days = ...WE, Saturday only = ...SA, no weekend = plain code.
+  // Single days that other passes added (a lone "E1WE" Saturday after an "E1" week, E1 and E2 mixed) are aligned.
+  // Only cells of this planning period are changed; same hours only; every wish / absence / rule check stays in force.
+  planReport.codeNormalization = [];
+  const relaxedBeforeNormalization = relaxedWishPass;
+  // Soft wishes (strength below 100 %) do not stop the relabelling: the days are already planned, only the code variant changes.
+  relaxedWishPass = true;
+  {
+    const hasDefinition = (code) => shiftDefinitionByCode.has(code);
+    const firstWeekMonday = planningStartDay - ((dayOfWeek(year, mon, planningStartDay) + 6) % 7);
+    for (const employee of activeEmployees) {
+      for (let monday = firstWeekMonday; monday <= planningEndDay; monday += 7) {
+        if (monday + 6 > numDays) continue; // the week continues in the next month: aligned later (quarter / year run)
+        const cells = [];
+        for (let offset = 0; offset < 7; offset++) {
+          const code = String(empDayAssignment[employee]?.[monday + offset] || '').trim().toUpperCase();
+          if (code) cells.push({ offset, code, dayIndex: monday + offset });
+        }
+        const plan = planWeekCodes(cells, hasDefinition);
+        if (!plan) continue;
+        const planBase = plan.targetCode.replace(/(SA|WE)$/, '');
+        for (const cell of plan.cells) {
+          if (cell.code === plan.targetCode) continue;
+          if (cell.dayIndex < planningStartDay || cell.dayIndex > planningEndDay) continue; // cells of the previous month stay
+          const dateStr = `${month}-${String(cell.dayIndex).padStart(2, '0')}`;
+          const oldDefinition = shiftDefinitionByCode.get(cell.code);
+          if (!oldDefinition) continue;
+          // Wanted code first; when a wish / rule forbids it at least the same shift family (E2 instead of E1 ...).
+          const alternatives = cell.offset >= 5
+            ? [plan.targetCode, `${planBase}WE`, `${planBase}SA`, planBase]
+            : [plan.targetCode, planBase];
+          const chosen = [...new Set(alternatives)].find((candidate) => {
+            const definition = shiftDefinitionByCode.get(candidate);
+            return definition
+              && getShiftHoursForDay(oldDefinition, cell.dayIndex) === getShiftHoursForDay(definition, cell.dayIndex)
+              && (candidate === cell.code || !isEmployeeShiftBlockedOnDate(employee, dateStr, candidate));
+          });
+          if (!chosen || chosen === cell.code) continue;
+          const keptReasons = explanations[`${employee}_${cell.dayIndex}`]?.reasons || [];
+          changeEmployeeShiftCode(employee, cell.dayIndex, chosen, [...keptReasons, `Wochenkonsistenz: ${cell.code} wurde zu ${chosen} (eine Schichtfamilie je Woche, Code passend zum geleisteten Wochenende)`]);
+          planReport.codeNormalization.push({ employee, day: cell.dayIndex, from: cell.code, to: chosen });
+        }
+      }
+    }
+  }
+
+  relaxedWishPass = relaxedBeforeNormalization;
 
   const targetShortfalls = activeEmployees
     .filter((employee) => !holidayOnlyEmployees.has(employee))
@@ -5545,15 +5632,25 @@ router.get('/drafts/:id', requireReadableDraft, async (req, res) => {
     const absences = await loadDraftAbsences(draft.month);
     const manualEmployees = await loadManualEmployeesForDraftMonth(draft.month);
 
+    // Employees with the "Nicht planen" button are removed from older drafts as well.
+    const hiddenKeys = await loadDoNotPlanKeys((text, params) => pool.query(text, params));
+    const visibleDraft = stripDoNotPlan({
+      ...draft,
+      wish_status: wishStatus,
+      absences,
+      manual_employees: manualEmployees,
+    }, hiddenKeys);
+    const visibleWishSummary = visibleDraft.wish_status.reduce((summary, entry) => {
+      if (entry.submitted) summary.submitted += 1;
+      else summary.missing += 1;
+      return summary;
+    }, { submitted: 0, missing: 0 });
     res.json({
       ok: true,
       draft: {
-        ...draft,
-        wish_status: wishStatus,
-        wish_summary: wishSummary,
-        absences,
-        manual_employees: manualEmployees,
-        cost_control: await loadDraftCostControl(draft),
+        ...visibleDraft,
+        wish_summary: hiddenKeys.size > 0 ? visibleWishSummary : wishSummary,
+        cost_control: await loadDraftCostControl(visibleDraft),
       },
     });
   } catch (err) {
@@ -6578,6 +6675,7 @@ function holidayListText(holidays, year, mon) {
   return entries.map(([date, name]) => `${date.slice(8, 10)}.${date.slice(5, 7)}. ${name}`).join('   ·   ');
 }
 
+const COLO_TASK_SHORT = { preparation: 'Vorbereitung', night: 'Nacht', weekend: 'Wochenende' };
 const COLO_COVERAGE_HEADERS = ['Datum', 'Wochentag', 'Feiertag', 'Colo besetzt', 'Fehlend', 'Status'];
 
 /**
@@ -6608,9 +6706,9 @@ export function addColoCoverageSheet(workbook, drafts) {
         date: `${String(day).padStart(2, '0')}.${String(mon).padStart(2, '0')}.${year}`,
         weekday: DAY_NAMES_DE[new Date(year, mon - 1, day).getDay()],
         holiday: holidays[iso] || '',
-        covered: covered.map((entry) => `${entry.employee_name}${entry.comment ? ` (${entry.comment})` : ''}`).join(', '),
+        covered: covered.map((entry) => `${entry.employee_name}  ·  ${COLO_TASK_SHORT[entry.task_key] || entry.comment || 'Colo'}`).join('\n'),
         coveredCount: covered.length,
-        missingText: open.map((entry) => `${entry.task || 'Colo'}: ${entry.actual ?? 0}/${entry.required ?? '?'}`).join(', '),
+        missingText: open.map((entry) => `${COLO_TASK_SHORT[entry.task] || entry.task || 'Colo'}: ${entry.actual ?? 0} von ${entry.required ?? '?'}`).join('\n'),
         missingCount,
         status: missingCount > 0 ? 'Lücke' : covered.length > 0 ? 'abgedeckt' : 'keine Vorgabe',
       });
@@ -6628,7 +6726,7 @@ export function addColoCoverageSheet(workbook, drafts) {
       const cell = ws.getCell(5 + index, column + 1);
       cell.value = value;
       cell.font = { name: 'Calibri', size: 10, bold: column === 5 };
-      cell.alignment = { horizontal: column === 3 || column === 4 ? 'left' : 'center', vertical: 'middle' };
+      cell.alignment = { horizontal: column === 3 || column === 4 ? 'left' : 'center', vertical: 'middle', wrapText: column === 3 || column === 4 };
       cell.border = EXCEL_THIN_BORDER;
       if (column === 5) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: entry.status === 'Lücke' ? 'FEE2E2' : entry.status === 'abgedeckt' ? 'D1FAE5' : 'F3F4F6' } };
     });
@@ -6737,7 +6835,8 @@ export function addContinuousPlanSheet(workbook, drafts, { absenceInfo = new Map
 }
 
 const DISTRIBUTION_COLORS = { early: 'F5B942', late: '4A86E8', night: '8B6BD6', weekend: '6FD0E8', other: '9CA3AF' };
-const DISTRIBUTION_BAR_CELLS = 50;
+const DISTRIBUTION_TEXT = { early: '1F2937', late: 'FFFFFF', night: 'FFFFFF', weekend: '0F172A', other: '1F2937' };
+const DISTRIBUTION_BAR_CELLS = 100;
 
 /** Splits the bar cells over the segments in proportion to their counts (largest remainder, the sum stays exact). */
 export function allocateBarCells(counts, cells = DISTRIBUTION_BAR_CELLS) {
@@ -6774,55 +6873,89 @@ export function addShiftDistributionSheet(workbook, drafts, { missingWishEmploye
   }
   const { employees, team } = buildShiftDistribution(rows, typeByCode);
   const ws = workbook.addWorksheet('Schichtverteilung');
-  const segments = DISTRIBUTION_SEGMENTS;
-  const firstBarColumn = 2 + segments.length * 2 + 1;
+  const segments = DISTRIBUTION_SEGMENTS.filter((segment) => segment !== 'other' || team.other > 0);
+  const tableColumns = 2 + segments.length * 2; // name, total, counts, percent
+  const barStart = tableColumns + 2; // one spacer column
+  const solid = (argb) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+  const white = { style: 'thin', color: { argb: 'FFFFFF' } };
+
   ws.getCell(1, 1).value = 'Schichtverteilung pro Mitarbeiter';
-  ws.getCell(1, 1).font = { name: 'Calibri', size: 14, bold: true, color: { argb: '1E3A5F' } };
-  ws.getCell(2, 1).value = 'Gelb markiert = keine Wünsche abgegeben. Gezählt werden gearbeitete Schichten (Tage) aller Entwürfe dieser Datei. Früh, Spät und Nacht gelten Montag bis Freitag; das Wochenende (Samstag und Sonntag, alle Schichtarten) ist ein eigener Abschnitt im Balken. Der Balken hat 50 Felder = 100 %.';
+  ws.getCell(2, 1).value = 'Gearbeitete Schichten (Tage) aller Pläne dieser Datei. Früh, Spät und Nacht zählen von Montag bis Freitag, das Wochenende (Samstag und Sonntag, alle Schichtarten) ist ein eigener Abschnitt. Der Balken zeigt 100 % der Schichten einer Person; die Beschriftung nennt Anzahl und Anteil. Gelb = keine Wünsche abgegeben.';
   ws.getCell(2, 1).font = { name: 'Calibri', size: 9, color: { argb: '6B7280' } };
 
-  const headers = ['Mitarbeiter', 'Schichten gesamt', ...segments.map((segment) => `${DISTRIBUTION_LABELS[segment]} (Anzahl)`), ...segments.map((segment) => `${DISTRIBUTION_LABELS[segment]} (%)`)];
-  headers.forEach((header, index) => { ws.getCell(4, index + 1).value = header; });
-  styleExcelHeaderRow(ws, 4, headers.length);
-  ws.getRow(4).height = 30;
-  // Legend above the bar
+  // Legend row (row 3) over the bar: one coloured block per segment
+  const cellsPerLegend = Math.floor(DISTRIBUTION_BAR_CELLS / segments.length);
   segments.forEach((segment, index) => {
-    ws.mergeCells(4, firstBarColumn + index * 10, 4, firstBarColumn + index * 10 + 9);
-    const cell = ws.getCell(4, firstBarColumn + index * 10);
+    const from = barStart + index * cellsPerLegend;
+    const to = index === segments.length - 1 ? barStart + DISTRIBUTION_BAR_CELLS - 1 : from + cellsPerLegend - 1;
+    ws.mergeCells(3, from, 3, to);
+    const cell = ws.getCell(3, from);
     cell.value = DISTRIBUTION_LABELS[segment];
-    cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: segment === 'other' || segment === 'weekend' ? '111827' : 'FFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: DISTRIBUTION_COLORS[segment] } };
+    cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: DISTRIBUTION_TEXT[segment] } };
+    cell.fill = solid(DISTRIBUTION_COLORS[segment]);
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
   });
+  ws.getRow(3).height = 22;
 
-  const writeRow = (rowNumber, label, entry, bold = false) => {
-    const values = [label, entry.total, ...segments.map((segment) => entry[segment]), ...segments.map((segment) => entry.percent[segment] / 100)];
+  // Header row 4: table headers, scale 0 / 25 / 50 / 75 / 100 % over the bar
+  const headers = ['Mitarbeiter', 'Schichten gesamt', ...segments.map((segment) => `${DISTRIBUTION_LABELS[segment]} Anzahl`), ...segments.map((segment) => `${DISTRIBUTION_LABELS[segment]} Anteil`)];
+  headers.forEach((header, index) => { ws.getCell(4, index + 1).value = header; });
+  styleExcelHeaderRow(ws, 4, headers.length);
+  const quarter = DISTRIBUTION_BAR_CELLS / 4;
+  ['0 %', '25 %', '50 %', '75 %'].forEach((label, index) => {
+    ws.mergeCells(4, barStart + index * quarter, 4, barStart + (index + 1) * quarter - 1);
+    const cell = ws.getCell(4, barStart + index * quarter);
+    cell.value = label;
+    cell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '6B7280' } };
+    cell.alignment = { horizontal: 'left', vertical: 'middle' };
+    cell.border = { left: { style: 'thin', color: { argb: '9CA3AF' } } };
+  });
+  ws.getCell(4, barStart + DISTRIBUTION_BAR_CELLS - 1).border = { right: { style: 'thin', color: { argb: '9CA3AF' } } };
+  ws.getRow(4).height = 30;
+
+  const writeRow = (rowNumber, label, entry, { bold = false } = {}) => {
+    const values = [label, entry.total, ...segments.map((segment) => entry[segment]), ...segments.map((segment) => entry.total > 0 ? entry.percent[segment] / 100 : null)];
     values.forEach((value, index) => {
       const cell = ws.getCell(rowNumber, index + 1);
       cell.value = value;
       cell.font = { name: 'Calibri', size: 10, bold };
       cell.alignment = { horizontal: index === 0 ? 'left' : 'center', vertical: 'middle' };
       cell.border = EXCEL_THIN_BORDER;
+      cell.fill = solid(bold ? 'E5E7EB' : (rowNumber % 2 === 0 ? 'FFFFFF' : 'F8FAFC'));
       if (index >= 2 + segments.length) cell.numFmt = '0.0%';
-      if (bold) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E5E7EB' } };
       if (index === 0 && missingWishEmployees.has(label)) { cell.fill = MISSING_WISH_FILL; cell.font = MISSING_WISH_FONT; }
     });
-    const cells = allocateBarCells(segments.map((segment) => entry[segment]));
-    let column = firstBarColumn;
+    // Bar: contiguous segments, each one merged and labelled with count and share
+    const cells = allocateBarCells(segments.map((segment) => entry[segment]), DISTRIBUTION_BAR_CELLS);
+    let column = barStart;
     segments.forEach((segment, index) => {
-      for (let step = 0; step < cells[index]; step++) {
-        ws.getCell(rowNumber, column).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: DISTRIBUTION_COLORS[segment] } };
-        column += 1;
+      const width = cells[index];
+      if (width <= 0) return;
+      const from = column;
+      const to = column + width - 1;
+      if (to > from) ws.mergeCells(rowNumber, from, rowNumber, to);
+      const cell = ws.getCell(rowNumber, from);
+      const share = entry.percent[segment];
+      cell.value = width >= 14 ? `${entry[segment]}  ·  ${share.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} %`
+        : width >= 5 ? entry[segment] : null;
+      cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: DISTRIBUTION_TEXT[segment] } };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+      for (let fillColumn = from; fillColumn <= to; fillColumn++) {
+        const target = ws.getCell(rowNumber, fillColumn);
+        target.fill = solid(DISTRIBUTION_COLORS[segment]);
+        target.border = { top: white, bottom: white, left: fillColumn === from ? white : undefined, right: fillColumn === to ? white : undefined };
       }
+      column += width;
     });
-    ws.getRow(rowNumber).height = 18;
+    ws.getRow(rowNumber).height = 24;
   };
-  employees.forEach((entry, index) => writeRow(5 + index, entry.employee, entry));
-  writeRow(5 + employees.length, 'Team gesamt', team, true);
+  writeRow(5, 'Team gesamt', team, { bold: true });
+  employees.forEach((entry, index) => writeRow(6 + index, entry.employee, entry));
 
   ws.getColumn(1).width = 28;
-  for (let column = 2; column < firstBarColumn; column++) ws.getColumn(column).width = 13;
-  for (let column = firstBarColumn; column < firstBarColumn + DISTRIBUTION_BAR_CELLS; column++) ws.getColumn(column).width = 1.7;
+  for (let column = 2; column <= tableColumns; column++) ws.getColumn(column).width = 12;
+  ws.getColumn(tableColumns + 1).width = 2;
+  for (let column = barStart; column < barStart + DISTRIBUTION_BAR_CELLS; column++) ws.getColumn(column).width = 1.15;
   ws.views = [{ state: 'frozen', xSplit: 1, ySplit: 4 }];
   return { employees, team };
 }
@@ -6846,6 +6979,7 @@ export function addCostControlSheet(workbook, drafts, { timesByCode = new Map(),
     row += 1;
     headers.forEach((header, index) => { ws.getCell(row, index + 1).value = header; });
     styleExcelHeaderRow(ws, row, headers.length);
+    const hourColumns = headers.map((header) => /\(h\)/.test(String(header)));
     row += 1;
     for (const values of [...rows, ...(totalRow ? [totalRow] : [])]) {
       const isTotal = totalRow && values === totalRow;
@@ -6854,9 +6988,9 @@ export function addCostControlSheet(workbook, drafts, { timesByCode = new Map(),
         cell.value = value;
         cell.border = EXCEL_THIN_BORDER;
         cell.font = { name: 'Calibri', size: 10, bold: Boolean(isTotal) };
-        cell.alignment = { horizontal: index === 0 ? 'left' : 'center' };
+        cell.alignment = { horizontal: index === 0 || typeof value === 'string' && value.length > 14 ? 'left' : 'center', vertical: 'middle' };
         if (isTotal) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'E5E7EB' } };
-        if (typeof value === 'number') cell.numFmt = Number.isInteger(value) ? '#,##0' : '#,##0.00';
+        if (typeof value === 'number') cell.numFmt = hourColumns[index] ? '#,##0.00' : '#,##0';
       });
       row += 1;
     }
@@ -7022,6 +7156,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
     includeWishStatus ? 'Wünsche abgegeben (ja/nein)' : null,
   ].filter(Boolean).join(', ');
   const noteLines = [
+    includeHours ? 'Soll = monatliches Sollstunden-Ziel laut Admin-Einstellung, für jeden vollen Monat gleich. Monate mit weniger Arbeitstagen (z. B. Februar) liegen deshalb rechnerisch darunter, der Ausgleich erfolgt über das Jahr (Blatt „Gesamt“).' : null,
     includeWishes ? 'Wunscherfüllung = Durchschnitt der Erfüllung aller hinterlegten Wünsche des Monats (Details im Blatt „Wunschdetails“). Basis sind die aktuell gespeicherten Wünsche.' : null,
     includeWishStatus ? 'Gelb markiert = für diese Person wurden keine Wünsche abgegeben.' : null,
   ].filter(Boolean).join(' ');
@@ -7029,7 +7164,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
   /* ---- Sheet 1: per month (columns follow the chosen content) ---- */
   const ws = workbook.addWorksheet(includeHours && includeWishes ? 'Stunden & Wünsche' : includeHours ? 'Stunden' : includeWishes ? 'Wünsche' : 'Wunsch-Status');
   const diffOf = (entry) => (entry.target !== null && entry.actual !== null ? Number((entry.actual - entry.target).toFixed(2)) : null);
-  const reachedOf = (entry) => (entry.target > 0 && entry.actual !== null ? Math.round((entry.actual / entry.target) * 100) : null);
+  const reachedOf = (entry) => (entry.target > 0 && entry.actual !== null ? Math.round((entry.actual / entry.target) * 1000) / 10 : null);
   const columns = [
     { header: 'Monat', width: 14, align: 'left', value: (entry) => entry.monthLabel },
     { header: 'Mitarbeiter', width: 24, align: 'left', bold: true, key: 'name', value: (entry) => entry.employee },
@@ -7037,7 +7172,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
       { header: 'Soll (h)', width: 12, numFmt: '0.0', value: (entry) => entry.target },
       { header: 'Ist (h)', width: 12, numFmt: '0.0', value: (entry) => entry.actual },
       { header: 'Differenz (h)', width: 17, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (entry) => diffOf(entry) },
-      { header: 'Soll erreicht', width: 17, numFmt: '0%', key: 'reached', value: (entry) => { const r = reachedOf(entry); return r === null ? null : r / 100; } },
+      { header: 'Soll erreicht', width: 17, numFmt: '0.0%', key: 'reached', value: (entry) => { const r = reachedOf(entry); return r === null ? null : r / 100; } },
     ] : []),
     ...(includeWishes ? [{ header: 'Urlaub (Tage)', width: 16, key: 'vacation', value: (entry) => entry.vacationDays }] : []),
     ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 23, key: 'submitted', value: (entry) => (entry.submitted ? 'Ja' : 'Nein') }] : []),
@@ -7064,7 +7199,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
     columns.forEach((column, i) => {
       const cell = ws.getCell(rowNumber, i + 1);
       const value = column.value(entry);
-      cell.value = value === null || value === undefined ? '–' : value;
+      cell.value = value === null || value === undefined ? (column.numFmt ? null : '–') : value;
       styleBodyCell(cell, { bold: column.bold, align: column.align || 'center', numFmt: column.numFmt });
       if (column.key === 'diff' && value !== null) cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: value < 0 ? 'B91C1C' : '047857' } };
       if (column.key === 'reached') { const fill = percentFill(reachedOf(entry)); if (fill) cell.fill = fill; }
@@ -7098,7 +7233,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
         { header: 'Soll (h)', width: 11, numFmt: '0.0', value: (_e, total) => total.target },
         { header: 'Ist (h)', width: 11, numFmt: '0.0', value: (_e, total) => total.actual },
         { header: 'Differenz (h)', width: 14, numFmt: '+0.0;-0.0;0.0', key: 'diff', value: (_e, total) => Number((total.actual - total.target).toFixed(2)) },
-        { header: 'Soll erreicht', width: 17, numFmt: '0%', key: 'reached', value: (_e, total) => (total.target > 0 ? total.actual / total.target : null) },
+        { header: 'Soll erreicht', width: 17, numFmt: '0.0%', key: 'reached', value: (_e, total) => (total.target > 0 ? Math.round((total.actual / total.target) * 1000) / 1000 : null) },
       ] : []),
       ...(includeWishStatus ? [{ header: 'Wünsche abgegeben', width: 23, key: 'submitted', value: (_e, total) => (total.submitted ? 'Ja' : 'Nein') }] : []),
       ...(includeWishes ? [
@@ -7118,7 +7253,7 @@ async function addManagementSheets(workbook, drafts, absenceInfo = new Map(), op
       totalColumns.forEach((column, i) => {
         const cell = ts.getCell(rowNumber, i + 1);
         const value = column.value(employee, total);
-        cell.value = value === null || value === undefined ? '–' : value;
+        cell.value = value === null || value === undefined ? (column.numFmt ? null : '–') : value;
         styleBodyCell(cell, { bold: column.bold, align: column.align || 'center', numFmt: column.numFmt });
         if (column.key === 'diff') cell.font = { name: 'Calibri', size: 10, bold: true, color: { argb: value < 0 ? 'B91C1C' : '047857' } };
         if (column.key === 'reached') { const fill = percentFill(value === null ? null : value * 100); if (fill) cell.fill = fill; }
@@ -7181,6 +7316,9 @@ export async function buildExcelWorkbook(drafts, period = null, options = {}) {
   const includeHours = !isManagement || options.includeHours !== false;
   const includeWishStatus = isManagement && options.includeWishStatus !== false;
   const showHours = !isTeam && includeHours;
+  // Employees with the "Nicht planen" button do not appear anywhere in the export (older drafts may still contain them).
+  const hiddenKeys = options.hiddenKeys || await loadDoNotPlanKeys((text, params) => pool.query(text, params));
+  drafts = drafts.map((draft) => stripDoNotPlan(draft, hiddenKeys));
   drafts = [...drafts].sort((left, right) => left.month.localeCompare(right.month));
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'ODIN Shiftplan';
@@ -7561,10 +7699,23 @@ function buildOverviewContext({ drafts, period, isManagement, isTeam, variantLab
     { label: 'Geplante Schichten', value: shiftCount, numFmt: '#,##0', note: `in ${drafts.length} ${drafts.length === 1 ? 'Monat' : 'Monaten'}` },
   ];
   if (!isTeam) {
-    const reached = targetHours > 0 ? Math.round((actualHours / targetHours) * 100) : null;
+    const reached = targetHours > 0 ? actualHours / targetHours : null;
+    // Year balance per employee over all months of the export: nobody should end more than 20 h below the Soll.
+    const balance = new Map();
+    for (const draft of drafts) {
+      for (const [name, entry] of Object.entries(draft.fairness || {})) {
+        if (notPlannedNamesOf(draft).has(name)) continue;
+        const current = balance.get(name) || { actual: 0, target: 0 };
+        current.actual += Number(entry?.actualHours) || 0;
+        current.target += Number(entry?.targetHours) || 0;
+        balance.set(name, current);
+      }
+    }
+    const inCorridor = [...balance.values()].filter((entry) => entry.actual - entry.target >= -20).length;
     kpis.push(
       { label: 'Ist-Stunden', value: Math.round(actualHours), numFmt: '#,##0" h"', note: `Soll ${number(targetHours)} h` },
-      { label: 'Soll erreicht', value: reached === null ? '–' : reached / 100, numFmt: '0 %', note: 'Ist im Verhältnis zum Soll', tone: reached === null || reached >= 97 ? THEME_OK : THEME_WARN },
+      { label: 'Soll erreicht', value: reached === null ? null : Math.round(reached * 1000) / 1000, numFmt: '0.0 %', note: `Ist ${number(actualHours)} h von ${number(targetHours)} h`, tone: reached === null || reached >= 0.97 ? THEME_OK : THEME_WARN },
+      { label: 'Im Zielkorridor', value: `${inCorridor} von ${balance.size}`, note: 'Mitarbeiter höchstens 20 h unter dem Soll', tone: balance.size === 0 || inCorridor === balance.size ? THEME_OK : THEME_WARN },
       { label: 'Konflikte', value: conflictCount, note: `davon ${criticalCount} kritisch`, tone: criticalCount > 0 ? THEME_BAD : conflictCount > 0 ? THEME_WARN : THEME_OK },
     );
   }

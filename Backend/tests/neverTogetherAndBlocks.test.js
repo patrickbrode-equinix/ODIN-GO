@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { buildHessenHolidayMap } from '../lib/hessenHolidays.js';
 import assert from 'node:assert/strict';
 
 import pool from '../db.js';
@@ -101,6 +102,8 @@ test('nobody works a weekend in two weeks in a row, and blocks have no free day 
       for (let day = 2; day < numDays; day++) {
         const weekday = new Date(year, month - 1, day).getDay();
         if (weekday === 0 || weekday === 1 || cells.has(day) || !cells.has(day - 1) || !cells.has(day + 1)) continue;
+        // A bank holiday above the staffing maximum is paused on purpose (the block continues the next day).
+        if (buildHessenHolidayMap(year)[`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`]) continue;
         const sameType = typeOf(cells.get(day - 1)) === typeOf(cells.get(day + 1));
         assert.ok(!sameType, `${name} ${month}/${day}: free day inside a block (${cells.get(day - 1)} - frei - ${cells.get(day + 1)})`);
       }
@@ -171,7 +174,10 @@ test('weekend codes (SA/WE) only appear when the block really contains a weekend
       byEmployee.get(shift.employee_name).set(Number(shift.day), shift.shift_code);
     }
     for (const [name, cells] of byEmployee) {
-      const days = [...cells.keys()].sort((a, b) => a - b);
+      const holidays = buildHessenHolidayMap(year);
+      const isHoliday = (day) => Boolean(holidays[`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`]);
+      // a paused holiday between two worked days belongs to the run
+      const days = [...new Set([...cells.keys(), ...[...Array(numDays).keys()].map((index) => index + 1).filter((day) => isHoliday(day) && cells.has(day - 1) && cells.has(day + 1))])].sort((a, b) => a - b);
       for (let index = 0; index < days.length;) {
         let end = index;
         while (end + 1 < days.length && days[end + 1] === days[end] + 1) end++;
@@ -179,7 +185,7 @@ test('weekend codes (SA/WE) only appear when the block really contains a weekend
         index = end + 1;
         if (run[0] === 1 || run.at(-1) === numDays) continue;
         if (run.some((day) => [0, 6].includes(new Date(year, month - 1, day).getDay()))) continue;
-        for (const day of run) assert.ok(!/(SA|WE)$/.test(cells.get(day)), `${name} ${month}/${day}: ${cells.get(day)} without a weekend in the block`);
+        for (const day of run) assert.ok(!cells.has(day) || !/(SA|WE)$/.test(cells.get(day)), `${name} ${month}/${day}: ${cells.get(day)} without a weekend in the block`);
       }
     }
   }

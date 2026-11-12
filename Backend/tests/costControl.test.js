@@ -177,8 +177,8 @@ test('month sheet marks Colo and late overstaffing in the cell (not in the team 
 
 test('management workbook: holiday breakdown by name and shift distribution with weekend segment', async () => {
   const { allocateBarCells, addShiftDistributionSheet } = await import('../routes/shiftplanControl.js');
-  assert.equal(allocateBarCells([1, 1, 1]).reduce((sum, value) => sum + value, 0), 50);
-  assert.equal(allocateBarCells([3, 1, 0, 6, 0]).reduce((sum, value) => sum + value, 0), 50);
+  assert.equal(allocateBarCells([1, 1, 1]).reduce((sum, value) => sum + value, 0), 100);
+  assert.equal(allocateBarCells([3, 1, 0, 6, 0]).reduce((sum, value) => sum + value, 0), 100);
   assert.equal(allocateBarCells([0, 0, 0, 0, 0]).reduce((sum, value) => sum + value, 0), 0);
   const december = {
     month: '2026-12', config_snapshot: { shiftDefinitions: definitions },
@@ -207,8 +207,9 @@ test('management workbook: holiday breakdown by name and shift distribution with
   assert.equal(team.total, 4);
   const sheet = workbook.getWorksheet('Schichtverteilung');
   assert.ok(sheet);
-  assert.equal(sheet.getCell(5, 1).value, 'Anna');
-  assert.equal(sheet.getCell(5, 2).value, 3);
+  assert.equal(sheet.getCell(5, 1).value, 'Team gesamt');
+  assert.equal(sheet.getCell(6, 1).value, 'Anna');
+  assert.equal(sheet.getCell(6, 2).value, 3);
 });
 
 test('employees without wishes are highlighted on the cost control and distribution sheets', async () => {
@@ -249,8 +250,8 @@ test('continuous plan lists all months one after another and the Colo coverage s
   assert.equal(coverage.coveredDays, 1);
   const rows = [];
   workbook.getWorksheet('Colo-Abdeckung').eachRow((row) => rows.push(row.values.filter((value) => value !== undefined).join('|')));
-  assert.ok(rows.some((line) => /04\.01\.2027\|Mo\|.*Anna \(Früh\).*abgedeckt/.test(line)));
-  assert.ok(rows.some((line) => /05\.01\.2027\|Di\|.*night: 0\/1\|Lücke/.test(line)));
+  assert.ok(rows.some((line) => /04\.01\.2027\|Mo\|.*Anna  ·  Früh.*abgedeckt/s.test(line)));
+  assert.ok(rows.some((line) => /05\.01\.2027\|Di\|.*Nacht: 0 von 1.*Lücke/s.test(line)));
 });
 
 test('every export starts with the overview sheet: key figures, linked contents and legend', async () => {

@@ -1,3 +1,4 @@
+import { alignBoundaryWeeks } from '../lib/weekConsistency.js';
 import { randomUUID } from 'node:crypto';
 import { getPlanningMonths, normalizeMetaText, MAX_TITLE_LENGTH, MAX_DESCRIPTION_LENGTH } from '../lib/planningPeriods.js';
 
@@ -17,6 +18,8 @@ export async function generatePeriodDrafts({ year, quarter = null, note, title, 
     carryState = result.carryState;
     generatedPlans.push({ month, result });
   }
+  // The week that crosses a month boundary is one week: align the codes on both sides (E1WE Monday + E1 Tuesday ...).
+  alignBoundaryWeeks(generatedPlans);
 
   const results = [];
   const client = await pool.connect();
