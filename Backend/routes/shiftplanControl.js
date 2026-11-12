@@ -621,6 +621,7 @@ async function loadDbsPlanningConfig() {
       'shiftplan.dbs_shift_code',
       'shiftplan.dbs_free_days_after_block',
       'shiftplan.dbs_fill_gaps',
+      'shiftplan.dbs_double_weeks',
     ]]
   );
 
@@ -635,6 +636,9 @@ async function loadDbsPlanningConfig() {
     freeDaysAfterBlock: Math.max(Number.parseInt(String(parseNumberAppSetting(settings['shiftplan.dbs_free_days_after_block'], 2)), 10) || 0, 0),
     // false (default): days the weekly owner cannot cover are not taken over by another pool member.
     fillGaps: parseBooleanAppSetting(settings['shiftplan.dbs_fill_gaps'], false),
+    // true: every pool member holds the DBS for two weeks in a row; Monday and Tuesday of those weeks are free for the
+    // holder (recovery) and covered by another pool member until the holder is back on Wednesday.
+    doubleWeeks: parseBooleanAppSetting(settings['shiftplan.dbs_double_weeks'], false),
   };
 }
 
@@ -2018,9 +2022,22 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       : getPlannedSeriesDays(emp, shiftDef, day);
     const remainingBefore = continuingBlock ? empSeriesRemaining[emp] : 0;
     const dayInSeries = continuingBlock ? Math.max(seriesDays - remainingBefore + 1, 1) : 1;
-    const remainingAfter = seriesDays > 1
+    let remainingAfter = seriesDays > 1
       ? (continuingBlock ? Math.max(remainingBefore - 1, 0) : seriesDays - 1)
       : 0;
+    // DBS week across the month end: the owner keeps the duty in the next month (no recovery days at midnight of the 31st).
+    if (remainingAfter === 0 && isDbsDefinition(shiftDef) && dbsRoster.size > 0 && day === numDays && day === planningEndDay) {
+      const dbsPatternDays = specialPoolsByShift.get(dbsPlanningConfig.shiftCode)?.get(emp)?.workingWeekdays;
+      const todayWeekday = dayOfWeek(year, mon, day);
+      let continuing = 0;
+      for (let step = 1; step < 7; step++) {
+        const weekday = (todayWeekday + step) % 7;
+        if (weekday === 1) break;
+        if (Array.isArray(dbsPatternDays) && dbsPatternDays.length > 0 && !dbsPatternDays.includes(weekday)) break;
+        continuing += 1;
+      }
+      remainingAfter = continuing;
+    }
     const blockEndsToday = remainingAfter === 0;
     if (!continuingBlock) {
       empBlockHistory[emp].push({ code: String(shiftDef.code || '').toUpperCase(), type: normalizePlanningShiftTypeKey(shiftDef.shift_type), seriesDays: getShiftSeriesDays(shiftDef) });
@@ -2363,10 +2380,31 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
     const rosterWeekendsOf = (name) => new Set([...dbsRoster.entries()]
       .filter(([day, employee]) => employee === name && isWeekend(year, mon, day))
       .map(([day]) => getWeekendBlockKey(year, mon, day))).size;
+    // Double weeks: ISO weeks alternate first / second week of a pair (stable across months and years).
+    const isoWeekNumber = (day) => {
+      const date = new Date(Date.UTC(year, mon - 1, day));
+      const weekday = (date.getUTCDay() + 6) % 7;
+      const thursday = new Date(date);
+      thursday.setUTCDate(date.getUTCDate() - weekday + 3);
+      const firstThursday = new Date(Date.UTC(thursday.getUTCFullYear(), 0, 4));
+      return 1 + Math.round(((thursday - firstThursday) / 86400000 - 3 + ((firstThursday.getUTCDay() + 6) % 7)) / 7);
+    };
+    const carriedOwnerName = carriedIndex >= 0 ? poolNames[carriedIndex] : (lastWorkedIndex >= 0 ? poolNames[lastWorkedIndex] : null);
+    const rosterSubstituteDays = new Set();
     weeks.forEach((days, weekIndex) => {
       let owner = null;
       let bestCoverage = 0;
-      for (let offset = 0; offset < poolNames.length; offset++) {
+      const secondWeekOfPair = dbsPlanningConfig.doubleWeeks && isoWeekNumber(days[0]) % 2 === 1;
+      if (secondWeekOfPair) {
+        const holder = weekIndex === 0 ? carriedOwnerName : weekOwners[weekIndex - 1];
+        // the holder of the first week continues, Monday / Tuesday are free anyway
+        const workDays = days.filter((day) => ![1, 2].includes(dayOfWeek(year, mon, day)));
+        if (holder && workDays.length > 0 && simulateCoverage(holder, [...workDays]) > 0) {
+          owner = holder;
+          bestCoverage = 1;
+        }
+      }
+      for (let offset = 0; !owner && offset < poolNames.length; offset++) {
         const name = poolNames[(rotationIndex + offset) % poolNames.length];
         const covered = simulateCoverage(name, days);
         // Take the member whose turn it is unless another one covers clearly more days.
@@ -2379,6 +2417,26 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (owner) rotationIndex = (poolNames.indexOf(owner) + 1) % poolNames.length;
       const nextOwner = owner ? poolNames[rotationIndex] : null;
       for (const day of days) {
+        // Double weeks: Monday and Tuesday are free for the holder; another pool member takes the two days.
+        if (dbsPlanningConfig.doubleWeeks && owner && [1, 2].includes(dayOfWeek(year, mon, day))) {
+          const substitute = poolNames
+            // whoever held the DBS until Sunday rests on Monday / Tuesday (unless the pool has no other member)
+            .filter((name) => name !== owner && isDbsRosterWeekday(poolEntryByName.get(name), dayOfWeek(year, mon, day)) && canTakeRosterDay(name, day)
+              && (poolNames.length <= 2 || dayOfWeek(year, mon, day) !== 1 || dbsRoster.get(day - 1) !== name))
+            .sort((left, right) => {
+              const continuing = (name) => (dbsRoster.get(day - 1) === name ? 0 : 1);
+              if (continuing(left) !== continuing(right)) return continuing(left) - continuing(right);
+              const taken = (name) => [...dbsRoster.values()].filter((entry) => entry === name).length;
+              if (taken(left) !== taken(right)) return taken(left) - taken(right);
+              return poolNames.indexOf(left) - poolNames.indexOf(right);
+            })[0];
+          if (substitute) {
+            dbsRoster.set(day, substitute);
+            rosterSubstituteDays.add(day);
+          }
+          advanceRosterDay(day);
+          continue;
+        }
         const ownerWorksThisWeekday = owner
           && isDbsRosterWeekday(poolEntryByName.get(owner), dayOfWeek(year, mon, day));
         if (!ownerWorksThisWeekday) {
@@ -2425,7 +2483,7 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       const entry = owner ? poolEntryByName.get(owner) : null;
       const expectedDays = days.filter((day) => entry?.workingWeekdays?.includes(dayOfWeek(year, mon, day)));
       const plannedDays = days.filter((day) => dbsRoster.has(day));
-      const ownDays = days.filter((day) => dbsRoster.get(day) === owner);
+      const ownDays = days.filter((day) => dbsRoster.get(day) === owner || rosterSubstituteDays.has(day));
       if (days.length < 5 && index > 0 && index < weeks.length - 1) return;
       if (owner && ownDays.length >= expectedDays.length && plannedDays.length === ownDays.length) return;
       conflicts.push({
@@ -2596,7 +2654,10 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
       if (rosterMismatch
         || !availableEmployeeSet.has(employee)
         || !availableShiftCodes.has(empSeriesCode[employee])
-        || (day > (carriedSeriesUntilDay[employee] || 0) && wouldExceedEmployeeWeekendLimit(employee, [day], { skipSpacing: coloShiftTypeByCode.get(String(empSeriesCode[employee] || '').trim().toUpperCase()) === 'night' }))
+        || (day > (carriedSeriesUntilDay[employee] || 0)
+          // the weekly DBS owner of the roster keeps the duty through the weekend (the roster already respects the pool rules)
+          && !(dbsRoster.get(day) === employee && String(empSeriesCode[employee] || '').toUpperCase() === dbsPlanningConfig.shiftCode)
+          && wouldExceedEmployeeWeekendLimit(employee, [day], { skipSpacing: coloShiftTypeByCode.get(String(empSeriesCode[employee] || '').trim().toUpperCase()) === 'night' }))
         || isEmployeeShiftBlockedOnDate(employee, dateStr, empSeriesCode[employee])) {
         empSeriesCode[employee] = null;
         empSeriesRemaining[employee] = 0;
@@ -2902,7 +2963,9 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
           const individualWeekendLimit = Number.parseInt(String(prefs?.max_weekends_per_month ?? ''), 10);
           const blockDays = Array.from({ length: Math.min(seriesDays, planningEndDay - day + 1) }, (_, offset) => day + offset);
           const isNightBlock = normalizePlanningShiftTypeKey(shiftDef.shift_type) === 'night';
-          if (wouldExceedEmployeeWeekendLimit(employee, blockDays, { skipSpacing: isNightBlock })) {
+          // The DBS roster owner keeps the duty through the weekend: the weekly rotation of the admin pool decides, the generic
+          // weekend limit / spacing of normal blocks does not apply to it.
+          if (!isRosterDbsAssignment && wouldExceedEmployeeWeekendLimit(employee, blockDays, { skipSpacing: isNightBlock })) {
             hardBlocked = true;
             reasons.push('Harte Wochenendgrenze würde durch den geplanten Block überschritten');
           } else if (isNightBlock && violatesWeekendSpacing(employee, newWeekendKeysFor(employee, blockDays))) {
@@ -4889,6 +4952,8 @@ export async function generateShiftPlan(year, mon, numDays, createdBy, options =
             if (!isColoAllowedFor(employee, type, dow)) continue;
             if (isEmployeeAbsentOnDate(employee, dateStr) || isEmployeeBlockedByPreferenceOnDay(employee, dow)) continue;
             if (isRecoveryProtectedDay(employee, day)) continue;
+            // Colo cover never creates an isolated Saturday: the person already works the Friday of that week (Monday-Saturday block).
+            if (dow === 6 && !empDayAssignment[employee][day - 1]) continue;
             const fixedShiftType = fixedShiftTypeByEmployee.get(employee);
             const prefs = preferencesForDate(employee, dateStr);
             let adjacentWorkdays = 0;

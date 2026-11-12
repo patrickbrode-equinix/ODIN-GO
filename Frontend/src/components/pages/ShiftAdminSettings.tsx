@@ -399,6 +399,7 @@ interface DbsConfig {
   shiftCode: string;
   freeDaysAfterBlock: number;
   fillGaps: boolean;
+  doubleWeeks: boolean;
 }
 
 /** Limits for one person of the Colo list. Empty list = no limit. */
@@ -482,6 +483,7 @@ const DEFAULT_DBS_CONFIG: DbsConfig = {
   shiftCode: 'DBS',
   freeDaysAfterBlock: 2,
   fillGaps: false,
+  doubleWeeks: false,
 };
 
 const DEFAULT_COLO_CONFIG: ColoConfig = {
@@ -639,6 +641,7 @@ function extractDbsConfig(settings: Record<string, string>): DbsConfig {
     shiftCode: settings['shiftplan.dbs_shift_code'] || DEFAULT_DBS_CONFIG.shiftCode,
     freeDaysAfterBlock: parseNumberSetting(settings['shiftplan.dbs_free_days_after_block'], DEFAULT_DBS_CONFIG.freeDaysAfterBlock),
     fillGaps: parseBooleanSetting(settings['shiftplan.dbs_fill_gaps'], DEFAULT_DBS_CONFIG.fillGaps),
+    doubleWeeks: parseBooleanSetting(settings['shiftplan.dbs_double_weeks'], DEFAULT_DBS_CONFIG.doubleWeeks),
   };
 }
 
@@ -1142,6 +1145,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.dbs_required_staff': 1,
         'shiftplan.dbs_free_days_after_block': dbsConfig.freeDaysAfterBlock,
         'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
+        'shiftplan.dbs_double_weeks': dbsConfig.doubleWeeks,
       });
       const shiftCode = String(dbsConfig.shiftCode || 'DBS').trim().toUpperCase() || 'DBS';
       const payload = dbsPool.map((entry, index) => ({
@@ -1380,6 +1384,7 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
         'shiftplan.dbs_required_staff': 1,
         'shiftplan.dbs_free_days_after_block': dbsConfig.freeDaysAfterBlock,
         'shiftplan.dbs_fill_gaps': dbsConfig.fillGaps,
+        'shiftplan.dbs_double_weeks': dbsConfig.doubleWeeks,
         'shiftplan.colo_enabled': coloConfig.enabled,
         'shiftplan.colo_pool': JSON.stringify(coloConfig.employeePool),
         'shiftplan.colo_pool_rules': JSON.stringify(cleanColoEmployeeRules(coloConfig.employeeRules, coloConfig.employeePool)),
@@ -2437,6 +2442,18 @@ export function ShiftPlanningSettingsPanel({ embedded = false }: { embedded?: bo
                 : 'DBS is planned as one continuous block starting Monday. Working days, times and the days off afterwards are set below for each employee individually – there are no global times or recovery days any more.'}
             </div>
           </div>
+
+          <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200">
+            <input type="checkbox" checked={dbsConfig.doubleWeeks} onChange={(event) => setDbsConfig({ ...dbsConfig, doubleWeeks: event.target.checked })} className="mt-1 rounded border-white/20 bg-slate-950" />
+            <span>
+              <span className="block font-medium">{isGerman ? 'Zwei Wochen am Stück planen (Montag und Dienstag frei)' : 'Plan two weeks in a row (Monday and Tuesday off)'}</span>
+              <span className="mt-1 block text-xs text-slate-400">
+                {isGerman
+                  ? 'Jeder DBS-Mitarbeiter hat den DBS zwei Wochen hintereinander. Montag und Dienstag jeder dieser Wochen sind für ihn frei; an diesen zwei Tagen übernimmt ein anderer Mitarbeiter aus dem DBS-Pool, bis der Inhaber am Mittwoch wieder zur Verfügung steht. Standard: aus. Empfohlen ab drei Pool-Mitgliedern.'
+                  : 'Every DBS employee holds the DBS for two weeks in a row. Monday and Tuesday of each of those weeks are free for the holder; another DBS pool member covers those two days until the holder is back on Wednesday. Default: off. Recommended with three or more pool members.'}
+              </span>
+            </span>
+          </label>
 
           <label className="flex items-start gap-3 rounded-2xl border border-white/10 bg-slate-950/60 px-4 py-3 text-sm text-slate-200">
             <input type="checkbox" checked={dbsConfig.fillGaps} onChange={(event) => setDbsConfig({ ...dbsConfig, fillGaps: event.target.checked })} className="mt-1 rounded border-white/20 bg-slate-950" />
